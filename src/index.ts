@@ -4,6 +4,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
+import { applyFixes } from './engine/fix';
 import { loadProject } from './engine/project';
 import { formatJson, formatMarkdown, formatText } from './engine/report';
 import { applyFilters } from './filters';
@@ -19,6 +20,7 @@ Options:
                          handy when a tsconfig spans an SDK and its consumer)
   --json                 Print findings as JSON
   --export <md|json>     Also write findings to noref-findings.md or noref-findings.json
+  --fix                  Remove the reported members from the source files
   --no-anonymous         Hide findings on unnamed inline types and anonymous functions
   -h, --help             Show this help message
 `;
@@ -30,6 +32,7 @@ function main(): void {
       scope: { type: 'string' },
       json: { type: 'boolean', default: false },
       export: { type: 'string' },
+      fix: { type: 'boolean', default: false },
       anonymous: { type: 'boolean', default: true },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -76,7 +79,15 @@ function main(): void {
     process.stderr.write(`Wrote ${fileName}\n`);
   }
 
-  if (findings.length > 0) process.exitCode = 1;
+  if (findings.length === 0) return;
+
+  if (values.fix) {
+    const files = applyFixes(findings);
+    process.stderr.write(`Fixed ${findings.length} member(s) in ${files.length} file(s)\n`);
+    return;
+  }
+
+  process.exitCode = 1;
 }
 
 main();

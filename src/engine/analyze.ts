@@ -20,6 +20,7 @@ export function analyze(project: Project, options: CollectOptions = {}): Finding
       propertyName: member.getName(),
       context,
       anonymous,
+      member,
     });
   }
 

@@ -54,7 +54,14 @@ export function formatMarkdown(findings: Finding[], cwd: string): string {
 
 export function formatJson(findings: Finding[], cwd: string): string {
   return JSON.stringify(
-    findings.map(f => ({ ...f, filePath: path.relative(cwd, f.filePath) })),
+    findings.map(f => ({
+      filePath: path.relative(cwd, f.filePath),
+      line: f.line,
+      column: f.column,
+      propertyName: f.propertyName,
+      context: f.context,
+      anonymous: f.anonymous,
+    })),
     null,
     2
   );
