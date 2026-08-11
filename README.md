@@ -41,6 +41,7 @@ noref [options]
 | `-p, --project <path>` | Path to `tsconfig.json` (default: `./tsconfig.json`) |
 | `--scope <path>` | Only report properties declared under this path; the whole project still resolves usages |
 | `--json` | Print findings as JSON |
+| `--export <md\|json>` | Also write findings to `noref-findings.md` or `noref-findings.json` in the current directory |
 | `--no-anonymous` | Hide findings on unnamed inline types and anonymous functions |
 | `-h, --help` | Show the help message |
 

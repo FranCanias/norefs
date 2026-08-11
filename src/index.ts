@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { loadProject } from './engine/project';
-import { formatJson, formatText } from './engine/report';
+import { formatJson, formatMarkdown, formatText } from './engine/report';
 import { applyFilters } from './filters';
 
 const HELP = `noref - find unused properties on types, interfaces, and object literals
@@ -17,6 +18,7 @@ Options:
                          (still uses the whole project to resolve usages —
                          handy when a tsconfig spans an SDK and its consumer)
   --json                 Print findings as JSON
+  --export <md|json>     Also write findings to noref-findings.md or noref-findings.json
   --no-anonymous         Hide findings on unnamed inline types and anonymous functions
   -h, --help             Show this help message
 `;
@@ -27,6 +29,7 @@ function main(): void {
       project: { type: 'string', short: 'p', default: 'tsconfig.json' },
       scope: { type: 'string' },
       json: { type: 'boolean', default: false },
+      export: { type: 'string' },
       anonymous: { type: 'boolean', default: true },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -35,6 +38,12 @@ function main(): void {
 
   if (values.help) {
     process.stdout.write(HELP);
+    return;
+  }
+
+  if (values.export !== undefined && values.export !== 'md' && values.export !== 'json') {
+    process.stderr.write(`error: --export must be "md" or "json", got "${values.export}"\n`);
+    process.exitCode = 2;
     return;
   }
 
@@ -58,6 +67,14 @@ function main(): void {
 
   process.stdout.write(values.json ? formatJson(findings, cwd) : formatText(findings, cwd));
   process.stdout.write('\n');
+
+  if (values.export) {
+    const fileName = values.export === 'md' ? 'noref-findings.md' : 'noref-findings.json';
+    const content =
+      values.export === 'md' ? formatMarkdown(findings, cwd) : formatJson(findings, cwd);
+    fs.writeFileSync(path.join(cwd, fileName), `${content}\n`);
+    process.stderr.write(`Wrote ${fileName}\n`);
+  }
 
   if (findings.length > 0) process.exitCode = 1;
 }

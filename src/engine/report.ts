@@ -24,6 +24,33 @@ export function formatText(findings: Finding[], cwd: string): string {
   return lines.join('\n');
 }
 
+export function formatMarkdown(findings: Finding[], cwd: string): string {
+  const lines: string[] = ['# noref findings', ''];
+  if (findings.length === 0) {
+    lines.push('No unused properties found.');
+    return lines.join('\n');
+  }
+
+  const byFile = new Map<string, Finding[]>();
+  for (const finding of findings) {
+    const list = byFile.get(finding.filePath) ?? [];
+    list.push(finding);
+    byFile.set(finding.filePath, list);
+  }
+
+  lines.push(`Unused properties: ${findings.length}`, '');
+  for (const [filePath, fileFindings] of byFile) {
+    lines.push(`## ${path.relative(cwd, filePath)}`, '');
+    for (const finding of fileFindings) {
+      lines.push(
+        `- \`${finding.propertyName}\` in ${finding.context} (line ${finding.line}, column ${finding.column})`
+      );
+    }
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
 export function formatJson(findings: Finding[], cwd: string): string {
   return JSON.stringify(
     findings.map(f => ({ ...f, filePath: path.relative(cwd, f.filePath) })),
