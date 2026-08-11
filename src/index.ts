@@ -2,6 +2,7 @@
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { analyze } from './engine/analyze';
+import { findUnresolvedImports } from './engine/diagnostics';
 import { loadProject } from './engine/project';
 import { formatJson, formatText } from './engine/report';
 import { applyFilters } from './filters';
@@ -40,6 +41,18 @@ function main(): void {
   const cwd = process.cwd();
   const tsConfigFilePath = path.resolve(cwd, values.project);
   const project = loadProject(tsConfigFilePath);
+
+  const unresolved = findUnresolvedImports(project);
+  if (unresolved.length > 0) {
+    const examples = unresolved.slice(0, 5).join(', ');
+    const more = unresolved.length > 5 ? ', …' : '';
+    process.stderr.write(
+      `warning: ${unresolved.length} import specifier(s) do not resolve (${examples}${more}).\n` +
+        `References through them are invisible, so used properties may be reported as unused.\n` +
+        `Check the tsconfig "paths" and "include" settings.\n\n`
+    );
+  }
+
   const scopeDir = values.scope ? path.resolve(cwd, values.scope) : undefined;
   const findings = applyFilters(analyze(project, { scopeDir }), { anonymous: values.anonymous });
 
