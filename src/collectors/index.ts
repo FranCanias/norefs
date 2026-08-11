@@ -12,10 +12,16 @@ const collectors: Array<(sourceFile: SourceFile) => Candidate[]> = [
   collectReturnedObjectCandidates,
 ];
 
-export function collectCandidates(project: Project): Candidate[] {
+export interface CollectOptions {
+  /** Only collect candidates from files under this absolute path prefix. Reference resolution still uses the whole project. */
+  scopeDir?: string;
+}
+
+export function collectCandidates(project: Project, options: CollectOptions = {}): Candidate[] {
   const candidates: Candidate[] = [];
   for (const sourceFile of project.getSourceFiles()) {
     if (sourceFile.isDeclarationFile()) continue;
+    if (options.scopeDir && !sourceFile.getFilePath().startsWith(options.scopeDir)) continue;
     for (const collector of collectors) {
       candidates.push(...collector(sourceFile));
     }
