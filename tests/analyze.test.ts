@@ -109,6 +109,14 @@ describe('dynamic-consumption guards (stay silent rather than guess)', () => {
   it('nested literals under a property with only local reads still report', () => {
     expect(reportedIn('local-property.ts')).toEqual(['deadOption']);
   });
+
+  it('suppression cascades into literals nested in a keyof-targeted alias', () => {
+    expect(reportedIn('nested-command-map.ts')).toEqual([]);
+  });
+
+  it('suppression cascades into literals nested in a serialized interface', () => {
+    expect(reportedIn('nested-serialized.ts')).toEqual([]);
+  });
 });
 
 describe('documented blind spots', () => {
