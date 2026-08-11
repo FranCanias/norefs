@@ -1,7 +1,7 @@
 import type { Project } from 'ts-morph';
-import { isUnused } from './check.js';
-import { collectCandidates } from './collect.js';
-import type { Finding } from './types.js';
+import { collectCandidates } from '../collectors';
+import type { Finding } from '../types';
+import { isUnused } from './check';
 
 export function analyze(project: Project): Finding[] {
   const candidates = collectCandidates(project);

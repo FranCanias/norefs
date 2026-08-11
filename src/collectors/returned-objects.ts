@@ -4,76 +4,31 @@ import type {
   FunctionExpression,
   Node,
   ObjectLiteralExpression,
-  Project,
-  PropertyNamedNode,
+  SourceFile,
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
-import { describeFunctionName, describeTypeLiteralContext } from './describe.js';
+import { describeFunctionName } from '../engine/describe';
+import type { Candidate } from './candidate';
+import { toCandidate } from './candidate';
 
 type FunctionLike = FunctionDeclaration | ArrowFunction | FunctionExpression;
 
-export interface Candidate {
-  member: PropertyNamedNode & Node;
-  context: string;
-  anonymous: boolean;
-}
-
-export function collectCandidates(project: Project): Candidate[] {
+export function collectReturnedObjectCandidates(sourceFile: SourceFile): Candidate[] {
   const candidates: Candidate[] = [];
-  for (const sourceFile of project.getSourceFiles()) {
-    if (sourceFile.isDeclarationFile()) continue;
-
-    for (const iface of sourceFile.getInterfaces()) {
-      const context = `interface \`${iface.getName()}\``;
-      for (const member of iface.getMembers()) {
-        pushIfNamed(candidates, member, context, false);
-      }
-    }
-
-    for (const typeLiteral of sourceFile.getDescendantsOfKind(SyntaxKind.TypeLiteral)) {
-      if (isGenericConstraint(typeLiteral)) continue;
-      const { label, anonymous } = describeTypeLiteralContext(typeLiteral);
-      for (const member of typeLiteral.getMembers()) {
-        pushIfNamed(candidates, member, label, anonymous);
-      }
-    }
-
-    for (const fn of exportedFunctionsWithInferredReturn(sourceFile)) {
-      const objectLiteral = getSoleReturnedObjectLiteral(fn);
-      if (!objectLiteral) continue;
-      const described = describeFunctionName(fn);
-      const context = `the return value of ${described.label}`;
-      for (const member of objectLiteral.getProperties()) {
-        pushIfNamed(candidates, member, context, described.anonymous);
-      }
+  for (const fn of exportedFunctionsWithInferredReturn(sourceFile)) {
+    const objectLiteral = getSoleReturnedObjectLiteral(fn);
+    if (!objectLiteral) continue;
+    const described = describeFunctionName(fn);
+    const context = `the return value of ${described.label}`;
+    for (const member of objectLiteral.getProperties()) {
+      const candidate = toCandidate(member, context, described.anonymous);
+      if (candidate) candidates.push(candidate);
     }
   }
   return candidates;
 }
 
-function pushIfNamed(candidates: Candidate[], member: Node, context: string, anonymous: boolean): void {
-  if (!member.isKind(SyntaxKind.PropertySignature) && !member.isKind(SyntaxKind.MethodSignature)) {
-    if (
-      !member.isKind(SyntaxKind.PropertyAssignment) &&
-      !member.isKind(SyntaxKind.MethodDeclaration) &&
-      !member.isKind(SyntaxKind.GetAccessor) &&
-      !member.isKind(SyntaxKind.SetAccessor)
-    ) {
-      return;
-    }
-  }
-  const named = member as unknown as PropertyNamedNode & Node;
-  if (named.getNameNode().getKind() === SyntaxKind.ComputedPropertyName) return;
-  candidates.push({ member: named, context, anonymous });
-}
-
-function isGenericConstraint(node: Node): boolean {
-  return node.getFirstAncestor(a => a.isKind(SyntaxKind.TypeParameter)) !== undefined;
-}
-
-function exportedFunctionsWithInferredReturn(
-  sourceFile: ReturnType<Project['getSourceFiles']>[number]
-): FunctionLike[] {
+function exportedFunctionsWithInferredReturn(sourceFile: SourceFile): FunctionLike[] {
   const fns: FunctionLike[] = [];
 
   for (const fn of sourceFile.getFunctions()) {

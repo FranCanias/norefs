@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { Finding } from './types.js';
+import type { Finding } from '../types';
 
 export function formatText(findings: Finding[], cwd: string): string {
   if (findings.length === 0) return 'No unused properties found.\n';

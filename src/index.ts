@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { analyze } from './analyze.js';
-import { loadProject } from './project.js';
-import { formatJson, formatText } from './report.js';
+import { analyze } from './engine/analyze';
+import { loadProject } from './engine/project';
+import { formatJson, formatText } from './engine/report';
+import { applyFilters } from './filters';
 
 const HELP = `noref - find unused properties on types, interfaces, and object literals
 
@@ -35,7 +36,7 @@ function main(): void {
   const cwd = process.cwd();
   const tsConfigFilePath = path.resolve(cwd, values.project);
   const project = loadProject(tsConfigFilePath);
-  const findings = analyze(project).filter(f => values.anonymous || !f.anonymous);
+  const findings = applyFilters(analyze(project), { anonymous: values.anonymous });
 
   process.stdout.write(values.json ? formatJson(findings, cwd) : formatText(findings, cwd));
   process.stdout.write('\n');
