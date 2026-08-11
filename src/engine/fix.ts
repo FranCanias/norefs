@@ -7,7 +7,7 @@ export interface FixResult {
   /** Paths of the files that changed. */
   filePaths: string[];
   fixed: number;
-  /** Findings --fix leaves for the user: unused files and namespace findings. */
+  /** Findings --fix leaves for the user: unused files, namespace findings, emptied types. */
   skipped: number;
 }
 
@@ -20,7 +20,8 @@ export interface FixResult {
  * with any import/export specifiers that forward it; an export still used
  * inside its file only loses the export keyword. Orphaned identifiers left
  * behind in touched files (an import only the removed code used) are cleaned
- * up before saving. Unused files and namespace findings are never touched.
+ * up before saving. Unused files, namespace findings, and emptied types are
+ * never touched.
  */
 export function applyFixes(findings: Finding[]): FixResult {
   const fixable = findings.filter(f => f.kind === 'member' || f.kind === 'export' || f.kind === 'type');

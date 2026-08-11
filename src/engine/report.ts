@@ -15,6 +15,8 @@ function describeFinding(finding: Finding): string {
       return `unused exported type \`${finding.name}\` in used namespace \`${finding.context}\``;
     case 'member':
       return `unused property \`${finding.name}\` in ${finding.context}`;
+    case 'empty-type':
+      return `${finding.context} \`${finding.name}\` becomes empty: every member is unused`;
   }
 }
 
@@ -25,6 +27,7 @@ function summarize(findings: Finding[]): string {
     [of('export', 'ns-export'), 'export', 'exports'],
     [of('type', 'ns-type'), 'exported type', 'exported types'],
     [of('member'), 'property', 'properties'],
+    [of('empty-type'), 'emptied type', 'emptied types'],
   ];
   const parts = groups.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
   return `Unused code (${findings.length}): ${parts.join(', ')}`;

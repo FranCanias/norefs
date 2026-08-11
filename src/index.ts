@@ -24,8 +24,8 @@ Options:
                          never reported unused and its exports are the public
                          API (repeatable; index/main/cli files in the project
                          root or src/ are entry points by default)
-  --only <kinds>         Report only these finding kinds, comma-separated:
-                         files, exports, types, ns-exports, ns-types, members
+  --only <kinds>         Report only these finding kinds, comma-separated: files,
+                         exports, types, ns-exports, ns-types, members, empty-types
   --json                 Print findings as JSON
   --export <md|json>     Also write findings to noref-findings.md or noref-findings.json
   --fix                  Remove reported members and export keywords from the source files
@@ -135,7 +135,7 @@ function main(): void {
     process.stderr.write(`Fixed ${totalFixed} finding(s) in ${touched.size} file(s)\n`);
     if (result.skipped > 0) {
       process.stderr.write(
-        `Skipped ${result.skipped} finding(s) --fix does not touch (unused files and namespace findings)\n`
+        `Skipped ${result.skipped} finding(s) --fix does not touch (unused files, namespace findings, emptied types)\n`
       );
     }
     return;

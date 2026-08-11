@@ -10,7 +10,7 @@ Most dead-code tools stop at the declaration boundary: an interface counts as "u
 
 ### Module-level checks
 
-- **Unused files** — no other file imports or re-exports the file. Entry points are exempt: paths given with `--entry`, and `index`/`main`/`cli` files in the project root or `src/`. Test, spec, stories, bench, and config files (and anything under a `test`, `tests`, `__tests__`, or `__mocks__` directory) are their own entry points, so they are never reported either.
+- **Unused files** — no chain of imports from any entry point reaches the file. Because the check is reachability, not a count of direct importers, a whole dead cluster gets reported — including two unused files that only import each other. Entry points are: paths given with `--entry`, `index`/`main`/`cli` files in the project root or `src/`, and the files `package.json` names in `main`, `bin`, and `exports` (paths into the compiled output are mapped back to source through the tsconfig `outDir` and `rootDir`). Test, spec, stories, bench, and config files (and anything under a `test`, `tests`, `__tests__`, or `__mocks__` directory) are their own entry points, so they are never reported either.
 - **Unused exports** and **unused exported types** — an exported declaration that nothing outside its file uses. Interfaces, type aliases, and enums count as types; functions, classes, variables, and namespaces count as exports. References resolve through re-export chains, so a barrel between the declaration and its consumers does not hide usage. A declaration that is used inside its own file but never imported still gets reported: the `export` keyword is dead even though the code is not. Exports of entry files are the public API and are never reported.
 - **Exports in used namespace** and **exported types in used namespace** — the same check, at lower confidence, for two namespace shapes. When a module is consumed through a used `import * as ns` binding, its zero-reference exports are reported this way, because the namespace object may be consumed dynamically. And when a TS `namespace N { … }` is used, its exported members whose references never leave the namespace body are reported this way too.
 
@@ -29,6 +29,8 @@ The member pass looks for five kinds of member owners:
 For each property it finds, it asks TypeScript's own "find all references" (via `findReferencesAsNodes`) whether anything reads it. No references beyond the declaration itself means the property is unused.
 
 Because the check is reference-based, it follows structural typing correctly — `v.x` resolves back to `interface A { x: number }` even without an explicit cast. See [Limitations](#limitations) for where that breaks down.
+
+When every member of a named interface or type alias is unused while the type itself is still referenced, noref adds one more finding: ``interface `X` becomes empty: every member is unused``. Removing the members would leave an empty `interface X {}` behind, and only you know whether its consumers should go too. An interface that extends another is exempt — empty, it still works as an alias.
 
 ## Install
 
@@ -53,7 +55,7 @@ noref [options]
 | `-p, --project <path>` | Path to `tsconfig.json` (default: `./tsconfig.json`) |
 | `--scope <path>` | Only report findings declared under this path; the whole project still resolves usages |
 | `--entry <path>` | Treat this file or directory as an entry point: never reported unused, exports never reported (repeatable) |
-| `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members` |
+| `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members`, `empty-types` |
 | `--json` | Print findings as JSON |
 | `--export <md\|json>` | Also write findings to `noref-findings.md` or `noref-findings.json` in the current directory |
 | `--fix` | Remove reported members and dead `export` keywords from the source files |
@@ -101,10 +103,10 @@ To silence a whole file — generated code, for instance — put `// noref-ignor
 - An unused member is deleted. One case is special: an unused parameter property (`constructor(private readonly dead: number)`) only loses its modifiers and stays a plain parameter, so the constructor signature and every `new` call site keep working.
 - An unused export with references inside its own file loses only the `export` keyword. One with no references at all is removed whole, together with every import and re-export specifier that forwarded it — nothing dangles in a barrel.
 - After the removals, noref cleans each touched file: imports and unexported top-level declarations that only the removed code used are removed too. Then it re-analyzes and fixes again until nothing fixable is left, so cascades converge in one command.
-- Unused files and namespace findings are never touched. Deleting a file is your call, and a namespace finding is a lower-confidence guess.
+- Unused files, namespace findings, and emptied types are never touched. Deleting a file is your call, a namespace finding is a lower-confidence guess, and an emptied type needs your judgment about its consumers.
 - `--fix` only touches what is reported, so `--only`, `ignore` globs, and suppression comments limit the fixes the same way they limit the findings.
 
-Review the diff before you commit. Some leftovers need human judgment — removing every member of an interface that is still referenced leaves an empty `interface X {}`, and only you know whether its consumers should go too.
+Review the diff before you commit. The emptied-type findings point at the leftovers that need human judgment.
 
 ### Example
 
@@ -173,10 +175,9 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - An exported function with several `return` statements returning different object literals is skipped entirely, rather than guessed at.
 - Anonymous default-export classes (`export default class { … }`) are skipped: without a name there are no class references to run the escape checks on.
 - Declaration files (`.d.ts`) are not scanned.
-- Two unused files that import each other keep each other alive: the unused-file check counts direct references, not reachability from the entry points. Removing one and re-running finds the other.
 - Anonymous default exports (`export default { … }`) have no name to search references for, so the export check skips them.
-- A file consumed only through a bare `import './x'` for its side effects counts as used, even if nothing else touches it. That is the safe reading.
-- An entry point noref cannot guess (a script run directly with `node`, a file named in `package.json`) is a false positive until you pass it with `--entry`.
+- A file consumed only through a bare `import './x'` for its side effects counts as used when its importer is reachable, even if nothing else touches it. That is the safe reading.
+- An entry point neither the naming conventions nor `package.json` names (a script run directly with `node path/to/script.ts`) is a false positive until you pass it with `--entry`.
 
 ## Project layout
 
