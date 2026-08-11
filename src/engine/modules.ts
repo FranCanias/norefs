@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { Identifier, ModuleDeclaration, Node, Project, SourceFile } from 'ts-morph';
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
 import type { Finding, FindingKind } from '../types';
+import { isFileSuppressed, isNodeSuppressed } from './suppress';
 
 export interface ModuleAnalysis {
   findings: Finding[];
@@ -40,6 +41,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
     const filePath = sourceFile.getFilePath();
     if (options.scopeDir && !filePath.startsWith(options.scopeDir)) continue;
     if (isEntryFile(filePath, rootDir, entries)) continue;
+    if (isFileSuppressed(sourceFile)) continue;
 
     if (!isHarnessFile(filePath, rootDir) && !isReferenced(sourceFile)) {
       deadFiles.add(sourceFile);
@@ -100,6 +102,7 @@ function collectExportFindings(
       if (isAmbient(decl)) continue;
       const nameNode = declarationNameNode(decl);
       if (!nameNode) continue;
+      if (isNodeSuppressed(nameNode)) continue;
 
       const { externallyUsed, locallyUsed } = classifyReferences(nameNode, sourceFile);
       if (externallyUsed) continue;
@@ -131,6 +134,7 @@ function collectNamespaceFindings(ns: ModuleDeclaration, findings: Finding[], de
     for (const decl of decls) {
       const declName = declarationNameNode(decl);
       if (!declName) continue;
+      if (isNodeSuppressed(declName)) continue;
       const refs = declName.findReferencesAsNodes().filter(ref => ref !== declName && !isModuleBinding(ref));
       const escapesBody = refs.some(
         ref =>

@@ -4,6 +4,7 @@ import type { Finding } from '../types';
 import { isUnused } from './check';
 import type { ModuleOptions } from './modules';
 import { analyzeModules } from './modules';
+import { isFileSuppressed, isNodeSuppressed } from './suppress';
 
 export type AnalyzeOptions = ModuleOptions;
 
@@ -16,8 +17,10 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     // as a whole; listing every member inside it would only add noise.
     if (modules.deadFiles.has(member.getSourceFile())) continue;
     if (member.getAncestors().some(ancestor => modules.deadDecls.has(ancestor))) continue;
-    if (!isUnused(member)) continue;
+    if (isFileSuppressed(member.getSourceFile())) continue;
     const nameNode = member.getNameNode();
+    if (isNodeSuppressed(nameNode)) continue;
+    if (!isUnused(member)) continue;
     const sourceFile = member.getSourceFile();
     const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
     findings.push({
