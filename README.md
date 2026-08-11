@@ -42,10 +42,15 @@ noref [options]
 | `--scope <path>` | Only report properties declared under this path; the whole project still resolves usages |
 | `--json` | Print findings as JSON |
 | `--export <md\|json>` | Also write findings to `noref-findings.md` or `noref-findings.json` in the current directory |
+| `--fix` | Remove the reported members from the source files |
 | `--no-anonymous` | Hide findings on unnamed inline types and anonymous functions |
 | `-h, --help` | Show the help message |
 
-`noref` exits with code `1` when it finds unused properties, `0` otherwise — so it slots into CI the same way a linter does.
+`noref` exits with code `1` when it finds unused properties, `0` otherwise — so it slots into CI the same way a linter does. With `--fix` it exits `0` after it removes what it found.
+
+### Fixing automatically
+
+`noref --fix` prints the findings, then deletes each reported member and saves the file. One case is special: an unused parameter property (`constructor(private readonly dead: number)`) only loses its modifiers and stays a plain parameter, so the constructor signature and every `new` call site keep working. Review the diff before you commit — a removed member can leave behind code that only it used, so a second run may find more.
 
 ### Example
 
@@ -97,9 +102,10 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 
 - **`keyof`-targeted types**: when `keyof T` appears anywhere, code is enumerating or indexing T's keys dynamically. All of T's members are skipped.
 - **Key-enumerating and serializing sinks**: a value passed to `Object.keys`/`values`/`entries`/`assign`, `JSON.stringify`, `structuredClone`, or `Reflect.ownKeys`, iterated with `for...in`, or probed with a dynamic `key in v` marks its whole type as dynamically consumed.
-- **Escaping values**: when an object leaves local view as a whole — a returned literal passed on as a bare argument, a whole-binding parameter or variable forwarded via shorthand into a differently-declared type, a property whose value flows onward wholesale — its properties may be consumed without any per-property reference. The affected type literal is skipped.
+- **Escaping values**: when an object leaves local view as a whole — a returned literal passed on as a bare argument, a whole-binding parameter or variable forwarded via shorthand into a differently-declared type, a property whose value flows onward wholesale, an `as`/`satisfies` cast whose value is spread into a combined array or passed bare — its properties may be consumed without any per-property reference. The affected type literal is skipped.
+- **Assignability-required members**: a declared relation can make a member load-bearing with zero references. An `extends`/`implements` override (`interface Derived extends Base { items: DerivedItem[] }`) or a type predicate (`v is Derived`) forces one type to stay assignable to another, so the required members of the base shape are kept even when nothing reads them.
 - **Parameters of function types**: callback signatures declare parameter types, but implementations bind their own parameters; when callbacks are invoked with variables rather than literals, the signature's members can't be tracked.
-- **Structural class implementations**: when an instance escapes into a type that is not the class or its declared heritage — `return new DeviceImpl()` from a function typed as interface `Device`, with no `implements` clause — every call goes through the interface and the class members collect zero references while being used at runtime. The whole class is skipped, along with its base classes and any class whose instances only leave through methods of such a class. Declaring `implements` restores tracking.
+- **Structural class implementations**: when an instance escapes into a type that is not the class or its declared heritage — `return new StoreImpl()` from a function typed as interface `Store`, with no `implements` clause — every call goes through the interface and the class members collect zero references while being used at runtime. The whole class is skipped, along with its base classes and any class whose instances only leave through methods of such a class. Declaring `implements` restores tracking.
 - **Decorated classes**: a decorator hands the class to a framework that reads members through reflection or metadata. The whole class is skipped.
 - **Dynamically consumed enums**: `keyof typeof E`, `Object.values(E)`, `for...in`, and reverse mapping or computed lookup (`E[x]`) all reach members without per-member references. The whole enum is skipped.
 
