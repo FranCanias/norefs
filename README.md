@@ -74,18 +74,21 @@ The test suite verifies that the reference check resolves all of these — none 
 - mapped types (`Partial<T>`, `Pick<T, 'k'>`) and interface inheritance
 - usage from other files, quoted property names, implementing class members
 - property writes (a write-only property counts as used)
+- a literal probe like `'name' in v` counts as usage of exactly that property
 
 ## When noref stays silent
 
 Some consumption is invisible to static reference search. Rather than guess, noref suppresses those findings entirely:
 
-- **`keyof`-targeted types**: when `keyof T` appears anywhere, code is enumerating or indexing T's keys dynamically (generic getters, `Object.keys` loops). All of T's members are skipped.
-- **Escaping returned objects**: when a returned object leaves local view as a whole — passed as a bare argument (`JSON.stringify(t)`), returned onward, or aliased — its properties may be consumed without any per-property reference. The whole literal is skipped.
+- **`keyof`-targeted types**: when `keyof T` appears anywhere, code is enumerating or indexing T's keys dynamically. All of T's members are skipped.
+- **Key-enumerating and serializing sinks**: a value passed to `Object.keys`/`values`/`entries`/`assign`, `JSON.stringify`, `structuredClone`, or `Reflect.ownKeys`, iterated with `for...in`, or probed with a dynamic `key in v` marks its whole type as dynamically consumed.
+- **Escaping values**: when an object leaves local view as a whole — a returned literal passed on as a bare argument, a whole-binding parameter or variable forwarded via shorthand into a differently-declared type, a property whose value flows onward wholesale — its properties may be consumed without any per-property reference. The affected type literal is skipped.
+- **Parameters of function types**: callback signatures declare parameter types, but implementations bind their own parameters; when callbacks are invoked with variables rather than literals, the signature's members can't be tracked.
 
 ## Remaining blind spots
 
-- `Object.keys(v)` without a `keyof` cast, `in` checks, and reflection-based access (decorators, `class-transformer`) can still produce false positives.
-- A property forwarded via shorthand into a *differently-declared* structural type resolves to the other declaration; the original can be falsely reported. `--no-anonymous` filters most of these.
+- Reflection-based access (decorators, `class-transformer`) is invisible; it can only touch class members at runtime, so interface and type-alias findings are unaffected.
+- Dynamic access laundered through a generic helper (`function dump<T>(o: T) { return Object.keys(o) }`) hides the concrete type from the sink detection.
 - An exported function with several `return` statements returning different object literals is skipped entirely, rather than guessed at.
 - Declaration files (`.d.ts`) are not scanned.
 

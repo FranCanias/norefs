@@ -61,6 +61,54 @@ describe('dynamic-consumption guards (stay silent rather than guess)', () => {
   it('returned objects that escape wholesale (JSON.stringify) are skipped', () => {
     expect(reportedIn('returned-object.ts')).toEqual([]);
   });
+
+  it('types passed to Object.keys are skipped, no keyof cast needed', () => {
+    expect(reportedIn('object-keys-plain.ts')).toEqual([]);
+  });
+
+  it('types enumerated by for...in are skipped', () => {
+    expect(reportedIn('for-in.ts')).toEqual([]);
+  });
+
+  it('a literal "name" in v probe marks exactly that property used', () => {
+    expect(reportedIn('in-operator-literal.ts')).toEqual(['deadProp']);
+  });
+
+  it('a dynamic key in v probe skips the whole type', () => {
+    expect(reportedIn('in-operator-dynamic.ts')).toEqual([]);
+  });
+
+  it('types serialized wholesale (JSON.stringify) are skipped', () => {
+    expect(reportedIn('serialized.ts')).toEqual([]);
+  });
+
+  it('whole-binding params forwarded into differently-declared types are skipped', () => {
+    expect(reportedIn('forwarded-param.ts')).toEqual([]);
+  });
+
+  it('whole-binding variables that escape are skipped', () => {
+    expect(reportedIn('forwarded-var.ts')).toEqual([]);
+  });
+
+  it('explicit return types on functions whose result escapes are skipped', () => {
+    expect(reportedIn('explicit-return-escape.ts')).toEqual([]);
+  });
+
+  it('params of function types stay silent; implementations bind separately', () => {
+    expect(reportedIn('callback-type-params.ts')).toEqual([]);
+  });
+
+  it('params with only local property reads still report', () => {
+    expect(reportedIn('param-stays-local.ts')).toEqual(['deadProp']);
+  });
+
+  it('nested literals under a property forwarded wholesale are skipped', () => {
+    expect(reportedIn('forwarded-property.ts')).toEqual([]);
+  });
+
+  it('nested literals under a property with only local reads still report', () => {
+    expect(reportedIn('local-property.ts')).toEqual(['deadOption']);
+  });
 });
 
 describe('documented blind spots', () => {
