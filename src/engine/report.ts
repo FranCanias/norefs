@@ -84,6 +84,60 @@ export function formatMarkdown(findings: Finding[], cwd: string): string {
   return lines.join('\n');
 }
 
+/** One GitHub workflow command per finding, so they show inline on pull requests. */
+export function formatGitHub(findings: Finding[], cwd: string): string {
+  if (findings.length === 0) return 'No unused code found.';
+  const lines = findings.map(f => {
+    const file = escapeProperty(path.relative(cwd, f.filePath));
+    return `::error file=${file},line=${f.line},col=${f.column},title=noref::${escapeData(describeFinding(f))}`;
+  });
+  lines.push(summarize(findings));
+  return lines.join('\n');
+}
+
+function escapeData(value: string): string {
+  return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+}
+
+function escapeProperty(value: string): string {
+  return escapeData(value).replace(/:/g, '%3A').replace(/,/g, '%2C');
+}
+
+export function formatSarif(findings: Finding[], cwd: string): string {
+  return JSON.stringify(
+    {
+      $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+      version: '2.1.0',
+      runs: [
+        {
+          tool: {
+            driver: {
+              name: 'noref',
+              informationUri: 'https://github.com/FranCanias/noref',
+              rules: [...new Set(findings.map(f => f.kind))].map(kind => ({ id: kind })),
+            },
+          },
+          results: findings.map(f => ({
+            ruleId: f.kind,
+            level: 'warning',
+            message: { text: describeFinding(f) },
+            locations: [
+              {
+                physicalLocation: {
+                  artifactLocation: { uri: path.relative(cwd, f.filePath) },
+                  region: { startLine: f.line, startColumn: f.column },
+                },
+              },
+            ],
+          })),
+        },
+      ],
+    },
+    null,
+    2
+  );
+}
+
 export function formatJson(findings: Finding[], cwd: string): string {
   return JSON.stringify(
     findings.map(f => ({

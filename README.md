@@ -56,7 +56,8 @@ noref [options]
 | `--scope <path>` | Only report findings declared under this path; the whole project still resolves usages |
 | `--entry <path>` | Treat this file or directory as an entry point: never reported unused, exports never reported (repeatable) |
 | `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members`, `empty-types` |
-| `--json` | Print findings as JSON |
+| `--reporter <name>` | Output format: `text` (default), `json`, `github`, `sarif` |
+| `--baseline` | Write the findings to `noref-baseline.json` and exit; later runs fail on new findings only |
 | `--export <md\|json>` | Also write findings to `noref-findings.md` or `noref-findings.json` in the current directory |
 | `--fix` | Remove reported members and dead `export` keywords from the source files |
 | `--no-anonymous` | Hide findings on unnamed inline types and anonymous functions |
@@ -95,6 +96,22 @@ export interface User {
 `// noref-ignore` on the reported line, or alone on the line above, suppresses that one finding. The reason after the colon is optional but kind to the next reader. A suppressed declaration counts as used, so noref still looks inside it: suppressing an unused export keeps reporting its unused members.
 
 To silence a whole file — generated code, for instance — put `// noref-ignore-file` before its first statement. That also covers the unused-file finding.
+
+### Running in CI
+
+A codebase with hundreds of pre-existing findings does not need a big-bang cleanup to adopt noref. Record the debt once and fail only on new findings:
+
+```sh
+noref --baseline        # writes noref-baseline.json; commit it
+noref                   # from now on: exit 1 only for findings not in the baseline
+```
+
+The baseline matches findings by kind, file, and name — not by line — so ordinary edits do not break it. When findings are actually removed, noref tells you the baseline has stale entries; run `--baseline` again to refresh it. `--fix` also skips baselined findings, so it only removes new dead code.
+
+Two reporters are made for CI:
+
+- `--reporter github` prints one workflow command (`::error file=…`) per finding, so GitHub Actions shows them inline on the pull request.
+- `--reporter sarif` prints a SARIF 2.1.0 run for anything that ingests SARIF, like GitHub code scanning.
 
 ### Fixing automatically
 

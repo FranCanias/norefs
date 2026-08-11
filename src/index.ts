@@ -2,12 +2,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { applyBaseline, writeBaseline } from './baseline';
 import { loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { applyFixes } from './engine/fix';
 import { loadProject } from './engine/project';
-import { formatJson, formatMarkdown, formatText } from './engine/report';
+import { formatGitHub, formatJson, formatMarkdown, formatSarif, formatText } from './engine/report';
 import type { FilterOptions } from './filters';
 import { applyFilters, parseKinds } from './filters';
 
@@ -26,7 +27,11 @@ Options:
                          root or src/ are entry points by default)
   --only <kinds>         Report only these finding kinds, comma-separated: files,
                          exports, types, ns-exports, ns-types, members, empty-types
-  --json                 Print findings as JSON
+  --reporter <name>      Output format: text (default), json, github (workflow
+                         commands that annotate pull requests), sarif
+  --baseline             Write the findings to noref-baseline.json and exit;
+                         when that file exists, later runs report and fail on
+                         new findings only
   --export <md|json>     Also write findings to noref-findings.md or noref-findings.json
   --fix                  Remove reported members and export keywords from the source files
   --no-anonymous         Hide findings on unnamed inline types and anonymous functions
@@ -49,7 +54,8 @@ function main(): void {
       scope: { type: 'string' },
       entry: { type: 'string', multiple: true },
       only: { type: 'string', multiple: true },
-      json: { type: 'boolean', default: false },
+      reporter: { type: 'string', default: 'text' },
+      baseline: { type: 'boolean', default: false },
       export: { type: 'string' },
       fix: { type: 'boolean', default: false },
       anonymous: { type: 'boolean', default: true },
@@ -65,6 +71,14 @@ function main(): void {
 
   if (values.export !== undefined && values.export !== 'md' && values.export !== 'json') {
     process.stderr.write(`error: --export must be "md" or "json", got "${values.export}"\n`);
+    process.exitCode = 2;
+    return;
+  }
+
+  const reporters = { text: formatText, json: formatJson, github: formatGitHub, sarif: formatSarif };
+  const reporter = reporters[values.reporter as keyof typeof reporters];
+  if (!reporter) {
+    process.stderr.write(`error: --reporter must be one of ${Object.keys(reporters).join(', ')}, got "${values.reporter}"\n`);
     process.exitCode = 2;
     return;
   }
@@ -104,10 +118,35 @@ function main(): void {
   const scopeDir = values.scope ? path.resolve(cwd, values.scope) : undefined;
   const entries = [...config.entry, ...(values.entry ?? [])].map(entry => path.resolve(cwd, entry));
   const rootDir = path.dirname(tsConfigFilePath);
-  const findings = applyFilters(analyze(project, { scopeDir, entries, rootDir }), filterOptions);
+  let findings = applyFilters(analyze(project, { scopeDir, entries, rootDir }), filterOptions);
 
-  process.stdout.write(values.json ? formatJson(findings, cwd) : formatText(findings, cwd));
+  if (values.baseline) {
+    const fileName = writeBaseline(findings, cwd);
+    process.stderr.write(`Wrote ${fileName} with ${findings.length} finding(s)\n`);
+    return;
+  }
+
+  let baseline: ReturnType<typeof applyBaseline>;
+  try {
+    baseline = applyBaseline(findings, cwd);
+  } catch (error) {
+    process.stderr.write(`error: ${(error as Error).message}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  if (baseline) findings = baseline.fresh;
+
+  process.stdout.write(reporter(findings, cwd));
   process.stdout.write('\n');
+
+  if (baseline) {
+    process.stderr.write(`Baseline: ${baseline.matched} finding(s) matched and were not reported\n`);
+    if (baseline.stale > 0) {
+      process.stderr.write(
+        `${baseline.stale} baseline finding(s) no longer occur — run noref --baseline to refresh the file\n`
+      );
+    }
+  }
 
   if (values.export) {
     const fileName = values.export === 'md' ? 'noref-findings.md' : 'noref-findings.json';
@@ -125,7 +164,8 @@ function main(): void {
     let totalFixed = result.fixed;
     const touched = new Set(result.filePaths);
     for (let pass = 2; result.fixed > 0 && pass <= 5; pass++) {
-      const remaining = applyFilters(analyze(project, { scopeDir, entries, rootDir }), filterOptions);
+      let remaining = applyFilters(analyze(project, { scopeDir, entries, rootDir }), filterOptions);
+      if (baseline) remaining = applyBaseline(remaining, cwd)?.fresh ?? remaining;
       result = applyFixes(remaining);
       if (result.fixed === 0) break;
       totalFixed += result.fixed;
