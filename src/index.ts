@@ -2,12 +2,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { applyFixes } from './engine/fix';
 import { loadProject } from './engine/project';
 import { formatJson, formatMarkdown, formatText } from './engine/report';
-import { applyFilters } from './filters';
+import type { FilterOptions } from './filters';
+import { applyFilters, parseKinds } from './filters';
 
 const HELP = `noref - find unused files, exports, and properties in a TypeScript project
 
@@ -22,19 +24,31 @@ Options:
                          never reported unused and its exports are the public
                          API (repeatable; index/main/cli files in the project
                          root or src/ are entry points by default)
+  --only <kinds>         Report only these finding kinds, comma-separated:
+                         files, exports, types, ns-exports, ns-types, members
   --json                 Print findings as JSON
   --export <md|json>     Also write findings to noref-findings.md or noref-findings.json
   --fix                  Remove reported members and export keywords from the source files
   --no-anonymous         Hide findings on unnamed inline types and anonymous functions
   -h, --help             Show this help message
+
+Configuration:
+  noref reads noref.json from the current directory when it exists:
+    { "project": "...", "entry": [...], "ignore": ["globs"], "only": [...] }
+  Command-line flags win over the config file; entries merge.
+
+Suppressing findings:
+  // noref-ignore [reason]   on the reported line or the line above
+  // noref-ignore-file       before the first statement of a file
 `;
 
 function main(): void {
   const { values } = parseArgs({
     options: {
-      project: { type: 'string', short: 'p', default: 'tsconfig.json' },
+      project: { type: 'string', short: 'p' },
       scope: { type: 'string' },
       entry: { type: 'string', multiple: true },
+      only: { type: 'string', multiple: true },
       json: { type: 'boolean', default: false },
       export: { type: 'string' },
       fix: { type: 'boolean', default: false },
@@ -56,7 +70,24 @@ function main(): void {
   }
 
   const cwd = process.cwd();
-  const tsConfigFilePath = path.resolve(cwd, values.project);
+  let config: ReturnType<typeof loadConfig>;
+  let filterOptions: FilterOptions;
+  try {
+    config = loadConfig(cwd);
+    const kindNames = values.only && values.only.length > 0 ? values.only : (config.only ?? []);
+    filterOptions = {
+      anonymous: values.anonymous,
+      only: kindNames.length > 0 ? parseKinds(kindNames) : undefined,
+      ignore: config.ignore,
+      cwd,
+    };
+  } catch (error) {
+    process.stderr.write(`error: ${(error as Error).message}\n`);
+    process.exitCode = 2;
+    return;
+  }
+
+  const tsConfigFilePath = path.resolve(cwd, values.project ?? config.project ?? 'tsconfig.json');
   const project = loadProject(tsConfigFilePath);
 
   const unresolved = findUnresolvedImports(project);
@@ -71,11 +102,9 @@ function main(): void {
   }
 
   const scopeDir = values.scope ? path.resolve(cwd, values.scope) : undefined;
-  const entries = (values.entry ?? []).map(entry => path.resolve(cwd, entry));
+  const entries = [...config.entry, ...(values.entry ?? [])].map(entry => path.resolve(cwd, entry));
   const rootDir = path.dirname(tsConfigFilePath);
-  const findings = applyFilters(analyze(project, { scopeDir, entries, rootDir }), {
-    anonymous: values.anonymous,
-  });
+  const findings = applyFilters(analyze(project, { scopeDir, entries, rootDir }), filterOptions);
 
   process.stdout.write(values.json ? formatJson(findings, cwd) : formatText(findings, cwd));
   process.stdout.write('\n');
@@ -96,9 +125,7 @@ function main(): void {
     let totalFixed = result.fixed;
     const touched = new Set(result.filePaths);
     for (let pass = 2; result.fixed > 0 && pass <= 5; pass++) {
-      const remaining = applyFilters(analyze(project, { scopeDir, entries, rootDir }), {
-        anonymous: values.anonymous,
-      });
+      const remaining = applyFilters(analyze(project, { scopeDir, entries, rootDir }), filterOptions);
       result = applyFixes(remaining);
       if (result.fixed === 0) break;
       totalFixed += result.fixed;

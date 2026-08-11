@@ -53,6 +53,7 @@ noref [options]
 | `-p, --project <path>` | Path to `tsconfig.json` (default: `./tsconfig.json`) |
 | `--scope <path>` | Only report findings declared under this path; the whole project still resolves usages |
 | `--entry <path>` | Treat this file or directory as an entry point: never reported unused, exports never reported (repeatable) |
+| `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members` |
 | `--json` | Print findings as JSON |
 | `--export <md\|json>` | Also write findings to `noref-findings.md` or `noref-findings.json` in the current directory |
 | `--fix` | Remove reported members and dead `export` keywords from the source files |
@@ -60,6 +61,38 @@ noref [options]
 | `-h, --help` | Show the help message |
 
 `noref` exits with code `1` when it finds unused code, `0` otherwise — so it slots into CI the same way a linter does. With `--fix` it exits `0` after it removes what it found.
+
+### Configuration file
+
+Put a `noref.json` next to where you run `noref`, and CI and teammates run the same thing without a shell alias:
+
+```json
+{
+  "project": "tsconfig.app.json",
+  "entry": ["src/worker.ts"],
+  "ignore": ["src/generated/**"],
+  "only": ["files", "exports", "types", "members"]
+}
+```
+
+All keys are optional. `entry` merges with `--entry`; for the other keys the command-line flag wins. `ignore` takes globs, matched against paths relative to the current directory (and absolute paths). Ignored files produce no findings, but their contents still count as usage of other code.
+
+### Suppressing findings
+
+A finding can be wrong — a member kept for API symmetry, a type consumed by reflection. Suppress it where it lives:
+
+```ts
+export interface User {
+  name: string;
+  // noref-ignore: kept for API symmetry
+  legacyId: number;
+  createdAt: Date; // noref-ignore
+}
+```
+
+`// noref-ignore` on the reported line, or alone on the line above, suppresses that one finding. The reason after the colon is optional but kind to the next reader. A suppressed declaration counts as used, so noref still looks inside it: suppressing an unused export keeps reporting its unused members.
+
+To silence a whole file — generated code, for instance — put `// noref-ignore-file` before its first statement. That also covers the unused-file finding.
 
 ### Fixing automatically
 
@@ -69,6 +102,7 @@ noref [options]
 - An unused export with references inside its own file loses only the `export` keyword. One with no references at all is removed whole, together with every import and re-export specifier that forwarded it — nothing dangles in a barrel.
 - After the removals, noref cleans each touched file: imports and unexported top-level declarations that only the removed code used are removed too. Then it re-analyzes and fixes again until nothing fixable is left, so cascades converge in one command.
 - Unused files and namespace findings are never touched. Deleting a file is your call, and a namespace finding is a lower-confidence guess.
+- `--fix` only touches what is reported, so `--only`, `ignore` globs, and suppression comments limit the fixes the same way they limit the findings.
 
 Review the diff before you commit. Some leftovers need human judgment — removing every member of an interface that is still referenced leaves an empty `interface X {}`, and only you know whether its consumers should go too.
 
@@ -149,8 +183,9 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 ```
 src/
   index.ts      CLI entry point
+  config.ts     noref.json loading
   engine/       project loading, the module-level checks (files, exports, namespaces), the unused-reference check,
-                human-readable labels, orchestration, output formatting
+                suppression comments, human-readable labels, orchestration, output formatting
   collectors/   one file per source of candidate members (interfaces, type literals, returned objects, enums, classes)
   filters/      post-collection filters (e.g. --no-anonymous)
   types/        shared types
