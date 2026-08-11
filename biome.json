@@ -58,5 +58,13 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["tests/fixtures/**"],
+      "linter": {
+        "enabled": false
+      }
+    }
+  ]
 }

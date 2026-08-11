@@ -10,7 +10,7 @@
     "build": "tsc",
     "lint": "biome lint .",
     "format": "biome format --write .",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run"
   },
   "keywords": [],
   "author": "",
@@ -19,7 +19,8 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.8",
     "@types/node": "26.2.0",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "ts-morph": "28.0.0"

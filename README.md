@@ -37,6 +37,7 @@ noref [options]
 | Option | Description |
 | --- | --- |
 | `-p, --project <path>` | Path to `tsconfig.json` (default: `./tsconfig.json`) |
+| `--scope <path>` | Only report properties declared under this path; the whole project still resolves usages |
 | `--json` | Print findings as JSON |
 | `--no-anonymous` | Hide findings on unnamed inline types and anonymous functions |
 | `-h, --help` | Show the help message |
@@ -57,20 +58,36 @@ Unused properties (2)
 
 ### Filtering out anonymous findings
 
-Some findings point at inline types with no name to anchor them — a `{x, y}` parameter type on an anonymous callback, for instance. These are more prone to false positives: TypeScript's reference search can't follow a value once it's passed into a *different*, structurally-compatible type (e.g. spread into a differently-typed object). Run with `--no-anonymous` to see only findings tied to a named interface, type alias, or function:
+Some findings point at inline types with no name to anchor them — a `{x, y}` parameter type on an anonymous callback, for instance. These are more prone to false positives: TypeScript's reference search loses track of a value forwarded via shorthand into a *differently-declared* structural type, because the read then resolves to the other declaration. Run with `--no-anonymous` to see only findings tied to a named interface, type alias, or function:
 
 ```sh
 noref --no-anonymous
 ```
 
-## Limitations
+## What counts as usage
 
-- **Pass-through properties**: a property read only after being spread (`{...obj}`) or reassigned into a differently-typed object won't be seen as used. This is the main source of false positives; `--no-anonymous` filters out most of them.
-- **Dynamic access**: `obj['key']` through a variable, `Object.keys(obj)`, and `in` checks don't count as a reference.
-- **Multiple return shapes**: an exported function with several `return` statements returning different object literals is skipped entirely, rather than guessed at.
-- **Declaration files** (`.d.ts`) are not scanned.
+The test suite verifies that the reference check resolves all of these — none of them produce false positives:
 
-When in doubt, treat a finding as a lead worth checking, not a guaranteed dead property.
+- dot access (`v.prop`) and string-literal element access (`v['prop']`)
+- destructuring, in parameters and in bodies
+- spreads, into both same-typed and fresh object types
+- mapped types (`Partial<T>`, `Pick<T, 'k'>`) and interface inheritance
+- usage from other files, quoted property names, implementing class members
+- property writes (a write-only property counts as used)
+
+## When noref stays silent
+
+Some consumption is invisible to static reference search. Rather than guess, noref suppresses those findings entirely:
+
+- **`keyof`-targeted types**: when `keyof T` appears anywhere, code is enumerating or indexing T's keys dynamically (generic getters, `Object.keys` loops). All of T's members are skipped.
+- **Escaping returned objects**: when a returned object leaves local view as a whole — passed as a bare argument (`JSON.stringify(t)`), returned onward, or aliased — its properties may be consumed without any per-property reference. The whole literal is skipped.
+
+## Remaining blind spots
+
+- `Object.keys(v)` without a `keyof` cast, `in` checks, and reflection-based access (decorators, `class-transformer`) can still produce false positives.
+- A property forwarded via shorthand into a *differently-declared* structural type resolves to the other declaration; the original can be falsely reported. `--no-anonymous` filters most of these.
+- An exported function with several `return` statements returning different object literals is skipped entirely, rather than guessed at.
+- Declaration files (`.d.ts`) are not scanned.
 
 ## Project layout
 
@@ -90,6 +107,7 @@ Adding a new source of candidates (classes, enums, JSX-spread props, …) means 
 ```sh
 pnpm install
 pnpm run build   # compile to dist/
+pnpm test        # vitest fixture suite (tests/fixtures covers one usage pattern per file)
 pnpm run lint    # biome lint
 pnpm run format  # biome format --write
 ```
