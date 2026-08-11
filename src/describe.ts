@@ -1,34 +1,41 @@
 import type { Node } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 
-export function describeFunctionName(fn: Node): string {
+export interface Described {
+  label: string;
+  anonymous: boolean;
+}
+
+export function describeFunctionName(fn: Node): Described {
   if (fn.isKind(SyntaxKind.FunctionDeclaration)) {
     const name = fn.getName();
-    return name ? `\`${name}\`` : 'the default export function';
+    return name
+      ? { label: `\`${name}\``, anonymous: false }
+      : { label: 'the default export function', anonymous: false };
   }
   const parent = fn.getParent();
   if (parent?.isKind(SyntaxKind.VariableDeclaration)) {
-    return `\`${parent.getName()}\``;
+    return { label: `\`${parent.getName()}\``, anonymous: false };
   }
   if (parent?.isKind(SyntaxKind.PropertyAssignment)) {
-    return `\`${parent.getName()}\``;
+    return { label: `\`${parent.getName()}\``, anonymous: false };
   }
-  return 'an anonymous function';
+  return { label: 'an anonymous function', anonymous: true };
 }
 
-export function describeTypeLiteralContext(node: Node): string {
+export function describeTypeLiteralContext(node: Node): Described {
   const parent = node.getParent();
-  if (!parent) return `an object type (${location(node)})`;
+  if (!parent) return { label: `an object type (${location(node)})`, anonymous: true };
 
   if (parent.isKind(SyntaxKind.TypeAliasDeclaration)) {
-    return `type \`${parent.getName()}\``;
+    return { label: `type \`${parent.getName()}\``, anonymous: false };
   }
   if (parent.isKind(SyntaxKind.Parameter)) {
-    const fn = parent.getParent();
-    return `props of ${describeFunctionName(fn)}`;
+    const fn = describeFunctionName(parent.getParent());
+    return { label: `props of ${fn.label}`, anonymous: fn.anonymous };
   }
   if (parent.isKind(SyntaxKind.VariableDeclaration)) {
-    return `the type of variable \`${parent.getName()}\``;
+    return { label: `the type of variable \`${parent.getName()}\``, anonymous: false };
   }
   if (
     parent.isKind(SyntaxKind.FunctionDeclaration) ||
@@ -36,12 +43,13 @@ export function describeTypeLiteralContext(node: Node): string {
     parent.isKind(SyntaxKind.FunctionExpression) ||
     parent.isKind(SyntaxKind.MethodDeclaration)
   ) {
-    return `the return type of ${describeFunctionName(parent)}`;
+    const fn = describeFunctionName(parent);
+    return { label: `the return type of ${fn.label}`, anonymous: fn.anonymous };
   }
   if (parent.isKind(SyntaxKind.PropertySignature) || parent.isKind(SyntaxKind.PropertyDeclaration)) {
-    return `the type of property \`${parent.getName()}\``;
+    return { label: `the type of property \`${parent.getName()}\``, anonymous: false };
   }
-  return `an object type (${location(node)})`;
+  return { label: `an object type (${location(node)})`, anonymous: true };
 }
 
 function location(node: Node): string {

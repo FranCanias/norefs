@@ -15,6 +15,7 @@ type FunctionLike = FunctionDeclaration | ArrowFunction | FunctionExpression;
 export interface Candidate {
   member: PropertyNamedNode & Node;
   context: string;
+  anonymous: boolean;
 }
 
 export function collectCandidates(project: Project): Candidate[] {
@@ -25,31 +26,32 @@ export function collectCandidates(project: Project): Candidate[] {
     for (const iface of sourceFile.getInterfaces()) {
       const context = `interface \`${iface.getName()}\``;
       for (const member of iface.getMembers()) {
-        pushIfNamed(candidates, member, context);
+        pushIfNamed(candidates, member, context, false);
       }
     }
 
     for (const typeLiteral of sourceFile.getDescendantsOfKind(SyntaxKind.TypeLiteral)) {
       if (isGenericConstraint(typeLiteral)) continue;
-      const context = describeTypeLiteralContext(typeLiteral);
+      const { label, anonymous } = describeTypeLiteralContext(typeLiteral);
       for (const member of typeLiteral.getMembers()) {
-        pushIfNamed(candidates, member, context);
+        pushIfNamed(candidates, member, label, anonymous);
       }
     }
 
     for (const fn of exportedFunctionsWithInferredReturn(sourceFile)) {
       const objectLiteral = getSoleReturnedObjectLiteral(fn);
       if (!objectLiteral) continue;
-      const context = `the return value of ${describeFunctionName(fn)}`;
+      const described = describeFunctionName(fn);
+      const context = `the return value of ${described.label}`;
       for (const member of objectLiteral.getProperties()) {
-        pushIfNamed(candidates, member, context);
+        pushIfNamed(candidates, member, context, described.anonymous);
       }
     }
   }
   return candidates;
 }
 
-function pushIfNamed(candidates: Candidate[], member: Node, context: string): void {
+function pushIfNamed(candidates: Candidate[], member: Node, context: string, anonymous: boolean): void {
   if (!member.isKind(SyntaxKind.PropertySignature) && !member.isKind(SyntaxKind.MethodSignature)) {
     if (
       !member.isKind(SyntaxKind.PropertyAssignment) &&
@@ -62,7 +64,7 @@ function pushIfNamed(candidates: Candidate[], member: Node, context: string): vo
   }
   const named = member as unknown as PropertyNamedNode & Node;
   if (named.getNameNode().getKind() === SyntaxKind.ComputedPropertyName) return;
-  candidates.push({ member: named, context });
+  candidates.push({ member: named, context, anonymous });
 }
 
 function isGenericConstraint(node: Node): boolean {

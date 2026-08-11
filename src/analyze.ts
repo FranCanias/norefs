@@ -7,7 +7,7 @@ export function analyze(project: Project): Finding[] {
   const candidates = collectCandidates(project);
   const findings: Finding[] = [];
 
-  for (const { member, context } of candidates) {
+  for (const { member, context, anonymous } of candidates) {
     if (!isUnused(member)) continue;
     const nameNode = member.getNameNode();
     const sourceFile = member.getSourceFile();
@@ -18,6 +18,7 @@ export function analyze(project: Project): Finding[] {
       column,
       propertyName: member.getName(),
       context,
+      anonymous,
     });
   }
 
