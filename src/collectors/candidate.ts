@@ -7,7 +7,12 @@ export interface Candidate {
   anonymous: boolean;
 }
 
-export function toCandidate(member: Node, context: string, anonymous: boolean): Candidate | undefined {
+export function toCandidate(
+  member: Node,
+  context: string,
+  anonymous: boolean,
+  probedNames?: Set<string>
+): Candidate | undefined {
   if (!member.isKind(SyntaxKind.PropertySignature) && !member.isKind(SyntaxKind.MethodSignature)) {
     if (
       !member.isKind(SyntaxKind.PropertyAssignment) &&
@@ -19,6 +24,9 @@ export function toCandidate(member: Node, context: string, anonymous: boolean): 
     }
   }
   const named = member as unknown as PropertyNamedNode & Node;
-  if (named.getNameNode().getKind() === SyntaxKind.ComputedPropertyName) return undefined;
+  const nameNode = named.getNameNode();
+  if (nameNode.getKind() === SyntaxKind.ComputedPropertyName) return undefined;
+  const key = nameNode.isKind(SyntaxKind.StringLiteral) ? nameNode.getLiteralValue() : nameNode.getText();
+  if (probedNames?.has(key)) return undefined;
   return { member: named, context, anonymous };
 }

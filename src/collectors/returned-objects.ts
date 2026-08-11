@@ -1,9 +1,7 @@
 import type {
   ArrowFunction,
-  CallExpression,
   FunctionDeclaration,
   FunctionExpression,
-  Identifier,
   Node,
   ObjectLiteralExpression,
   SourceFile,
@@ -12,10 +10,12 @@ import { SyntaxKind } from 'ts-morph';
 import { describeFunctionName } from '../engine/describe';
 import type { Candidate } from './candidate';
 import { toCandidate } from './candidate';
+import { callableEscapes, getCallableNameNode } from './escape';
+import type { CollectContext } from './index';
 
 type FunctionLike = FunctionDeclaration | ArrowFunction | FunctionExpression;
 
-export function collectReturnedObjectCandidates(sourceFile: SourceFile): Candidate[] {
+export function collectReturnedObjectCandidates(sourceFile: SourceFile, _ctx: CollectContext): Candidate[] {
   const candidates: Candidate[] = [];
   for (const fn of exportedFunctionsWithInferredReturn(sourceFile)) {
     const objectLiteral = getSoleReturnedObjectLiteral(fn);
@@ -29,6 +29,11 @@ export function collectReturnedObjectCandidates(sourceFile: SourceFile): Candida
     }
   }
   return candidates;
+}
+
+function returnValueEscapes(fn: FunctionLike): boolean {
+  const nameNode = getCallableNameNode(fn);
+  return !nameNode || callableEscapes(nameNode);
 }
 
 function exportedFunctionsWithInferredReturn(sourceFile: SourceFile): FunctionLike[] {
@@ -63,104 +68,6 @@ function unwrapParens(node: Node): Node {
     current = current.getExpression();
   }
   return current;
-}
-
-/**
- * True when the function's return value can leave local view as a whole —
- * passed as a bare argument, returned, spread, or aliased. Once the object
- * escapes, its properties may be consumed without any per-property reference
- * (JSON.stringify, IPC, logging), so reference counts can't be trusted.
- */
-function returnValueEscapes(fn: FunctionLike): boolean {
-  const nameNode = getCallableNameNode(fn);
-  if (!nameNode) return true;
-
-  for (const ref of nameNode.findReferencesAsNodes()) {
-    const parent = ref.getParent();
-    if (!parent) continue;
-    if (isAliasDeclarationParent(parent)) continue;
-    const call = ref.getParentIfKind(SyntaxKind.CallExpression);
-    if (!call || call.getExpression() !== ref) return true;
-    if (!callResultStaysLocal(call)) return true;
-  }
-  return false;
-}
-
-function getCallableNameNode(fn: FunctionLike): Identifier | undefined {
-  if (fn.isKind(SyntaxKind.FunctionDeclaration)) return fn.getNameNode();
-  const parent = fn.getParent();
-  if (parent?.isKind(SyntaxKind.VariableDeclaration)) {
-    const name = parent.getNameNode();
-    if (name.isKind(SyntaxKind.Identifier)) return name;
-  }
-  return undefined;
-}
-
-function isAliasDeclarationParent(parent: Node): boolean {
-  return (
-    parent.isKind(SyntaxKind.ImportSpecifier) ||
-    parent.isKind(SyntaxKind.ExportSpecifier) ||
-    parent.isKind(SyntaxKind.ImportClause) ||
-    parent.isKind(SyntaxKind.NamespaceImport) ||
-    parent.isKind(SyntaxKind.ExportAssignment)
-  );
-}
-
-function callResultStaysLocal(call: CallExpression): boolean {
-  const consumer = climbWrappers(call);
-  const parent = consumer.getParent();
-  if (!parent) return true;
-  if (parent.isKind(SyntaxKind.PropertyAccessExpression) && parent.getExpression() === consumer) return true;
-  if (isStringKeyedElementAccess(parent, consumer)) return true;
-  if (parent.isKind(SyntaxKind.ExpressionStatement)) return true;
-  if (parent.isKind(SyntaxKind.VariableDeclaration)) {
-    const name = parent.getNameNode();
-    if (!name.isKind(SyntaxKind.Identifier)) return true;
-    return variableStaysLocal(name);
-  }
-  return false;
-}
-
-function variableStaysLocal(name: Identifier): boolean {
-  for (const ref of name.findReferencesAsNodes()) {
-    const use = climbWrappers(ref);
-    const parent = use.getParent();
-    if (!parent) continue;
-    if (parent.isKind(SyntaxKind.PropertyAccessExpression) && parent.getExpression() === use) continue;
-    if (isStringKeyedElementAccess(parent, use)) continue;
-    if (parent.isKind(SyntaxKind.VariableDeclaration) && !parent.getNameNode().isKind(SyntaxKind.Identifier)) {
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
-
-function climbWrappers(node: Node): Node {
-  let current = node;
-  while (true) {
-    const parent = current.getParent();
-    if (
-      (parent?.isKind(SyntaxKind.ParenthesizedExpression) || parent?.isKind(SyntaxKind.NonNullExpression)) &&
-      parent.getExpression() === current
-    ) {
-      current = parent;
-      continue;
-    }
-    if (parent?.isKind(SyntaxKind.AwaitExpression) && parent.getExpression() === current) {
-      current = parent;
-      continue;
-    }
-    return current;
-  }
-}
-
-function isStringKeyedElementAccess(parent: Node, expression: Node): boolean {
-  return (
-    parent.isKind(SyntaxKind.ElementAccessExpression) &&
-    parent.getExpression() === expression &&
-    (parent.getArgumentExpression()?.isKind(SyntaxKind.StringLiteral) ?? false)
-  );
 }
 
 function getSoleReturnedObjectLiteral(fn: FunctionLike): ObjectLiteralExpression | undefined {
