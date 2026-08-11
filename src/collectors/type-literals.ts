@@ -11,12 +11,10 @@ export function collectTypeLiteralCandidates(sourceFile: SourceFile, ctx: Collec
   const candidates: Candidate[] = [];
   for (const typeLiteral of sourceFile.getDescendantsOfKind(SyntaxKind.TypeLiteral)) {
     if (isGenericConstraint(typeLiteral)) continue;
-    if (ctx.dynamic.suppressed.has(typeLiteral)) continue;
+    if (isUnderDynamicallyConsumedType(typeLiteral, ctx)) continue;
 
     const { owner, topTypeNode } = climbToOwner(typeLiteral);
-    if (owner?.isKind(SyntaxKind.TypeAliasDeclaration)) {
-      if (ctx.dynamic.suppressed.has(owner) || isKeyofTargeted(owner.getNameNode())) continue;
-    } else if (owner && bindingEscapesTracking(owner, topTypeNode)) {
+    if (!owner?.isKind(SyntaxKind.TypeAliasDeclaration) && owner && bindingEscapesTracking(owner, topTypeNode)) {
       continue;
     }
 
@@ -32,6 +30,29 @@ export function collectTypeLiteralCandidates(sourceFile: SourceFile, ctx: Collec
 
 function isGenericConstraint(node: Node): boolean {
   return node.getFirstAncestor(a => a.isKind(SyntaxKind.TypeParameter)) !== undefined;
+}
+
+/**
+ * True when this literal, or any type declaration it is nested inside, has its
+ * keys consumed dynamically. Suppression must cascade: `keyof T` or
+ * `JSON.stringify(v)` hands out nested values wholesale, so members of the
+ * nested literals are just as untrackable as T's own.
+ */
+function isUnderDynamicallyConsumedType(typeLiteral: TypeLiteralNode, ctx: CollectContext): boolean {
+  let node: Node | undefined = typeLiteral;
+  while (node) {
+    if (ctx.dynamic.suppressed.has(node)) return true;
+    if (node.isKind(SyntaxKind.TypeAliasDeclaration) || node.isKind(SyntaxKind.InterfaceDeclaration)) {
+      let targeted = ctx.keyofTargeted.get(node);
+      if (targeted === undefined) {
+        targeted = isKeyofTargeted(node.getNameNode());
+        ctx.keyofTargeted.set(node, targeted);
+      }
+      if (targeted) return true;
+    }
+    node = node.getParent();
+  }
+  return false;
 }
 
 const TYPE_WRAPPER_KINDS = new Set<SyntaxKind>([

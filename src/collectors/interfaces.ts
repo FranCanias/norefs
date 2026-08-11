@@ -8,7 +8,12 @@ export function collectInterfaceCandidates(sourceFile: SourceFile, ctx: CollectC
   const candidates: Candidate[] = [];
   for (const iface of sourceFile.getInterfaces()) {
     if (ctx.dynamic.suppressed.has(iface)) continue;
-    if (isKeyofTargeted(iface.getNameNode())) continue;
+    let targeted = ctx.keyofTargeted.get(iface);
+    if (targeted === undefined) {
+      targeted = isKeyofTargeted(iface.getNameNode());
+      ctx.keyofTargeted.set(iface, targeted);
+    }
+    if (targeted) continue;
     const probed = ctx.dynamic.probed.get(iface);
     const context = `interface \`${iface.getName()}\``;
     for (const member of iface.getMembers()) {

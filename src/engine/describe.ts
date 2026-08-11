@@ -13,6 +13,13 @@ export function describeFunctionName(fn: Node): Described {
       ? { label: `\`${name}\``, anonymous: false }
       : { label: 'the default export function', anonymous: false };
   }
+  if (fn.isKind(SyntaxKind.MethodDeclaration)) {
+    const name = fn.getNameNode();
+    if (name.isKind(SyntaxKind.Identifier) || name.isKind(SyntaxKind.StringLiteral)) {
+      return { label: `\`${fn.getName()}\``, anonymous: false };
+    }
+    return { label: 'an anonymous function', anonymous: true };
+  }
   const parent = fn.getParent();
   if (parent?.isKind(SyntaxKind.VariableDeclaration)) {
     return { label: `\`${parent.getName()}\``, anonymous: false };

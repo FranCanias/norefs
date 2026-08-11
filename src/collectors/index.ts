@@ -1,4 +1,4 @@
-import type { Project, SourceFile } from 'ts-morph';
+import type { Node, Project, SourceFile } from 'ts-morph';
 import type { Candidate } from './candidate';
 import type { DynamicConsumptionIndex } from './dynamic-index';
 import { buildDynamicConsumptionIndex } from './dynamic-index';
@@ -10,6 +10,8 @@ export type { Candidate } from './candidate';
 
 export interface CollectContext {
   dynamic: DynamicConsumptionIndex;
+  /** Cache for isKeyofTargeted, which costs a find-references call per declaration. */
+  keyofTargeted: Map<Node, boolean>;
 }
 
 const collectors: Array<(sourceFile: SourceFile, ctx: CollectContext) => Candidate[]> = [
@@ -24,7 +26,7 @@ export interface CollectOptions {
 }
 
 export function collectCandidates(project: Project, options: CollectOptions = {}): Candidate[] {
-  const ctx: CollectContext = { dynamic: buildDynamicConsumptionIndex(project) };
+  const ctx: CollectContext = { dynamic: buildDynamicConsumptionIndex(project), keyofTargeted: new Map() };
   const candidates: Candidate[] = [];
   for (const sourceFile of project.getSourceFiles()) {
     if (sourceFile.isDeclarationFile()) continue;

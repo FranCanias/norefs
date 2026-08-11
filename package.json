@@ -7,7 +7,7 @@
     "noref": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "test": "vitest run"
