@@ -1,0 +1,70 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    // Use the TypeScript version pinned in devDependencies, not the one bundled with VS Code.
+    "js/ts.tsdk.path": "node_modules/typescript/lib",
+    "js/ts.tsdk.promptToUseWorkspaceVersion": true,
+    "js/ts.preferences.importModuleSpecifier": "shortest",
+    "js/ts.tsserver.experimental.enableProjectDiagnostics": true,
+
+    // Biome owns formatting/linting (see biome.json); match its line width.
+    "editor.defaultFormatter": "biomejs.biome",
+    "[typescript]": {
+      "editor.defaultFormatter": "biomejs.biome"
+    },
+    "[javascript]": {
+      "editor.defaultFormatter": "biomejs.biome"
+    },
+    "[json]": {
+      "editor.defaultFormatter": "biomejs.biome"
+    },
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.biome": "explicit",
+      "source.organizeImports.biome": "explicit"
+    },
+    "editor.rulers": [120],
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
+    "files.eol": "\n",
+    "files.insertFinalNewline": true,
+    "files.trimTrailingWhitespace": true,
+
+    // Build output and deps are noise in search/watch/explorer.
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/pnpm-lock.yaml": true
+    },
+    "files.watcherExclude": {
+      "**/node_modules/**": true,
+      "**/dist/**": true,
+      "**/release/**": true
+    },
+    "files.exclude": {
+      "**/.DS_Store": true,
+      "**/node_modules": true,
+      "**/dist": true
+    },
+    "explorer.fileNesting.enabled": true,
+    "explorer.fileNesting.patterns": {
+      "noref.code-workspace": "pnpm-lock.yaml, pnpm-workspace.yaml, .npmrc, biome.json, .gitignore, .gitattributes, README.md, tsconfig.json, *.tsbuildinfo, package.json"
+    },
+
+    // pnpm is the package manager for this repo (pnpm-lock.yaml / pnpm-workspace.yaml).
+    "npm.packageManager": "pnpm",
+    "eslint.enable": false,
+
+    // unpkg serves the schema referenced by $schema in biome.json.
+    "json.schemaDownload.trustedDomains": {
+      "https://unpkg.com/": true
+    }
+  },
+  "extensions": {
+    "recommendations": ["biomejs.biome"]
+  }
+}

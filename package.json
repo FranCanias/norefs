@@ -1,0 +1,26 @@
+{
+  "name": "noref",
+  "version": "alpha-0.0.0",
+  "description": "",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "noref": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.33.0",
+  "devDependencies": {
+    "@biomejs/biome": "2.5.8",
+    "@types/node": "26.2.0",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "ts-morph": "28.0.0"
+  }
+}
