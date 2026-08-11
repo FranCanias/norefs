@@ -3,8 +3,15 @@ import { SyntaxKind } from 'ts-morph';
 import { describeTypeLiteralContext } from '../engine/describe';
 import type { Candidate } from './candidate';
 import { toCandidate } from './candidate';
+import { mergeNames } from './constraints';
 import { isKeyofTargeted } from './dynamic-usage';
-import { callableEscapes, getCallableNameNode, propertyValueStaysLocal, valueUsesStayLocal } from './escape';
+import {
+  callableEscapes,
+  castValueStaysLocal,
+  getCallableNameNode,
+  propertyValueStaysLocal,
+  valueUsesStayLocal,
+} from './escape';
 import type { CollectContext } from './index';
 
 export function collectTypeLiteralCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
@@ -18,10 +25,10 @@ export function collectTypeLiteralCandidates(sourceFile: SourceFile, ctx: Collec
       continue;
     }
 
-    const probed = ctx.dynamic.probed.get(typeLiteral);
+    const skip = mergeNames(ctx.dynamic.probed.get(typeLiteral), ctx.constrained.get(typeLiteral));
     const { label, anonymous } = describeTypeLiteralContext(typeLiteral);
     for (const member of typeLiteral.getMembers()) {
-      const candidate = toCandidate(member, label, anonymous, probed);
+      const candidate = toCandidate(member, label, anonymous, skip);
       if (candidate) candidates.push(candidate);
     }
   }
@@ -89,6 +96,10 @@ function climbToOwner(typeLiteral: TypeLiteralNode): { owner: Node | undefined; 
  * flows onward as a whole.
  */
 function bindingEscapesTracking(owner: Node, topTypeNode: Node): boolean {
+  if (owner.isKind(SyntaxKind.AsExpression) || owner.isKind(SyntaxKind.SatisfiesExpression)) {
+    return !castValueStaysLocal(owner);
+  }
+
   if (owner.isKind(SyntaxKind.Parameter)) {
     if (isTypePositionParameter(owner)) return true;
     const name = owner.getNameNode();

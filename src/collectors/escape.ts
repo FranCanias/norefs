@@ -41,7 +41,7 @@ export function callableEscapes(nameNode: Identifier): boolean {
   return false;
 }
 
-/** True when every use of this binding is a local property read. */
+/** True when every use of this binding is a local property read or a boolean test. */
 export function valueUsesStayLocal(name: Identifier): boolean {
   for (const ref of name.findReferencesAsNodes()) {
     const use = climbWrappers(ref);
@@ -52,9 +52,35 @@ export function valueUsesStayLocal(name: Identifier): boolean {
     if (parent.isKind(SyntaxKind.VariableDeclaration) && !parent.getNameNode().isKind(SyntaxKind.Identifier)) {
       continue;
     }
+    if (parent.isKind(SyntaxKind.IfStatement) && parent.getExpression() === use) continue;
+    if (parent.isKind(SyntaxKind.ConditionalExpression) && parent.getCondition() === use) continue;
+    if (parent.isKind(SyntaxKind.PrefixUnaryExpression) && parent.getOperatorToken() === SyntaxKind.ExclamationToken) {
+      continue;
+    }
     return false;
   }
   return true;
+}
+
+/**
+ * True when the value of an `as` / `satisfies` cast keeps all uses local. A
+ * cast that flows onward as a whole — spread into a combined array, passed as
+ * a bare argument — can have its members consumed through a different
+ * declaration of the same structural type, invisibly to reference search.
+ */
+export function castValueStaysLocal(cast: Node): boolean {
+  const consumer = climbWrappers(cast);
+  const parent = consumer.getParent();
+  if (!parent) return true;
+  if (parent.isKind(SyntaxKind.PropertyAccessExpression) && parent.getExpression() === consumer) return true;
+  if (isStringKeyedElementAccess(parent, consumer)) return true;
+  if (parent.isKind(SyntaxKind.VariableDeclaration)) {
+    const name = parent.getNameNode();
+    // A destructured cast is read property by property at the binding.
+    if (!name.isKind(SyntaxKind.Identifier)) return true;
+    return valueUsesStayLocal(name);
+  }
+  return false;
 }
 
 /**

@@ -117,6 +117,24 @@ describe('dynamic-consumption guards (stay silent rather than guess)', () => {
   it('suppression cascades into literals nested in a serialized interface', () => {
     expect(reportedIn('nested-serialized.ts')).toEqual([]);
   });
+
+  it('cast values spread into a combined array are skipped', () => {
+    expect(reportedIn('array-spread-union.ts')).toEqual([]);
+  });
+
+  it('cast values with only local reads and boolean tests still report', () => {
+    expect(reportedIn('cast-stays-local.ts')).toEqual(['deadFlag']);
+  });
+});
+
+describe('assignability constraints (zero-reference members stay when required)', () => {
+  it('an extends override keeps the substituted type assignable to the base member', () => {
+    expect(reportedIn('heritage-override.ts')).toEqual(['deadExtra']);
+  });
+
+  it('a type predicate keeps the narrowed type assignable to its parameter', () => {
+    expect(reportedIn('predicate-narrow.ts')).toEqual(['deadRadius']);
+  });
 });
 
 describe('enum members', () => {

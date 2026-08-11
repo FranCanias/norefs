@@ -11,6 +11,7 @@ import type {
 import { SyntaxKind } from 'ts-morph';
 import type { Candidate } from './candidate';
 import { toCandidate } from './candidate';
+import { mergeNames } from './constraints';
 import { isKeyofTargeted } from './dynamic-usage';
 import { callableEscapes, getCallableNameNode } from './escape';
 import type { CollectContext } from './index';
@@ -31,17 +32,17 @@ export function collectClassCandidates(sourceFile: SourceFile, ctx: CollectConte
     if (targeted) continue;
     if (classEscapesTracking(cls, ctx.classEscapes)) continue;
 
-    const probed = ctx.dynamic.probed.get(cls);
+    const skip = mergeNames(ctx.dynamic.probed.get(cls), ctx.constrained.get(cls));
     const context = `class \`${cls.getName()}\``;
     for (const member of cls.getMembers()) {
-      const candidate = toCandidate(member, context, false, probed);
+      const candidate = toCandidate(member, context, false, skip);
       if (candidate) candidates.push(candidate);
     }
     for (const ctor of cls.getConstructors()) {
       for (const param of ctor.getParameters()) {
         if (!param.isParameterProperty()) continue;
         if (!param.getNameNode().isKind(SyntaxKind.Identifier)) continue;
-        if (probed?.has(param.getName())) continue;
+        if (skip?.has(param.getName())) continue;
         candidates.push({ member: param as unknown as PropertyNamedNode & Node, context, anonymous: false });
       }
     }
@@ -63,7 +64,7 @@ function hasDecorators(cls: ClassDeclaration): boolean {
 /**
  * True when instances of this class (or of a subclass) escape into a type that
  * is not the class itself or its declared heritage. A structural implementation
- * — `new DeviceImpl()` returned as interface `Device` without an `implements`
+ * — `new StoreImpl()` returned as interface `Store` without an `implements`
  * clause — is called through the interface, so its members collect zero
  * references while being used at runtime. Only declared heritage merges
  * reference groups, so anything else must silence the class.

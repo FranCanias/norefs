@@ -1,14 +1,14 @@
-interface Device {
+interface Store {
   ping(): void;
 }
 
-class DeviceImpl {
+class StoreImpl {
   ping(): void {}
   reachedStructurally(): void {}
 }
 
-export function create(): Device {
-  return new DeviceImpl();
+export function create(): Store {
+  return new StoreImpl();
 }
 
 create().ping();

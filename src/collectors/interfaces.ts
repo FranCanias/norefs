@@ -1,6 +1,7 @@
 import type { SourceFile } from 'ts-morph';
 import type { Candidate } from './candidate';
 import { toCandidate } from './candidate';
+import { mergeNames } from './constraints';
 import { isKeyofTargeted } from './dynamic-usage';
 import type { CollectContext } from './index';
 
@@ -14,10 +15,10 @@ export function collectInterfaceCandidates(sourceFile: SourceFile, ctx: CollectC
       ctx.keyofTargeted.set(iface, targeted);
     }
     if (targeted) continue;
-    const probed = ctx.dynamic.probed.get(iface);
+    const skip = mergeNames(ctx.dynamic.probed.get(iface), ctx.constrained.get(iface));
     const context = `interface \`${iface.getName()}\``;
     for (const member of iface.getMembers()) {
-      const candidate = toCandidate(member, context, false, probed);
+      const candidate = toCandidate(member, context, false, skip);
       if (candidate) candidates.push(candidate);
     }
   }
