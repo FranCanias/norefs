@@ -119,6 +119,85 @@ describe('dynamic-consumption guards (stay silent rather than guess)', () => {
   });
 });
 
+describe('enum members', () => {
+  it('reports members with no references', () => {
+    expect(reportedIn('enum-basic.ts')).toEqual(['Dead']);
+  });
+
+  it('enums passed to Object.values are skipped', () => {
+    expect(reportedIn('enum-object-values.ts')).toEqual([]);
+  });
+
+  it('enums targeted by keyof typeof are skipped', () => {
+    expect(reportedIn('enum-keyof-typeof.ts')).toEqual([]);
+  });
+
+  it('enums element-accessed with a dynamic key (reverse mapping) are skipped', () => {
+    expect(reportedIn('enum-reverse-map.ts')).toEqual([]);
+  });
+});
+
+describe('class members', () => {
+  it('reports properties, methods, and getters with no references', () => {
+    expect(reportedIn('class-basic.ts')).toEqual(['deadGetter', 'deadMethod', 'deadProp']);
+  });
+
+  it('members reached through an interface or base type count as used', () => {
+    expect(reportedIn('class-implemented.ts')).toEqual([]);
+    expect(reportedIn('class-override.ts')).toEqual([]);
+  });
+
+  it('decorated classes are skipped entirely', () => {
+    expect(reportedIn('class-decorated.ts')).toEqual([]);
+  });
+
+  it('serialized instances suppress the class and its base', () => {
+    expect(reportedIn('class-serialized.ts')).toEqual([]);
+    expect(reportedIn('class-serialized-inherited.ts')).toEqual([]);
+  });
+
+  it('static members are checked like instance members', () => {
+    expect(reportedIn('class-static.ts')).toEqual(['deadStatic']);
+  });
+
+  it('parameter properties are checked', () => {
+    expect(reportedIn('class-param-props.ts')).toEqual(['deadDep']);
+  });
+
+  it('reads through a spread copy resolve back to class members', () => {
+    expect(reportedIn('class-spread.ts')).toEqual(['deadCoord']);
+  });
+
+  it('classes targeted by keyof are skipped', () => {
+    expect(reportedIn('class-keyof.ts')).toEqual([]);
+  });
+
+  it('structural implementations (instances escape into an undeclared interface) are skipped', () => {
+    expect(reportedIn('class-structural.ts')).toEqual([]);
+    expect(reportedIn('class-structural-var.ts')).toEqual([]);
+  });
+
+  it('a declared implements clause keeps member tracking alive', () => {
+    expect(reportedIn('class-declared-heritage.ts')).toEqual(['deadHelper']);
+  });
+
+  it('classes passed around as values are skipped', () => {
+    expect(reportedIn('class-value-escape.ts')).toEqual([]);
+  });
+
+  it('a subclass escaping structurally silences its base class too', () => {
+    expect(reportedIn('class-derived-escape.ts')).toEqual([]);
+  });
+
+  it('instances returned from a method of an escaping class are laundered too', () => {
+    expect(reportedIn('class-returned-from-structural.ts')).toEqual([]);
+  });
+
+  it('instances returned from a method of a tracked class stay tracked', () => {
+    expect(reportedIn('class-returned-from-tracked.ts')).toEqual(['deadBrake']);
+  });
+});
+
 describe('documented blind spots', () => {
   it('interface members mirrored by an implementing class are never reported', () => {
     // The class declaration counts as a reference; class members are out of scope here.
