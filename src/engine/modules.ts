@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { Identifier, ModuleDeclaration, Node, Project, SourceFile } from 'ts-morph';
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
 import type { Finding, FindingKind } from '../types';
+import { packageEntries } from './package-entries';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 
 export interface ModuleAnalysis {
@@ -28,9 +29,10 @@ const HARNESS_NAME = /\.(test|spec|stories|bench|config)\.[cm]?[jt]sx?$/;
 const HARNESS_DIRS = new Set(['test', 'tests', '__tests__', '__mocks__']);
 
 export function analyzeModules(project: Project, options: ModuleOptions = {}): ModuleAnalysis {
-  const entries = options.entries ?? [];
   const sourceFiles = project.getSourceFiles().filter(sf => !sf.isDeclarationFile());
   const rootDir = options.rootDir ?? commonDirectory(sourceFiles);
+  const entries = [...(options.entries ?? []), ...packageEntries(project, rootDir, commonDirectory(sourceFiles))];
+  const reachable = reachableFiles(sourceFiles, rootDir, entries);
   const namespaceConsumers = findNamespaceConsumers(project);
 
   const findings: Finding[] = [];
@@ -43,7 +45,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
     if (isEntryFile(filePath, rootDir, entries)) continue;
     if (isFileSuppressed(sourceFile)) continue;
 
-    if (!isHarnessFile(filePath, rootDir) && !isReferenced(sourceFile)) {
+    if (!reachable.has(sourceFile)) {
       deadFiles.add(sourceFile);
       findings.push({
         kind: 'file',
@@ -66,8 +68,27 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   return { findings, deadFiles, deadDecls };
 }
 
-function isReferenced(sourceFile: SourceFile): boolean {
-  return sourceFile.getReferencingSourceFiles().some(ref => ref !== sourceFile);
+/**
+ * Files reachable through imports from any root: entry files, harness files,
+ * and files suppressed with noref-ignore-file (keeping a file means keeping
+ * what it imports). Counting reachability instead of direct importers catches
+ * dead clusters, like two unused files that import each other.
+ */
+function reachableFiles(sourceFiles: SourceFile[], rootDir: string, entries: string[]): Set<SourceFile> {
+  const roots = sourceFiles.filter(sf => {
+    const filePath = sf.getFilePath();
+    return isEntryFile(filePath, rootDir, entries) || isHarnessFile(filePath, rootDir) || isFileSuppressed(sf);
+  });
+  const reachable = new Set<SourceFile>(roots);
+  const queue = [...roots];
+  for (let file = queue.pop(); file; file = queue.pop()) {
+    for (const target of file.getReferencedSourceFiles()) {
+      if (target.isDeclarationFile() || reachable.has(target)) continue;
+      reachable.add(target);
+      queue.push(target);
+    }
+  }
+  return reachable;
 }
 
 function isEntryFile(filePath: string, rootDir: string, entries: string[]): boolean {
