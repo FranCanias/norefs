@@ -1,12 +1,24 @@
 # noref
 
-Find unused members of TypeScript interfaces, type aliases, object literals, enums, and classes.
+Find unused files, exports, and type/object members in a TypeScript project.
 
-Most dead-code tools find unused files, exports, and dependencies. They stop at the declaration boundary: an interface counts as "used" even when half its members are dead. `noref` looks inside — including objects returned from exported functions and objects used as React component props.
+Most dead-code tools stop at the declaration boundary: an interface counts as "used" even when half its members are dead. `noref` checks both levels. It finds unused files, unused exports, and unused exported types — and then looks inside the types that *are* used, including objects returned from exported functions and objects used as React component props.
 
 ## How it works
 
-`noref` loads your project with [ts-morph](https://ts-morph.com) and looks for five kinds of member owners:
+`noref` loads your project with [ts-morph](https://ts-morph.com) and runs two passes.
+
+### Module-level checks
+
+- **Unused files** — no other file imports or re-exports the file. Entry points are exempt: paths given with `--entry`, and `index`/`main`/`cli` files in the project root or `src/`. Test, spec, stories, bench, and config files (and anything under a `test`, `tests`, `__tests__`, or `__mocks__` directory) are their own entry points, so they are never reported either.
+- **Unused exports** and **unused exported types** — an exported declaration that nothing outside its file uses. Interfaces, type aliases, and enums count as types; functions, classes, variables, and namespaces count as exports. References resolve through re-export chains, so a barrel between the declaration and its consumers does not hide usage. A declaration that is used inside its own file but never imported still gets reported: the `export` keyword is dead even though the code is not. Exports of entry files are the public API and are never reported.
+- **Exports in used namespace** and **exported types in used namespace** — the same check, at lower confidence, for two namespace shapes. When a module is consumed through a used `import * as ns` binding, its zero-reference exports are reported this way, because the namespace object may be consumed dynamically. And when a TS `namespace N { … }` is used, its exported members whose references never leave the namespace body are reported this way too.
+
+A finding at a higher level swallows the findings inside it: an unused file hides its exports and members, and an unused export with zero references anywhere hides its members. One line per problem, not fifty.
+
+### Member-level checks
+
+The member pass looks for five kinds of member owners:
 
 - `interface` declarations
 - `type` aliases, and any inline object type (parameter types, return types, variable annotations — this covers React props like `function Foo({a}: {a: string})`)
@@ -39,18 +51,25 @@ noref [options]
 | Option | Description |
 | --- | --- |
 | `-p, --project <path>` | Path to `tsconfig.json` (default: `./tsconfig.json`) |
-| `--scope <path>` | Only report properties declared under this path; the whole project still resolves usages |
+| `--scope <path>` | Only report findings declared under this path; the whole project still resolves usages |
+| `--entry <path>` | Treat this file or directory as an entry point: never reported unused, exports never reported (repeatable) |
 | `--json` | Print findings as JSON |
 | `--export <md\|json>` | Also write findings to `noref-findings.md` or `noref-findings.json` in the current directory |
-| `--fix` | Remove the reported members from the source files |
+| `--fix` | Remove reported members and dead `export` keywords from the source files |
 | `--no-anonymous` | Hide findings on unnamed inline types and anonymous functions |
 | `-h, --help` | Show the help message |
 
-`noref` exits with code `1` when it finds unused properties, `0` otherwise — so it slots into CI the same way a linter does. With `--fix` it exits `0` after it removes what it found.
+`noref` exits with code `1` when it finds unused code, `0` otherwise — so it slots into CI the same way a linter does. With `--fix` it exits `0` after it removes what it found.
 
 ### Fixing automatically
 
-`noref --fix` prints the findings, then deletes each reported member and saves the file. One case is special: an unused parameter property (`constructor(private readonly dead: number)`) only loses its modifiers and stays a plain parameter, so the constructor signature and every `new` call site keep working. Review the diff before you commit — a removed member can leave behind code that only it used, so a second run may find more.
+`noref --fix` prints the findings, then fixes what it safely can and saves the files:
+
+- An unused member is deleted. One case is special: an unused parameter property (`constructor(private readonly dead: number)`) only loses its modifiers and stays a plain parameter, so the constructor signature and every `new` call site keep working.
+- An unused export loses its `export` keyword (or its `export { … }` specifier); the declaration stays, because it may still be used inside the file.
+- Unused files and namespace findings are never touched. Deleting a file is your call, and a namespace finding is a lower-confidence guess.
+
+Review the diff before you commit — removed code can leave behind code that only it used, so a second run may find more.
 
 ### Example
 
@@ -58,10 +77,14 @@ noref [options]
 src/models/User.ts
   4:3  unused property `legacyId` in interface `User`
 
+src/legacy/formatter.ts
+  unused file
+
 src/hooks/useConfig.ts
+  8:14  unused export `configDefaults`
   12:5  unused property `debugMode` in the return value of `useConfig`
 
-Unused properties (2)
+Unused code (4): 1 file, 1 export, 2 properties
 ```
 
 ### Filtering out anonymous findings
@@ -115,13 +138,18 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - An exported function with several `return` statements returning different object literals is skipped entirely, rather than guessed at.
 - Anonymous default-export classes (`export default class { … }`) are skipped: without a name there are no class references to run the escape checks on.
 - Declaration files (`.d.ts`) are not scanned.
+- Two unused files that import each other keep each other alive: the unused-file check counts direct references, not reachability from the entry points. Removing one and re-running finds the other.
+- Anonymous default exports (`export default { … }`) have no name to search references for, so the export check skips them.
+- A file consumed only through a bare `import './x'` for its side effects counts as used, even if nothing else touches it. That is the safe reading.
+- An entry point noref cannot guess (a script run directly with `node`, a file named in `package.json`) is a false positive until you pass it with `--entry`.
 
 ## Project layout
 
 ```
 src/
   index.ts      CLI entry point
-  engine/       project loading, the unused-reference check, human-readable labels, orchestration, output formatting
+  engine/       project loading, the module-level checks (files, exports, namespaces), the unused-reference check,
+                human-readable labels, orchestration, output formatting
   collectors/   one file per source of candidate members (interfaces, type literals, returned objects, enums, classes)
   filters/      post-collection filters (e.g. --no-anonymous)
   types/        shared types

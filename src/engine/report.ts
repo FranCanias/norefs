@@ -1,50 +1,79 @@
 import path from 'node:path';
 import type { Finding } from '../types';
 
-export function formatText(findings: Finding[], cwd: string): string {
-  if (findings.length === 0) return 'No unused properties found.\n';
+function describeFinding(finding: Finding): string {
+  switch (finding.kind) {
+    case 'file':
+      return 'unused file';
+    case 'export':
+      return `unused export \`${finding.name}\``;
+    case 'type':
+      return `unused exported type \`${finding.name}\``;
+    case 'ns-export':
+      return `unused export \`${finding.name}\` in used namespace \`${finding.context}\``;
+    case 'ns-type':
+      return `unused exported type \`${finding.name}\` in used namespace \`${finding.context}\``;
+    case 'member':
+      return `unused property \`${finding.name}\` in ${finding.context}`;
+  }
+}
 
+function summarize(findings: Finding[]): string {
+  const of = (...kinds: Finding['kind'][]): number => findings.filter(f => kinds.includes(f.kind)).length;
+  const groups: Array<[number, string, string]> = [
+    [of('file'), 'file', 'files'],
+    [of('export', 'ns-export'), 'export', 'exports'],
+    [of('type', 'ns-type'), 'exported type', 'exported types'],
+    [of('member'), 'property', 'properties'],
+  ];
+  const parts = groups.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
+  return `Unused code (${findings.length}): ${parts.join(', ')}`;
+}
+
+function groupByFile(findings: Finding[]): Map<string, Finding[]> {
   const byFile = new Map<string, Finding[]>();
   for (const finding of findings) {
     const list = byFile.get(finding.filePath) ?? [];
     list.push(finding);
     byFile.set(finding.filePath, list);
   }
+  return byFile;
+}
+
+export function formatText(findings: Finding[], cwd: string): string {
+  if (findings.length === 0) return 'No unused code found.\n';
 
   const lines: string[] = [];
-  for (const [filePath, fileFindings] of byFile) {
+  for (const [filePath, fileFindings] of groupByFile(findings)) {
     lines.push(path.relative(cwd, filePath));
     for (const finding of fileFindings) {
       lines.push(
-        `  ${finding.line}:${finding.column}  unused property \`${finding.propertyName}\` in ${finding.context}`
+        finding.kind === 'file'
+          ? `  ${describeFinding(finding)}`
+          : `  ${finding.line}:${finding.column}  ${describeFinding(finding)}`
       );
     }
   }
-  lines.push('', `Unused properties (${findings.length})`);
+  lines.push('', summarize(findings));
   return lines.join('\n');
 }
 
 export function formatMarkdown(findings: Finding[], cwd: string): string {
   const lines: string[] = ['# noref findings', ''];
   if (findings.length === 0) {
-    lines.push('No unused properties found.');
+    lines.push('No unused code found.');
     return lines.join('\n');
   }
 
-  const byFile = new Map<string, Finding[]>();
-  for (const finding of findings) {
-    const list = byFile.get(finding.filePath) ?? [];
-    list.push(finding);
-    byFile.set(finding.filePath, list);
-  }
-
-  lines.push(`Unused properties: ${findings.length}`, '');
-  for (const [filePath, fileFindings] of byFile) {
+  lines.push(summarize(findings), '');
+  for (const [filePath, fileFindings] of groupByFile(findings)) {
     const relativePath = path.relative(cwd, filePath);
     lines.push(`[${path.basename(relativePath)}](${relativePath})`, '');
     for (const finding of fileFindings) {
       lines.push(
-        `- \`${finding.propertyName}\` in ${finding.context} (line ${finding.line}, column ${finding.column})`
+        finding.kind === 'file'
+          ? `- ${describeFinding(finding)}`
+          : `- ${describeFinding(finding)} (line ${finding.line}, column ${finding.column})`
       );
     }
     lines.push('');
@@ -55,10 +84,11 @@ export function formatMarkdown(findings: Finding[], cwd: string): string {
 export function formatJson(findings: Finding[], cwd: string): string {
   return JSON.stringify(
     findings.map(f => ({
+      kind: f.kind,
       filePath: path.relative(cwd, f.filePath),
       line: f.line,
       column: f.column,
-      propertyName: f.propertyName,
+      name: f.name,
       context: f.context,
       anonymous: f.anonymous,
     })),

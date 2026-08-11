@@ -3,13 +3,17 @@ import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { loadProject } from '../src/engine/project';
 
+const fixturesDir = path.resolve('tests/fixtures');
 const project = loadProject(path.resolve('tests/fixtures/tsconfig.json'));
-const findings = analyze(project);
+// The fixtures are entry points: nothing imports them, and their exports are
+// consumed in-file. Without this, the module-level checks would swallow the
+// member findings these tests assert on.
+const findings = analyze(project, { rootDir: fixturesDir, entries: [fixturesDir] });
 
 function reportedIn(fixture: string): string[] {
   return findings
-    .filter(f => f.filePath.endsWith(`/${fixture}`))
-    .map(f => f.propertyName)
+    .filter(f => f.kind === 'member' && f.filePath.endsWith(`/${fixture}`))
+    .map(f => f.name)
     .sort();
 }
 

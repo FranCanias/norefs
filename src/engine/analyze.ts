@@ -1,26 +1,34 @@
 import type { Project } from 'ts-morph';
-import type { CollectOptions } from '../collectors';
 import { collectCandidates } from '../collectors';
 import type { Finding } from '../types';
 import { isUnused } from './check';
+import type { ModuleOptions } from './modules';
+import { analyzeModules } from './modules';
 
-export function analyze(project: Project, options: CollectOptions = {}): Finding[] {
-  const candidates = collectCandidates(project, options);
-  const findings: Finding[] = [];
+export type AnalyzeOptions = ModuleOptions;
 
-  for (const { member, context, anonymous } of candidates) {
+export function analyze(project: Project, options: AnalyzeOptions = {}): Finding[] {
+  const modules = analyzeModules(project, options);
+  const findings = [...modules.findings];
+
+  for (const { member, context, anonymous } of collectCandidates(project, options)) {
+    // An unused file or a declaration with zero references is already reported
+    // as a whole; listing every member inside it would only add noise.
+    if (modules.deadFiles.has(member.getSourceFile())) continue;
+    if (member.getAncestors().some(ancestor => modules.deadDecls.has(ancestor))) continue;
     if (!isUnused(member)) continue;
     const nameNode = member.getNameNode();
     const sourceFile = member.getSourceFile();
     const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
     findings.push({
+      kind: 'member',
       filePath: sourceFile.getFilePath(),
       line,
       column,
-      propertyName: member.getName(),
+      name: member.getName(),
       context,
       anonymous,
-      member,
+      node: member,
     });
   }
 

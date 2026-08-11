@@ -61,7 +61,7 @@
   },
   "overrides": [
     {
-      "includes": ["tests/fixtures/**", "tests/broken-fixtures/**"],
+      "includes": ["tests/fixtures/**", "tests/broken-fixtures/**", "tests/module-fixtures/**"],
       "linter": {
         "enabled": false
       }

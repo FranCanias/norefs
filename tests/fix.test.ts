@@ -94,8 +94,42 @@ describe('applyFixes', () => {
   it('saves the touched files and returns their paths', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile('/main.ts', 'export interface A { dead: number }\n');
-    const files = applyFixes(analyze(project));
-    expect(files).toEqual(['/main.ts']);
+    const result = applyFixes(analyze(project));
+    expect(result.filePaths).toEqual(['/main.ts']);
     expect(project.getFileSystem().readFileSync('/main.ts')).not.toContain('dead');
+  });
+
+  it('removes the export keyword from an unused export', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile('/main.ts', "import { used } from './lib';\nused();\n");
+    const lib = project.createSourceFile(
+      '/lib.ts',
+      ['export function used(): void {}', 'export function dead(): void {}', ''].join('\n')
+    );
+    applyFixes(analyze(project));
+    expect(lib.getFullText()).toContain('function dead');
+    expect(lib.getFullText()).not.toContain('export function dead');
+    expect(lib.getFullText()).toContain('export function used');
+  });
+
+  it('removes the export specifier of an unused export', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile('/main.ts', "import { used } from './lib';\nused();\n");
+    const lib = project.createSourceFile(
+      '/lib.ts',
+      ['export function used(): void {}', 'function dead(): void {}', 'export { dead };', ''].join('\n')
+    );
+    applyFixes(analyze(project));
+    expect(lib.getFullText()).toContain('function dead');
+    expect(lib.getFullText()).not.toContain('export { dead }');
+  });
+
+  it('reports unused files as skipped instead of deleting them', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile('/main.ts', 'export const keep = 1;\n');
+    project.createSourceFile('/orphan.ts', 'export const gone = 1;\n');
+    const result = applyFixes(analyze(project));
+    expect(result.skipped).toBe(1);
+    expect(project.getSourceFile('/orphan.ts')).toBeDefined();
   });
 });

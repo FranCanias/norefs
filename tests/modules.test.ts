@@ -1,0 +1,78 @@
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { analyze } from '../src/engine/analyze';
+import { loadProject } from '../src/engine/project';
+import type { Finding } from '../src/types';
+
+const rootDir = path.resolve('tests/module-fixtures');
+const project = loadProject(path.join(rootDir, 'tsconfig.json'));
+const findings = analyze(project, { rootDir });
+
+function reportedIn(fixture: string): Array<[Finding['kind'], string]> {
+  return findings
+    .filter(f => f.filePath.endsWith(`/${fixture}`))
+    .map(f => [f.kind, f.name] as [Finding['kind'], string])
+    .sort();
+}
+
+describe('unused files', () => {
+  it('reports a file nothing references', () => {
+    expect(reportedIn('orphan.ts')).toEqual([['file', 'orphan.ts']]);
+  });
+
+  it('suppresses export and member findings inside an unused file', () => {
+    expect(findings.filter(f => f.filePath.endsWith('/orphan.ts') && f.kind !== 'file')).toEqual([]);
+  });
+
+  it('treats index files in the root as entry points', () => {
+    expect(reportedIn('index.ts')).toEqual([]);
+  });
+
+  it('treats test and config files as their own entry points', () => {
+    expect(reportedIn('harness.config.ts')).toEqual([]);
+  });
+});
+
+describe('unused exports and exported types', () => {
+  it('reports exports and types nothing imports, and skips used ones', () => {
+    expect(reportedIn('exports.ts')).toEqual([
+      ['export', 'deadFn'],
+      ['export', 'deadValue'],
+      ['type', 'DeadAlias'],
+      ['type', 'DeadEnum'],
+      ['type', 'DeadShape'],
+    ]);
+  });
+
+  it('resolves usage through a re-export chain', () => {
+    expect(reportedIn('barrel.ts')).toEqual([]);
+    expect(reportedIn('chain.ts')).toEqual([['export', 'chainDead']]);
+  });
+
+  it('suppresses member findings inside a dead exported declaration', () => {
+    const memberNames = findings.filter(f => f.kind === 'member').map(f => f.name);
+    expect(memberNames).not.toContain('height');
+    expect(memberNames).not.toContain('A');
+  });
+});
+
+describe('exports in used namespace', () => {
+  it('downgrades unused exports of a namespace-imported module', () => {
+    expect(reportedIn('helpers.ts')).toEqual([
+      ['ns-export', 'two'],
+      ['ns-type', 'DeadNsShape'],
+    ]);
+    expect(findings.find(f => f.name === 'two')?.context).toBe('helpers');
+  });
+
+  it('reports exported members of a used TS namespace whose references never leave the body', () => {
+    expect(reportedIn('ns-decl.ts')).toEqual([
+      ['ns-export', 'dead'],
+      ['ns-export', 'helper'],
+      ['ns-export', 'internalUser'],
+      ['ns-type', 'DeadName'],
+      ['ns-type', 'DeadOptions'],
+    ]);
+    expect(findings.find(f => f.name === 'dead')?.context).toBe('Config');
+  });
+});

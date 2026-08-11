@@ -9,18 +9,22 @@ import { loadProject } from './engine/project';
 import { formatJson, formatMarkdown, formatText } from './engine/report';
 import { applyFilters } from './filters';
 
-const HELP = `noref - find unused properties on types, interfaces, and object literals
+const HELP = `noref - find unused files, exports, and properties in a TypeScript project
 
 Usage: noref [options]
 
 Options:
   -p, --project <path>  Path to tsconfig.json (default: ./tsconfig.json)
-  --scope <path>         Only report properties declared under this path
+  --scope <path>         Only report findings declared under this path
                          (still uses the whole project to resolve usages —
                          handy when a tsconfig spans an SDK and its consumer)
+  --entry <path>         Treat this file or directory as an entry point: it is
+                         never reported unused and its exports are the public
+                         API (repeatable; index/main/cli files in the project
+                         root or src/ are entry points by default)
   --json                 Print findings as JSON
   --export <md|json>     Also write findings to noref-findings.md or noref-findings.json
-  --fix                  Remove the reported members from the source files
+  --fix                  Remove reported members and export keywords from the source files
   --no-anonymous         Hide findings on unnamed inline types and anonymous functions
   -h, --help             Show this help message
 `;
@@ -30,6 +34,7 @@ function main(): void {
     options: {
       project: { type: 'string', short: 'p', default: 'tsconfig.json' },
       scope: { type: 'string' },
+      entry: { type: 'string', multiple: true },
       json: { type: 'boolean', default: false },
       export: { type: 'string' },
       fix: { type: 'boolean', default: false },
@@ -66,15 +71,18 @@ function main(): void {
   }
 
   const scopeDir = values.scope ? path.resolve(cwd, values.scope) : undefined;
-  const findings = applyFilters(analyze(project, { scopeDir }), { anonymous: values.anonymous });
+  const entries = (values.entry ?? []).map(entry => path.resolve(cwd, entry));
+  const rootDir = path.dirname(tsConfigFilePath);
+  const findings = applyFilters(analyze(project, { scopeDir, entries, rootDir }), {
+    anonymous: values.anonymous,
+  });
 
   process.stdout.write(values.json ? formatJson(findings, cwd) : formatText(findings, cwd));
   process.stdout.write('\n');
 
   if (values.export) {
     const fileName = values.export === 'md' ? 'noref-findings.md' : 'noref-findings.json';
-    const content =
-      values.export === 'md' ? formatMarkdown(findings, cwd) : formatJson(findings, cwd);
+    const content = values.export === 'md' ? formatMarkdown(findings, cwd) : formatJson(findings, cwd);
     fs.writeFileSync(path.join(cwd, fileName), `${content}\n`);
     process.stderr.write(`Wrote ${fileName}\n`);
   }
@@ -82,8 +90,13 @@ function main(): void {
   if (findings.length === 0) return;
 
   if (values.fix) {
-    const files = applyFixes(findings);
-    process.stderr.write(`Fixed ${findings.length} member(s) in ${files.length} file(s)\n`);
+    const result = applyFixes(findings);
+    process.stderr.write(`Fixed ${result.fixed} finding(s) in ${result.filePaths.length} file(s)\n`);
+    if (result.skipped > 0) {
+      process.stderr.write(
+        `Skipped ${result.skipped} finding(s) --fix does not touch (unused files and namespace findings)\n`
+      );
+    }
     return;
   }
 
