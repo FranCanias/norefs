@@ -90,8 +90,22 @@ function main(): void {
   if (findings.length === 0) return;
 
   if (values.fix) {
-    const result = applyFixes(findings);
-    process.stderr.write(`Fixed ${result.fixed} finding(s) in ${result.filePaths.length} file(s)\n`);
+    // Removing code can orphan other exports, so re-analyze and fix again
+    // until nothing fixable is left.
+    let result = applyFixes(findings);
+    let totalFixed = result.fixed;
+    const touched = new Set(result.filePaths);
+    for (let pass = 2; result.fixed > 0 && pass <= 5; pass++) {
+      const remaining = applyFilters(analyze(project, { scopeDir, entries, rootDir }), {
+        anonymous: values.anonymous,
+      });
+      result = applyFixes(remaining);
+      if (result.fixed === 0) break;
+      totalFixed += result.fixed;
+      for (const filePath of result.filePaths) touched.add(filePath);
+      process.stderr.write(`Pass ${pass}: fixed ${result.fixed} more finding(s)\n`);
+    }
+    process.stderr.write(`Fixed ${totalFixed} finding(s) in ${touched.size} file(s)\n`);
     if (result.skipped > 0) {
       process.stderr.write(
         `Skipped ${result.skipped} finding(s) --fix does not touch (unused files and namespace findings)\n`

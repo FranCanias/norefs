@@ -99,20 +99,28 @@ describe('applyFixes', () => {
     expect(project.getFileSystem().readFileSync('/main.ts')).not.toContain('dead');
   });
 
-  it('removes the export keyword from an unused export', () => {
+  it('removes only the export keyword when the declaration is still used in its file', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile('/main.ts', "import { used } from './lib';\nused();\n");
     const lib = project.createSourceFile(
       '/lib.ts',
-      ['export function used(): void {}', 'export function dead(): void {}', ''].join('\n')
+      [
+        'export function used(): number {',
+        '  return local();',
+        '}',
+        'export function local(): number {',
+        '  return 1;',
+        '}',
+        '',
+      ].join('\n')
     );
     applyFixes(analyze(project));
-    expect(lib.getFullText()).toContain('function dead');
-    expect(lib.getFullText()).not.toContain('export function dead');
+    expect(lib.getFullText()).toContain('function local');
+    expect(lib.getFullText()).not.toContain('export function local');
     expect(lib.getFullText()).toContain('export function used');
   });
 
-  it('removes the export specifier of an unused export', () => {
+  it('removes a declaration with zero references whole, including its export specifier', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile('/main.ts', "import { used } from './lib';\nused();\n");
     const lib = project.createSourceFile(
@@ -120,8 +128,59 @@ describe('applyFixes', () => {
       ['export function used(): void {}', 'function dead(): void {}', 'export { dead };', ''].join('\n')
     );
     applyFixes(analyze(project));
-    expect(lib.getFullText()).toContain('function dead');
-    expect(lib.getFullText()).not.toContain('export { dead }');
+    expect(lib.getFullText()).not.toContain('dead');
+    expect(lib.getFullText()).toContain('export function used');
+  });
+
+  it('removes barrel re-exports and unused imports of a removed export', () => {
+    const project = new Project({ useInMemoryFileSystem: true, compilerOptions: { noUnusedLocals: true } });
+    project.createSourceFile('/main.ts', "import { used } from './barrel';\nused();\n");
+    const barrel = project.createSourceFile('/barrel.ts', "export { used, dead } from './lib';\n");
+    const lib = project.createSourceFile(
+      '/lib.ts',
+      [
+        "import { helper } from './helper';",
+        'export function used(): number {',
+        '  return 1;',
+        '}',
+        'export function dead(): number {',
+        '  return helper();',
+        '}',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile('/helper.ts', 'export function helper(): number {\n  return 2;\n}\n');
+    applyFixes(analyze(project));
+    expect(lib.getFullText()).not.toContain('dead');
+    expect(barrel.getFullText()).toBe("export { used } from './lib';\n");
+    // The import only the removed function used is cleaned up too.
+    expect(lib.getFullText()).not.toContain('helper');
+  });
+
+  it('removes local declarations orphaned by a removed export', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile('/main.ts', "import { used } from './lib';\nused();\n");
+    const lib = project.createSourceFile(
+      '/lib.ts',
+      [
+        'const SPACING = 8;',
+        'function layout(): number {',
+        '  return SPACING;',
+        '}',
+        'export function dead(): number {',
+        '  return layout();',
+        '}',
+        'export function used(): number {',
+        '  return 1;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    applyFixes(analyze(project));
+    expect(lib.getFullText()).not.toContain('dead');
+    expect(lib.getFullText()).not.toContain('layout');
+    expect(lib.getFullText()).not.toContain('SPACING');
+    expect(lib.getFullText()).toContain('export function used');
   });
 
   it('reports unused files as skipped instead of deleting them', () => {

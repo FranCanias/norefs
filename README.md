@@ -66,10 +66,11 @@ noref [options]
 `noref --fix` prints the findings, then fixes what it safely can and saves the files:
 
 - An unused member is deleted. One case is special: an unused parameter property (`constructor(private readonly dead: number)`) only loses its modifiers and stays a plain parameter, so the constructor signature and every `new` call site keep working.
-- An unused export loses its `export` keyword (or its `export { … }` specifier); the declaration stays, because it may still be used inside the file.
+- An unused export with references inside its own file loses only the `export` keyword. One with no references at all is removed whole, together with every import and re-export specifier that forwarded it — nothing dangles in a barrel.
+- After the removals, noref cleans each touched file: imports and unexported top-level declarations that only the removed code used are removed too. Then it re-analyzes and fixes again until nothing fixable is left, so cascades converge in one command.
 - Unused files and namespace findings are never touched. Deleting a file is your call, and a namespace finding is a lower-confidence guess.
 
-Review the diff before you commit — removed code can leave behind code that only it used, so a second run may find more.
+Review the diff before you commit. Some leftovers need human judgment — removing every member of an interface that is still referenced leaves an empty `interface X {}`, and only you know whether its consumers should go too.
 
 ### Example
 

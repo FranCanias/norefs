@@ -24,6 +24,8 @@ export interface Finding {
   /** The owner description for members; the namespace name for ns findings. */
   context: string;
   anonymous: boolean;
+  /** True when the declaration has zero references anywhere, so --fix can remove it whole. */
+  dead?: boolean;
   /** The declaration behind the finding, kept so --fix can act on it. Unset for file findings. */
   node?: Node;
 }

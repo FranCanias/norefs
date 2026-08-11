@@ -107,7 +107,7 @@ function collectExportFindings(
 
       const typeOnly = isTypeDeclaration(decl);
       const kind: FindingKind = namespaceAlias ? (typeOnly ? 'ns-type' : 'ns-export') : typeOnly ? 'type' : 'export';
-      findings.push(makeFinding(kind, nameNode, namespaceAlias ?? ''));
+      findings.push(makeFinding(kind, nameNode, namespaceAlias ?? '', !locallyUsed));
     }
   }
 }
@@ -144,12 +144,12 @@ function collectNamespaceFindings(ns: ModuleDeclaration, findings: Finding[], de
       }
       if (refs.length === 0) deadDecls.add(decl);
       const kind: FindingKind = isTypeDeclaration(decl) ? 'ns-type' : 'ns-export';
-      findings.push(makeFinding(kind, declName, ns.getName()));
+      findings.push(makeFinding(kind, declName, ns.getName(), refs.length === 0));
     }
   }
 }
 
-function makeFinding(kind: FindingKind, nameNode: Node, context: string): Finding {
+function makeFinding(kind: FindingKind, nameNode: Node, context: string, dead: boolean): Finding {
   const sourceFile = nameNode.getSourceFile();
   const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
   return {
@@ -160,6 +160,7 @@ function makeFinding(kind: FindingKind, nameNode: Node, context: string): Findin
     name: nameNode.getText(),
     context,
     anonymous: false,
+    dead,
     node: nameNode.getParent() ?? nameNode,
   };
 }
@@ -226,7 +227,7 @@ function findNamespaceConsumers(project: Project): Map<SourceFile, string> {
   return consumers;
 }
 
-function declarationNameNode(decl: Node): Identifier | undefined {
+export function declarationNameNode(decl: Node): Identifier | undefined {
   if (
     decl.isKind(SyntaxKind.FunctionDeclaration) ||
     decl.isKind(SyntaxKind.ClassDeclaration) ||
