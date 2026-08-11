@@ -40,7 +40,8 @@ export function formatMarkdown(findings: Finding[], cwd: string): string {
 
   lines.push(`Unused properties: ${findings.length}`, '');
   for (const [filePath, fileFindings] of byFile) {
-    lines.push(`## ${path.relative(cwd, filePath)}`, '');
+    const relativePath = path.relative(cwd, filePath);
+    lines.push(`[${path.basename(relativePath)}](${relativePath})`, '');
     for (const finding of fileFindings) {
       lines.push(
         `- \`${finding.propertyName}\` in ${finding.context} (line ${finding.line}, column ${finding.column})`
