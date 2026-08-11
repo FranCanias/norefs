@@ -1,16 +1,18 @@
 # noref
 
-Find unused properties on TypeScript interfaces, type aliases, and object literals.
+Find unused members of TypeScript interfaces, type aliases, object literals, enums, and classes.
 
-Most dead-code tools find unused files, exports, and dependencies. Some also find unused members of enums and classes. None yet find unused members of **types, interfaces, and object literals** — including objects returned from exported functions and objects used as React component props. `noref` fills that one gap.
+Most dead-code tools find unused files, exports, and dependencies. They stop at the declaration boundary: an interface counts as "used" even when half its members are dead. `noref` looks inside — including objects returned from exported functions and objects used as React component props.
 
 ## How it works
 
-`noref` loads your project with [ts-morph](https://ts-morph.com) and looks for three kinds of property owners:
+`noref` loads your project with [ts-morph](https://ts-morph.com) and looks for five kinds of member owners:
 
 - `interface` declarations
 - `type` aliases, and any inline object type (parameter types, return types, variable annotations — this covers React props like `function Foo({a}: {a: string})`)
 - object literals returned from exported functions whose return type is inferred (not explicitly annotated)
+- `enum` declarations
+- `class` declarations (properties, methods, accessors, static members, and constructor parameter properties)
 
 For each property it finds, it asks TypeScript's own "find all references" (via `findReferencesAsNodes`) whether anything reads it. No references beyond the declaration itself means the property is unused.
 
@@ -85,6 +87,8 @@ The test suite verifies that the reference check resolves all of these — none 
 - usage from other files, quoted property names, implementing class members
 - property writes (a write-only property counts as used)
 - a literal probe like `'name' in v` counts as usage of exactly that property
+- class members reached through a declared `implements` or `extends` — TypeScript merges those reference groups
+- reads through a spread copy of a class instance resolve back to the class members
 
 ## When noref stays silent
 
@@ -94,12 +98,15 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - **Key-enumerating and serializing sinks**: a value passed to `Object.keys`/`values`/`entries`/`assign`, `JSON.stringify`, `structuredClone`, or `Reflect.ownKeys`, iterated with `for...in`, or probed with a dynamic `key in v` marks its whole type as dynamically consumed.
 - **Escaping values**: when an object leaves local view as a whole — a returned literal passed on as a bare argument, a whole-binding parameter or variable forwarded via shorthand into a differently-declared type, a property whose value flows onward wholesale — its properties may be consumed without any per-property reference. The affected type literal is skipped.
 - **Parameters of function types**: callback signatures declare parameter types, but implementations bind their own parameters; when callbacks are invoked with variables rather than literals, the signature's members can't be tracked.
+- **Structural class implementations**: when an instance escapes into a type that is not the class or its declared heritage — `return new DeviceImpl()` from a function typed as interface `Device`, with no `implements` clause — every call goes through the interface and the class members collect zero references while being used at runtime. The whole class is skipped, along with its base classes and any class whose instances only leave through methods of such a class. Declaring `implements` restores tracking.
+- **Decorated classes**: a decorator hands the class to a framework that reads members through reflection or metadata. The whole class is skipped.
+- **Dynamically consumed enums**: `keyof typeof E`, `Object.values(E)`, `for...in`, and reverse mapping or computed lookup (`E[x]`) all reach members without per-member references. The whole enum is skipped.
 
 ## Remaining blind spots
 
-- Reflection-based access (decorators, `class-transformer`) is invisible; it can only touch class members at runtime, so interface and type-alias findings are unaffected.
 - Dynamic access laundered through a generic helper (`function dump<T>(o: T) { return Object.keys(o) }`) hides the concrete type from the sink detection.
 - An exported function with several `return` statements returning different object literals is skipped entirely, rather than guessed at.
+- Anonymous default-export classes (`export default class { … }`) are skipped: without a name there are no class references to run the escape checks on.
 - Declaration files (`.d.ts`) are not scanned.
 
 ## Project layout
@@ -108,12 +115,12 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 src/
   index.ts      CLI entry point
   engine/       project loading, the unused-reference check, human-readable labels, orchestration, output formatting
-  collectors/   one file per source of candidate properties (interfaces, type literals, returned objects)
+  collectors/   one file per source of candidate members (interfaces, type literals, returned objects, enums, classes)
   filters/      post-collection filters (e.g. --no-anonymous)
   types/        shared types
 ```
 
-Adding a new source of candidates (classes, enums, JSX-spread props, …) means adding one file to `src/collectors/` and registering it in `src/collectors/index.ts`. Adding a new filter means extending `src/filters/index.ts`.
+Adding a new source of candidates (JSX-spread props, …) means adding one file to `src/collectors/` and registering it in `src/collectors/index.ts`. Adding a new filter means extending `src/filters/index.ts`.
 
 ## Development
 

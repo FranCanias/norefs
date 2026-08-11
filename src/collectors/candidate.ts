@@ -18,7 +18,9 @@ export function toCandidate(
       !member.isKind(SyntaxKind.PropertyAssignment) &&
       !member.isKind(SyntaxKind.MethodDeclaration) &&
       !member.isKind(SyntaxKind.GetAccessor) &&
-      !member.isKind(SyntaxKind.SetAccessor)
+      !member.isKind(SyntaxKind.SetAccessor) &&
+      !member.isKind(SyntaxKind.PropertyDeclaration) &&
+      !member.isKind(SyntaxKind.EnumMember)
     ) {
       return undefined;
     }

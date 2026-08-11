@@ -93,6 +93,10 @@ function addTypeDeclarations(type: Type, out: Set<Node>, depth = 0): void {
           addTypeDeclarations(base.getType(), out, depth + 1);
         }
       }
+      if (decl.isKind(SyntaxKind.ClassDeclaration)) {
+        const base = decl.getBaseClass();
+        if (base) addTypeDeclarations(base.getType(), out, depth + 1);
+      }
     }
   }
 }
