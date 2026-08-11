@@ -2,18 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export interface Config {
-  project?: string;
+  /** tsconfig paths; a monorepo lists one per package. */
+  project: string[];
   entry: string[];
   ignore: string[];
   only?: string[];
+  ignoreDependencies: string[];
 }
 
-const KNOWN_KEYS = ['project', 'entry', 'ignore', 'only'];
+const KNOWN_KEYS = ['project', 'entry', 'ignore', 'only', 'ignoreDependencies'];
 
 /** Read noref.json from the directory, if present. Throws when the file is invalid. */
 export function loadConfig(dir: string): Config {
   const filePath = path.join(dir, 'noref.json');
-  if (!fs.existsSync(filePath)) return { entry: [], ignore: [] };
+  if (!fs.existsSync(filePath)) return { project: [], entry: [], ignore: [], ignoreDependencies: [] };
 
   let raw: unknown;
   try {
@@ -31,18 +33,23 @@ export function loadConfig(dir: string): Config {
     }
   }
   return {
-    project: readString(data, 'project'),
+    project: readStringOrStrings(data, 'project'),
     entry: readStrings(data, 'entry'),
     ignore: readStrings(data, 'ignore'),
     only: data.only === undefined ? undefined : readStrings(data, 'only'),
+    ignoreDependencies: readStrings(data, 'ignoreDependencies'),
   };
 }
 
-function readString(data: Record<string, unknown>, key: string): string | undefined {
+/** Accepts a single string or an array of strings; normalizes to an array. */
+function readStringOrStrings(data: Record<string, unknown>, key: string): string[] {
   const value = data[key];
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string') throw new Error(`noref.json "${key}" must be a string`);
-  return value;
+  if (value === undefined) return [];
+  if (typeof value === 'string') return [value];
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
+    throw new Error(`noref.json "${key}" must be a string or an array of strings`);
+  }
+  return value as string[];
 }
 
 function readStrings(data: Record<string, unknown>, key: string): string[] {

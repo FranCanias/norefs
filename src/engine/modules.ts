@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { Identifier, ModuleDeclaration, Node, Project, SourceFile } from 'ts-morph';
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
 import type { Finding, FindingKind } from '../types';
+import { analyzeDependencies } from './dependencies';
 import { packageEntries } from './package-entries';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 
@@ -18,8 +19,10 @@ export interface ModuleOptions {
   scopeDir?: string;
   /** Absolute paths (files or directories) treated as entry points. */
   entries?: string[];
-  /** Directory that anchors the default entry-file and harness-file patterns. */
-  rootDir?: string;
+  /** Directories that anchor the entry-file and harness-file patterns — one per tsconfig. */
+  rootDirs?: string[];
+  /** Dependency names or globs the dependency checks never report. */
+  ignoreDependencies?: string[];
 }
 
 /** Default entry files, following the convention knip uses: index/main/cli in the root or src/. */
@@ -30,9 +33,13 @@ const HARNESS_DIRS = new Set(['test', 'tests', '__tests__', '__mocks__']);
 
 export function analyzeModules(project: Project, options: ModuleOptions = {}): ModuleAnalysis {
   const sourceFiles = project.getSourceFiles().filter(sf => !sf.isDeclarationFile());
-  const rootDir = options.rootDir ?? commonDirectory(sourceFiles);
-  const entries = [...(options.entries ?? []), ...packageEntries(project, rootDir, commonDirectory(sourceFiles))];
-  const reachable = reachableFiles(sourceFiles, rootDir, entries);
+  const fallbackRoot = commonDirectory(sourceFiles);
+  const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
+  const entries = [
+    ...(options.entries ?? []),
+    ...rootDirs.flatMap(dir => packageEntries(project, dir, fallbackRoot)),
+  ];
+  const reachable = reachableFiles(sourceFiles, rootDirs, entries);
   const namespaceConsumers = findNamespaceConsumers(project);
 
   const findings: Finding[] = [];
@@ -42,7 +49,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   for (const sourceFile of sourceFiles) {
     const filePath = sourceFile.getFilePath();
     if (options.scopeDir && !filePath.startsWith(options.scopeDir)) continue;
-    if (isEntryFile(filePath, rootDir, entries)) continue;
+    if (isEntryFile(filePath, rootDirs, entries)) continue;
     if (isFileSuppressed(sourceFile)) continue;
 
     if (!reachable.has(sourceFile)) {
@@ -65,6 +72,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
     }
   }
 
+  findings.push(...analyzeDependencies(project, rootDirs, options.scopeDir, options.ignoreDependencies ?? []));
   return { findings, deadFiles, deadDecls };
 }
 
@@ -74,10 +82,10 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
  * what it imports). Counting reachability instead of direct importers catches
  * dead clusters, like two unused files that import each other.
  */
-function reachableFiles(sourceFiles: SourceFile[], rootDir: string, entries: string[]): Set<SourceFile> {
+function reachableFiles(sourceFiles: SourceFile[], rootDirs: string[], entries: string[]): Set<SourceFile> {
   const roots = sourceFiles.filter(sf => {
     const filePath = sf.getFilePath();
-    return isEntryFile(filePath, rootDir, entries) || isHarnessFile(filePath, rootDir) || isFileSuppressed(sf);
+    return isEntryFile(filePath, rootDirs, entries) || isHarnessFile(filePath, rootDirs) || isFileSuppressed(sf);
   });
   const reachable = new Set<SourceFile>(roots);
   const queue = [...roots];
@@ -91,17 +99,21 @@ function reachableFiles(sourceFiles: SourceFile[], rootDir: string, entries: str
   return reachable;
 }
 
-function isEntryFile(filePath: string, rootDir: string, entries: string[]): boolean {
+function isEntryFile(filePath: string, rootDirs: string[], entries: string[]): boolean {
   if (entries.some(entry => filePath === entry || filePath.startsWith(`${entry}/`))) return true;
   if (!ENTRY_NAME.test(path.basename(filePath))) return false;
   const dir = path.dirname(filePath);
-  return dir === rootDir || dir === path.join(rootDir, 'src');
+  return rootDirs.some(root => dir === root || dir === path.join(root, 'src'));
 }
 
-function isHarnessFile(filePath: string, rootDir: string): boolean {
+function isHarnessFile(filePath: string, rootDirs: string[]): boolean {
   if (HARNESS_NAME.test(path.basename(filePath))) return true;
-  const relative = path.relative(rootDir, path.dirname(filePath));
-  return relative.split(path.sep).some(segment => HARNESS_DIRS.has(segment));
+  return rootDirs.some(root =>
+    path
+      .relative(root, path.dirname(filePath))
+      .split(path.sep)
+      .some(segment => HARNESS_DIRS.has(segment))
+  );
 }
 
 /**

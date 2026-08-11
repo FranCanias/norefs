@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { structuredPatch } from 'diff';
 import type { Finding } from '../types';
 
 function describeFinding(finding: Finding): string {
@@ -17,6 +18,10 @@ function describeFinding(finding: Finding): string {
       return `unused property \`${finding.name}\` in ${finding.context}`;
     case 'empty-type':
       return `${finding.context} \`${finding.name}\` becomes empty: every member is unused`;
+    case 'dependency':
+      return `unused dependency \`${finding.name}\``;
+    case 'unlisted':
+      return `dependency \`${finding.name}\` is not listed in package.json`;
   }
 }
 
@@ -28,6 +33,8 @@ function summarize(findings: Finding[]): string {
     [of('type', 'ns-type'), 'exported type', 'exported types'],
     [of('member'), 'property', 'properties'],
     [of('empty-type'), 'emptied type', 'emptied types'],
+    [of('dependency'), 'unused dependency', 'unused dependencies'],
+    [of('unlisted'), 'unlisted dependency', 'unlisted dependencies'],
   ];
   const parts = groups.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
   return `Unused code (${findings.length}): ${parts.join(', ')}`;
@@ -80,6 +87,17 @@ export function formatMarkdown(findings: Finding[], cwd: string): string {
       );
     }
     lines.push('');
+  }
+  return lines.join('\n');
+}
+
+/** A unified diff of one file, for --fix --dry-run. */
+export function formatPatch(relativePath: string, before: string, after: string): string {
+  const patch = structuredPatch(relativePath, relativePath, before, after);
+  const lines = [`--- ${relativePath}`, `+++ ${relativePath}`];
+  for (const hunk of patch.hunks) {
+    lines.push(`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`);
+    lines.push(...hunk.lines);
   }
   return lines.join('\n');
 }

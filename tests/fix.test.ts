@@ -183,6 +183,16 @@ describe('applyFixes', () => {
     expect(lib.getFullText()).toContain('export function used');
   });
 
+  it('mutates only the in-memory project when save is false', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    const file = project.createSourceFile('/main.ts', 'export interface A { dead: number }\n');
+    file.saveSync();
+    const result = applyFixes(analyze(project), { save: false });
+    expect(result.fixed).toBe(1);
+    expect(file.getFullText()).not.toContain('dead');
+    expect(project.getFileSystem().readFileSync('/main.ts')).toContain('dead');
+  });
+
   it('reports unused files as skipped instead of deleting them', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile('/main.ts', 'export const keep = 1;\n');

@@ -12,24 +12,37 @@ function dirWith(content?: string): string {
 
 describe('loadConfig', () => {
   it('returns empty defaults when noref.json is missing', () => {
-    expect(loadConfig(dirWith())).toEqual({ entry: [], ignore: [], project: undefined, only: undefined });
+    expect(loadConfig(dirWith())).toEqual({
+      project: [],
+      entry: [],
+      ignore: [],
+      only: undefined,
+      ignoreDependencies: [],
+    });
   });
 
-  it('parses a full config', () => {
+  it('parses a full config and normalizes a single project string to an array', () => {
     const dir = dirWith(
       JSON.stringify({
         project: 'tsconfig.app.json',
         entry: ['src/worker.ts'],
         ignore: ['src/generated/**'],
         only: ['files', 'exports'],
+        ignoreDependencies: ['legacy-*'],
       })
     );
     expect(loadConfig(dir)).toEqual({
-      project: 'tsconfig.app.json',
+      project: ['tsconfig.app.json'],
       entry: ['src/worker.ts'],
       ignore: ['src/generated/**'],
       only: ['files', 'exports'],
+      ignoreDependencies: ['legacy-*'],
     });
+  });
+
+  it('accepts an array of projects', () => {
+    const dir = dirWith(JSON.stringify({ project: ['packages/a/tsconfig.json', 'packages/b/tsconfig.json'] }));
+    expect(loadConfig(dir).project).toEqual(['packages/a/tsconfig.json', 'packages/b/tsconfig.json']);
   });
 
   it('throws on invalid JSON', () => {

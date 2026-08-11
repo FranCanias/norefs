@@ -5,8 +5,8 @@ import { loadProject } from '../src/engine/project';
 import type { Finding } from '../src/types';
 
 const rootDir = path.resolve('tests/module-fixtures');
-const project = loadProject(path.join(rootDir, 'tsconfig.json'));
-const findings = analyze(project, { rootDir });
+const project = loadProject([path.join(rootDir, 'tsconfig.json')]);
+const findings = analyze(project, { rootDirs: [rootDir] });
 
 function reportedIn(fixture: string): Array<[Finding['kind'], string]> {
   return findings

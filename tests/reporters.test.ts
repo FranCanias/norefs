@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatGitHub, formatSarif } from '../src/engine/report';
+import { formatGitHub, formatPatch, formatSarif } from '../src/engine/report';
 import type { Finding, FindingKind } from '../src/types';
 
 function make(kind: FindingKind, name: string, context = ''): Finding {
@@ -21,6 +21,17 @@ describe('formatGitHub', () => {
 
   it('reports a clean project as plain text', () => {
     expect(formatGitHub([], '/proj')).toBe('No unused code found.');
+  });
+});
+
+describe('formatPatch', () => {
+  it('formats a unified diff with hunk headers', () => {
+    const patch = formatPatch('src/a.ts', 'a\nb\nc\n', 'a\nc\n');
+    const lines = patch.split('\n');
+    expect(lines[0]).toBe('--- src/a.ts');
+    expect(lines[1]).toBe('+++ src/a.ts');
+    expect(lines[2]).toMatch(/^@@ -1,3 \+1,2 @@$/);
+    expect(lines).toContain('-b');
   });
 });
 

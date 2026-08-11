@@ -7,7 +7,7 @@ function findingsOf(manifest: object, files: Record<string, string>, compilerOpt
   const project = new Project({ useInMemoryFileSystem: true, compilerOptions });
   project.getFileSystem().writeFileSync('/package.json', JSON.stringify(manifest));
   for (const [filePath, text] of Object.entries(files)) project.createSourceFile(filePath, text);
-  return analyze(project, { rootDir: '/' });
+  return analyze(project, { rootDirs: ['/'] });
 }
 
 describe('package.json-aware entries', () => {

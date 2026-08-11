@@ -4,11 +4,11 @@ import { analyze } from '../src/engine/analyze';
 import { loadProject } from '../src/engine/project';
 
 const fixturesDir = path.resolve('tests/fixtures');
-const project = loadProject(path.resolve('tests/fixtures/tsconfig.json'));
+const project = loadProject([path.resolve('tests/fixtures/tsconfig.json')]);
 // The fixtures are entry points: nothing imports them, and their exports are
 // consumed in-file. Without this, the module-level checks would swallow the
 // member findings these tests assert on.
-const findings = analyze(project, { rootDir: fixturesDir, entries: [fixturesDir] });
+const findings = analyze(project, { rootDirs: [fixturesDir], entries: [fixturesDir] });
 
 function reportedIn(fixture: string): string[] {
   return findings

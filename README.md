@@ -13,6 +13,7 @@ Most dead-code tools stop at the declaration boundary: an interface counts as "u
 - **Unused files** — no chain of imports from any entry point reaches the file. Because the check is reachability, not a count of direct importers, a whole dead cluster gets reported — including two unused files that only import each other. Entry points are: paths given with `--entry`, `index`/`main`/`cli` files in the project root or `src/`, and the files `package.json` names in `main`, `bin`, and `exports` (paths into the compiled output are mapped back to source through the tsconfig `outDir` and `rootDir`). Test, spec, stories, bench, and config files (and anything under a `test`, `tests`, `__tests__`, or `__mocks__` directory) are their own entry points, so they are never reported either.
 - **Unused exports** and **unused exported types** — an exported declaration that nothing outside its file uses. Interfaces, type aliases, and enums count as types; functions, classes, variables, and namespaces count as exports. References resolve through re-export chains, so a barrel between the declaration and its consumers does not hide usage. A declaration that is used inside its own file but never imported still gets reported: the `export` keyword is dead even though the code is not. Exports of entry files are the public API and are never reported.
 - **Exports in used namespace** and **exported types in used namespace** — the same check, at lower confidence, for two namespace shapes. When a module is consumed through a used `import * as ns` binding, its zero-reference exports are reported this way, because the namespace object may be consumed dynamically. And when a TS `namespace N { … }` is used, its exported members whose references never leave the namespace body are reported this way too.
+- **Unused dependencies** and **unlisted dependencies** — entries of `dependencies` in `package.json` that no source file imports, and imported packages that no scanned `package.json` lists. `devDependencies` are consumed by tooling the import graph cannot see, so they count as listed but are never reported unused; the same goes for peer and optional dependencies. `@types/*` packages are consumed by the compiler and pair with their base package. Path aliases, node builtins, and relative imports never count as packages. Use the `ignoreDependencies` config key for runtime-only dependencies noref cannot see, like a CLI invoked from npm scripts.
 
 A finding at a higher level swallows the findings inside it: an unused file hides its exports and members, and an unused export with zero references anywhere hides its members. One line per problem, not fifty.
 
@@ -52,14 +53,15 @@ noref [options]
 
 | Option | Description |
 | --- | --- |
-| `-p, --project <path>` | Path to `tsconfig.json` (default: `./tsconfig.json`) |
+| `-p, --project <path>` | Path to `tsconfig.json` (default: `./tsconfig.json`); repeatable for a monorepo |
 | `--scope <path>` | Only report findings declared under this path; the whole project still resolves usages |
 | `--entry <path>` | Treat this file or directory as an entry point: never reported unused, exports never reported (repeatable) |
-| `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members`, `empty-types` |
+| `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members`, `empty-types`, `dependencies`, `unlisted` |
 | `--reporter <name>` | Output format: `text` (default), `json`, `github`, `sarif` |
 | `--baseline` | Write the findings to `noref-baseline.json` and exit; later runs fail on new findings only |
 | `--export <md\|json>` | Also write findings to `noref-findings.md` or `noref-findings.json` in the current directory |
 | `--fix` | Remove reported members and dead `export` keywords from the source files |
+| `--dry-run` | With `--fix`: print the would-be changes as a unified diff without writing any file |
 | `--no-anonymous` | Hide findings on unnamed inline types and anonymous functions |
 | `-h, --help` | Show the help message |
 
@@ -74,11 +76,12 @@ Put a `noref.json` next to where you run `noref`, and CI and teammates run the s
   "project": "tsconfig.app.json",
   "entry": ["src/worker.ts"],
   "ignore": ["src/generated/**"],
-  "only": ["files", "exports", "types", "members"]
+  "only": ["files", "exports", "types", "members"],
+  "ignoreDependencies": ["ts-node", "@internal/*"]
 }
 ```
 
-All keys are optional. `entry` merges with `--entry`; for the other keys the command-line flag wins. `ignore` takes globs, matched against paths relative to the current directory (and absolute paths). Ignored files produce no findings, but their contents still count as usage of other code.
+All keys are optional. `project` also accepts an array of tsconfig paths for a monorepo. `entry` merges with `--entry`; for the other keys the command-line flag wins. `ignore` takes globs, matched against paths relative to the current directory (and absolute paths). Ignored files produce no findings, but their contents still count as usage of other code. `ignoreDependencies` takes package names or globs the dependency checks never report.
 
 ### Suppressing findings
 
@@ -125,6 +128,8 @@ Two reporters are made for CI:
 
 Review the diff before you commit. The emptied-type findings point at the leftovers that need human judgment.
 
+To see the diff without touching anything, run `noref --fix --dry-run`. It applies the full fix — cascades included — to the in-memory project only and prints one unified diff per file. The exit code stays `1`, so it also works as a strict CI check.
+
 ### Example
 
 ```
@@ -149,9 +154,17 @@ Some findings point at inline types with no name to anchor them — a `{x, y}` p
 noref --no-anonymous
 ```
 
-### Cross-project scans
+### Monorepos and cross-project scans
 
-To find unused properties in a library whose only consumer lives in another repo, give noref one tsconfig that sees both sides:
+Pass `-p` once per package and noref loads them all into one scan, so cross-package usage counts:
+
+```sh
+noref -p packages/app/tsconfig.json -p packages/lib/tsconfig.json
+```
+
+The first tsconfig provides the compiler options — including `paths` aliases — and the rest contribute their source files. Entry-file conventions and `package.json` entries apply per package. When the packages import each other through aliases or package names, put those mappings in the first tsconfig's `paths` (or write a small umbrella tsconfig and pass it first).
+
+To find unused properties in a library whose only consumer lives in another repo, the umbrella approach still applies:
 
 1. Write an umbrella `tsconfig.json` whose `include` covers both projects' source files.
 2. Reproduce **every** path alias from both repos in its `paths` — including the library's internal aliases — and map the package specifier (`"my-lib"`) to the library's `src` entry point, not its built `.d.ts`.
@@ -195,6 +208,7 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - Anonymous default exports (`export default { … }`) have no name to search references for, so the export check skips them.
 - A file consumed only through a bare `import './x'` for its side effects counts as used when its importer is reachable, even if nothing else touches it. That is the safe reading.
 - An entry point neither the naming conventions nor `package.json` names (a script run directly with `node path/to/script.ts`) is a false positive until you pass it with `--entry`.
+- A dependency consumed without an import — a CLI run from npm scripts, a plugin loaded by name from a config file — shows up as an unused dependency until you add it to `ignoreDependencies`.
 
 ## Project layout
 
@@ -202,8 +216,9 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 src/
   index.ts      CLI entry point
   config.ts     noref.json loading
-  engine/       project loading, the module-level checks (files, exports, namespaces), the unused-reference check,
-                suppression comments, human-readable labels, orchestration, output formatting
+  engine/       project loading, the module-level checks (files, exports, namespaces, dependencies),
+                the unused-reference check, suppression comments, human-readable labels, orchestration,
+                output formatting
   collectors/   one file per source of candidate members (interfaces, type literals, returned objects, enums, classes)
   filters/      post-collection filters (e.g. --no-anonymous)
   types/        shared types

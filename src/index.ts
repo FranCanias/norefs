@@ -8,7 +8,7 @@ import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { applyFixes } from './engine/fix';
 import { loadProject } from './engine/project';
-import { formatGitHub, formatJson, formatMarkdown, formatSarif, formatText } from './engine/report';
+import { formatGitHub, formatJson, formatMarkdown, formatPatch, formatSarif, formatText } from './engine/report';
 import type { FilterOptions } from './filters';
 import { applyFilters, parseKinds } from './filters';
 
@@ -17,7 +17,9 @@ const HELP = `noref - find unused files, exports, and properties in a TypeScript
 Usage: noref [options]
 
 Options:
-  -p, --project <path>  Path to tsconfig.json (default: ./tsconfig.json)
+  -p, --project <path>  Path to tsconfig.json (default: ./tsconfig.json).
+                         Repeatable for a monorepo: the first tsconfig provides
+                         the compiler options, the rest add their source files
   --scope <path>         Only report findings declared under this path
                          (still uses the whole project to resolve usages —
                          handy when a tsconfig spans an SDK and its consumer)
@@ -25,8 +27,9 @@ Options:
                          never reported unused and its exports are the public
                          API (repeatable; index/main/cli files in the project
                          root or src/ are entry points by default)
-  --only <kinds>         Report only these finding kinds, comma-separated: files,
-                         exports, types, ns-exports, ns-types, members, empty-types
+  --only <kinds>         Report only these finding kinds, comma-separated:
+                         files, exports, types, ns-exports, ns-types, members,
+                         empty-types, dependencies, unlisted
   --reporter <name>      Output format: text (default), json, github (workflow
                          commands that annotate pull requests), sarif
   --baseline             Write the findings to noref-baseline.json and exit;
@@ -34,12 +37,15 @@ Options:
                          new findings only
   --export <md|json>     Also write findings to noref-findings.md or noref-findings.json
   --fix                  Remove reported members and export keywords from the source files
+  --dry-run              With --fix: print the would-be changes as a unified
+                         diff without writing any file
   --no-anonymous         Hide findings on unnamed inline types and anonymous functions
   -h, --help             Show this help message
 
 Configuration:
   noref reads noref.json from the current directory when it exists:
-    { "project": "...", "entry": [...], "ignore": ["globs"], "only": [...] }
+    { "project": "…"|[…], "entry": […], "ignore": ["globs"],
+      "only": […], "ignoreDependencies": ["names or globs"] }
   Command-line flags win over the config file; entries merge.
 
 Suppressing findings:
@@ -50,7 +56,7 @@ Suppressing findings:
 function main(): void {
   const { values } = parseArgs({
     options: {
-      project: { type: 'string', short: 'p' },
+      project: { type: 'string', short: 'p', multiple: true },
       scope: { type: 'string' },
       entry: { type: 'string', multiple: true },
       only: { type: 'string', multiple: true },
@@ -58,6 +64,7 @@ function main(): void {
       baseline: { type: 'boolean', default: false },
       export: { type: 'string' },
       fix: { type: 'boolean', default: false },
+      'dry-run': { type: 'boolean', default: false },
       anonymous: { type: 'boolean', default: true },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -71,6 +78,12 @@ function main(): void {
 
   if (values.export !== undefined && values.export !== 'md' && values.export !== 'json') {
     process.stderr.write(`error: --export must be "md" or "json", got "${values.export}"\n`);
+    process.exitCode = 2;
+    return;
+  }
+
+  if (values['dry-run'] && !values.fix) {
+    process.stderr.write('error: --dry-run requires --fix\n');
     process.exitCode = 2;
     return;
   }
@@ -101,8 +114,10 @@ function main(): void {
     return;
   }
 
-  const tsConfigFilePath = path.resolve(cwd, values.project ?? config.project ?? 'tsconfig.json');
-  const project = loadProject(tsConfigFilePath);
+  const cliProjects = values.project ?? [];
+  const tsConfigPaths = (cliProjects.length > 0 ? cliProjects : config.project).map(p => path.resolve(cwd, p));
+  if (tsConfigPaths.length === 0) tsConfigPaths.push(path.resolve(cwd, 'tsconfig.json'));
+  const project = loadProject(tsConfigPaths);
 
   const unresolved = findUnresolvedImports(project);
   if (unresolved.length > 0) {
@@ -117,8 +132,9 @@ function main(): void {
 
   const scopeDir = values.scope ? path.resolve(cwd, values.scope) : undefined;
   const entries = [...config.entry, ...(values.entry ?? [])].map(entry => path.resolve(cwd, entry));
-  const rootDir = path.dirname(tsConfigFilePath);
-  let findings = applyFilters(analyze(project, { scopeDir, entries, rootDir }), filterOptions);
+  const rootDirs = [...new Set(tsConfigPaths.map(p => path.dirname(p)))];
+  const analyzeOptions = { scopeDir, entries, rootDirs, ignoreDependencies: config.ignoreDependencies };
+  let findings = applyFilters(analyze(project, analyzeOptions), filterOptions);
 
   if (values.baseline) {
     const fileName = writeBaseline(findings, cwd);
@@ -159,23 +175,37 @@ function main(): void {
 
   if (values.fix) {
     // Removing code can orphan other exports, so re-analyze and fix again
-    // until nothing fixable is left.
-    let result = applyFixes(findings);
+    // until nothing fixable is left. A dry run applies the same fixes to the
+    // in-memory project only and prints the diff against the files on disk.
+    const save = !values['dry-run'];
+    let result = applyFixes(findings, { save });
     let totalFixed = result.fixed;
     const touched = new Set(result.filePaths);
     for (let pass = 2; result.fixed > 0 && pass <= 5; pass++) {
-      let remaining = applyFilters(analyze(project, { scopeDir, entries, rootDir }), filterOptions);
+      let remaining = applyFilters(analyze(project, analyzeOptions), filterOptions);
       if (baseline) remaining = applyBaseline(remaining, cwd)?.fresh ?? remaining;
-      result = applyFixes(remaining);
+      result = applyFixes(remaining, { save });
       if (result.fixed === 0) break;
       totalFixed += result.fixed;
       for (const filePath of result.filePaths) touched.add(filePath);
-      process.stderr.write(`Pass ${pass}: fixed ${result.fixed} more finding(s)\n`);
+      if (save) process.stderr.write(`Pass ${pass}: fixed ${result.fixed} more finding(s)\n`);
     }
+
+    if (!save) {
+      for (const filePath of [...touched].sort()) {
+        const before = fs.readFileSync(filePath, 'utf8');
+        const after = project.getSourceFile(filePath)?.getFullText() ?? before;
+        process.stdout.write(`${formatPatch(path.relative(cwd, filePath), before, after)}\n`);
+      }
+      process.stderr.write(`Dry run: would fix ${totalFixed} finding(s) in ${touched.size} file(s)\n`);
+      process.exitCode = 1;
+      return;
+    }
+
     process.stderr.write(`Fixed ${totalFixed} finding(s) in ${touched.size} file(s)\n`);
     if (result.skipped > 0) {
       process.stderr.write(
-        `Skipped ${result.skipped} finding(s) --fix does not touch (unused files, namespace findings, emptied types)\n`
+        `Skipped ${result.skipped} finding(s) --fix does not touch (files, namespaces, emptied types, dependencies)\n`
       );
     }
     return;

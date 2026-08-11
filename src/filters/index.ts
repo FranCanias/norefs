@@ -37,6 +37,8 @@ const KIND_NAMES: Record<string, FindingKind> = {
   'ns-types': 'ns-type',
   members: 'member',
   'empty-types': 'empty-type',
+  dependencies: 'dependency',
+  unlisted: 'unlisted',
 };
 
 /** Parse comma-separated kind lists like "files,exports". Throws on an unknown name. */

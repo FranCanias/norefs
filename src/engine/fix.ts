@@ -23,7 +23,7 @@ export interface FixResult {
  * up before saving. Unused files, namespace findings, and emptied types are
  * never touched.
  */
-export function applyFixes(findings: Finding[]): FixResult {
+export function applyFixes(findings: Finding[], options: { save?: boolean } = {}): FixResult {
   const fixable = findings.filter(f => f.kind === 'member' || f.kind === 'export' || f.kind === 'type');
   let skipped = findings.length - fixable.length;
 
@@ -53,7 +53,9 @@ export function applyFixes(findings: Finding[]): FixResult {
   for (const file of touched) cleanUpOrphans(file);
 
   const filePaths = [...touched].map(file => file.getFilePath());
-  for (const file of touched) file.saveSync();
+  if (options.save ?? true) {
+    for (const file of touched) file.saveSync();
+  }
   return { filePaths, fixed, skipped };
 }
 

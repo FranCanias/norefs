@@ -61,7 +61,12 @@
   },
   "overrides": [
     {
-      "includes": ["tests/fixtures/**", "tests/broken-fixtures/**", "tests/module-fixtures/**"],
+      "includes": [
+        "tests/fixtures/**",
+        "tests/broken-fixtures/**",
+        "tests/module-fixtures/**",
+        "tests/monorepo-fixtures/**"
+      ],
       "linter": {
         "enabled": false
       }

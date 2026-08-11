@@ -14,7 +14,11 @@ export type FindingKind =
   /** An unused exported type whose namespace is used. */
   | 'ns-type'
   /** A still-referenced type that becomes empty once its unused members go. */
-  | 'empty-type';
+  | 'empty-type'
+  /** A package.json dependency no source file imports. */
+  | 'dependency'
+  /** An imported package no scanned package.json lists. */
+  | 'unlisted';
 
 export interface Finding {
   kind: FindingKind;
