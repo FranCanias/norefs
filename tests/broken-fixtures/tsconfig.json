@@ -5,9 +5,7 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "types": ["node"]
+    "skipLibCheck": true
   },
-  "include": ["analyze.test.ts", "diagnostics.test.ts", "../src/**/*"]
+  "include": ["**/*.ts"]
 }

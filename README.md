@@ -64,6 +64,16 @@ Some findings point at inline types with no name to anchor them — a `{x, y}` p
 noref --no-anonymous
 ```
 
+### Cross-project scans
+
+To find unused properties in a library whose only consumer lives in another repo, give noref one tsconfig that sees both sides:
+
+1. Write an umbrella `tsconfig.json` whose `include` covers both projects' source files.
+2. Reproduce **every** path alias from both repos in its `paths` — including the library's internal aliases — and map the package specifier (`"my-lib"`) to the library's `src` entry point, not its built `.d.ts`.
+3. Run `noref -p umbrella.tsconfig.json --scope path/to/library/src`.
+
+Resolution is everything here: each import that fails to resolve hides all references flowing through it, which turns used properties into "unused" findings. noref checks for this and prints a warning listing the unresolved specifiers — fix those before trusting the results.
+
 ## What counts as usage
 
 The test suite verifies that the reference check resolves all of these — none of them produce false positives:
