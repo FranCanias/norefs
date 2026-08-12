@@ -1,5 +1,6 @@
 import type { Identifier } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { findReferencesAsNodes } from '../engine/references';
 
 /**
  * True when `keyof T` or `keyof typeof T` appears anywhere for this name. That
@@ -8,7 +9,7 @@ import { SyntaxKind } from 'ts-morph';
  * must stay silent.
  */
 export function isKeyofTargeted(nameNode: Identifier): boolean {
-  for (const ref of nameNode.findReferencesAsNodes()) {
+  for (const ref of findReferencesAsNodes(nameNode)) {
     const wrapper = ref.getParentIfKind(SyntaxKind.TypeReference) ?? ref.getParentIfKind(SyntaxKind.TypeQuery);
     const operator = wrapper?.getParentIfKind(SyntaxKind.TypeOperator);
     if (operator?.getOperator() === SyntaxKind.KeyOfKeyword) return true;

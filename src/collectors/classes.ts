@@ -9,6 +9,7 @@ import type {
   Type,
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { findReferencesAsNodes } from '../engine/references';
 import type { Candidate } from './candidate';
 import { toCandidate } from './candidate';
 import { mergeNames } from './constraints';
@@ -100,7 +101,7 @@ function classItselfEscapes(cls: ClassDeclaration, cache: Map<Node, boolean>): b
   if (!nameNode) return true;
   const allowed = allowedTypeSymbols(cls);
 
-  for (const ref of nameNode.findReferencesAsNodes()) {
+  for (const ref of findReferencesAsNodes(nameNode)) {
     const parent = ref.getParent();
     if (!parent) continue;
     if (NEUTRAL_REF_PARENTS.has(parent.getKind())) continue;
@@ -223,7 +224,7 @@ function returnedInstanceEscapes(returnSite: Node, cache: Map<Node, boolean>): b
 
 /** True when any later use of the variable hands the instance to a differently-typed slot. */
 function variableEscapes(varName: Identifier, allowed: Set<TsSymbol>): boolean {
-  for (const ref of varName.findReferencesAsNodes()) {
+  for (const ref of findReferencesAsNodes(varName)) {
     const parent = ref.getParent();
     if (!parent) continue;
     if (parent.isKind(SyntaxKind.PropertyAccessExpression) && parent.getExpression() === ref) continue;

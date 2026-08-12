@@ -1,5 +1,6 @@
 import type { CallExpression, Identifier, Node, PropertyDeclaration, PropertySignature } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { findReferencesAsNodes } from '../engine/references';
 
 /**
  * Conservative escape analysis shared by the collectors. A value "stays local"
@@ -25,7 +26,7 @@ export function getCallableNameNode(fn: Node): Identifier | undefined {
 
 /** True when some call result of this function/method leaves local view as a whole. */
 export function callableEscapes(nameNode: Identifier): boolean {
-  for (const ref of nameNode.findReferencesAsNodes()) {
+  for (const ref of findReferencesAsNodes(nameNode)) {
     const parent = ref.getParent();
     if (!parent) continue;
     if (isAliasDeclarationParent(parent)) continue;
@@ -43,7 +44,7 @@ export function callableEscapes(nameNode: Identifier): boolean {
 
 /** True when every use of this binding is a local property read or a boolean test. */
 export function valueUsesStayLocal(name: Identifier): boolean {
-  for (const ref of name.findReferencesAsNodes()) {
+  for (const ref of findReferencesAsNodes(name)) {
     const use = climbWrappers(ref);
     const parent = use.getParent();
     if (!parent) continue;
@@ -90,7 +91,7 @@ export function castValueStaysLocal(cast: Node): boolean {
  * means members of the property's own type can't be tracked.
  */
 export function propertyValueStaysLocal(member: PropertySignature | PropertyDeclaration): boolean {
-  for (const ref of member.findReferencesAsNodes()) {
+  for (const ref of findReferencesAsNodes(member.getNameNode())) {
     const parent = ref.getParent();
     if (!parent) continue;
     if (parent.isKind(SyntaxKind.ShorthandPropertyAssignment)) continue;

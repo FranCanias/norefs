@@ -5,6 +5,7 @@ import type { Finding } from '../types';
 import { isUnused } from './check';
 import type { ModuleOptions } from './modules';
 import { analyzeModules } from './modules';
+import { findReferencesAsNodes } from './references';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 
 type AnalyzeOptions = ModuleOptions;
@@ -64,7 +65,7 @@ function emptyOwnerFindings(reportedMembers: Set<Node>): Finding[] {
     if (owner.isKind(SyntaxKind.InterfaceDeclaration) && owner.getHeritageClauses().length > 0) continue;
     const nameNode = owner.getNameNode();
     if (isNodeSuppressed(nameNode)) continue;
-    if (!nameNode.findReferencesAsNodes().some(ref => ref !== nameNode)) continue;
+    if (!findReferencesAsNodes(nameNode).some(ref => ref !== nameNode)) continue;
     const sourceFile = owner.getSourceFile();
     const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
     findings.push({

@@ -1,5 +1,6 @@
 import type { PropertyNamedNode } from 'ts-morph';
+import { findReferencesAsNodes } from './references';
 
 export function isUnused(member: PropertyNamedNode): boolean {
-  return member.findReferencesAsNodes().length === 0;
+  return findReferencesAsNodes(member.getNameNode()).length === 0;
 }

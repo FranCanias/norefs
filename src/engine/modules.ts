@@ -6,6 +6,7 @@ import { analyzeDependencies } from './dependencies';
 import { packageEntries } from './package-entries';
 import type { PackageConfig } from './project';
 import { optionsForDir } from './project';
+import { findReferencesAsNodes } from './references';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 
 interface ModuleAnalysis {
@@ -169,7 +170,7 @@ function collectNamespaceFindings(ns: ModuleDeclaration, findings: Finding[], de
   const nameNode = ns.getNameNode();
   const body = ns.getBody();
   if (!nameNode.isKind(SyntaxKind.Identifier) || !body) return;
-  const used = nameNode.findReferencesAsNodes().some(ref => ref !== nameNode && !isModuleBinding(ref));
+  const used = findReferencesAsNodes(nameNode).some(ref => ref !== nameNode && !isModuleBinding(ref));
   if (!used) return; // An unused namespace is itself an unused export; its members are noise.
 
   for (const statement of ns.getStatements()) {
@@ -179,7 +180,7 @@ function collectNamespaceFindings(ns: ModuleDeclaration, findings: Finding[], de
       const declName = declarationNameNode(decl);
       if (!declName) continue;
       if (isNodeSuppressed(declName)) continue;
-      const refs = declName.findReferencesAsNodes().filter(ref => ref !== declName && !isModuleBinding(ref));
+      const refs = findReferencesAsNodes(declName).filter(ref => ref !== declName && !isModuleBinding(ref));
       const escapesBody = refs.some(
         ref =>
           ref.getSourceFile() !== ns.getSourceFile() ||
@@ -218,7 +219,7 @@ function classifyReferences(
   sourceFile: SourceFile
 ): { externallyUsed: boolean; locallyUsed: boolean } {
   let locallyUsed = false;
-  for (const ref of nameNode.findReferencesAsNodes()) {
+  for (const ref of findReferencesAsNodes(nameNode)) {
     if (ref === nameNode || isModuleBinding(ref)) continue;
     if (ref.getSourceFile() !== sourceFile) return { externallyUsed: true, locallyUsed };
     locallyUsed = true;
@@ -257,7 +258,7 @@ function findNamespaceConsumers(project: Project): Map<SourceFile, string> {
       if (!binding) continue;
       const target = importDecl.getModuleSpecifierSourceFile();
       if (!target || consumers.has(target)) continue;
-      if (binding.findReferencesAsNodes().some(ref => !isModuleBinding(ref))) {
+      if (findReferencesAsNodes(binding).some(ref => !isModuleBinding(ref))) {
         consumers.set(target, binding.getText());
       }
     }
@@ -267,7 +268,7 @@ function findNamespaceConsumers(project: Project): Map<SourceFile, string> {
       if (!bindingName?.isKind(SyntaxKind.Identifier)) continue;
       const target = exportDecl.getModuleSpecifierSourceFile();
       if (!target || consumers.has(target)) continue;
-      if (bindingName.findReferencesAsNodes().some(ref => !isModuleBinding(ref))) {
+      if (findReferencesAsNodes(bindingName).some(ref => !isModuleBinding(ref))) {
         consumers.set(target, bindingName.getText());
       }
     }

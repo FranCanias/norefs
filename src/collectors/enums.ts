@@ -1,5 +1,6 @@
 import type { EnumDeclaration, SourceFile } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { findReferencesAsNodes } from '../engine/references';
 import type { Candidate } from './candidate';
 import { toCandidate } from './candidate';
 import { isKeyofTargeted } from './dynamic-usage';
@@ -31,7 +32,7 @@ export function collectEnumCandidates(sourceFile: SourceFile, ctx: CollectContex
  * members without per-member references.
  */
 function isIndexedDynamically(enumDecl: EnumDeclaration): boolean {
-  for (const ref of enumDecl.getNameNode().findReferencesAsNodes()) {
+  for (const ref of findReferencesAsNodes(enumDecl.getNameNode())) {
     const access = ref.getParentIfKind(SyntaxKind.ElementAccessExpression);
     if (!access || access.getExpression() !== ref) continue;
     if (!access.getArgumentExpression()?.isKind(SyntaxKind.StringLiteral)) return true;

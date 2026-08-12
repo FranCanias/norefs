@@ -2,6 +2,7 @@ import type { ExportSpecifier, Identifier, ImportDeclaration, ImportSpecifier, N
 import { Node as NodeGuards, SyntaxKind } from 'ts-morph';
 import type { Finding } from '../types';
 import { declarationNameNode } from './modules';
+import { findReferencesAsNodes } from './references';
 
 interface FixResult {
   /** Paths of the files that changed. */
@@ -106,7 +107,7 @@ function fixExport(finding: Finding, decl: Node): SourceFile[] {
 /** Import/export specifiers anywhere in the project that forward the declaration's name. */
 function danglingSpecifiers(nameNode: Identifier): Array<ImportSpecifier | ExportSpecifier> {
   const specifiers = new Set<ImportSpecifier | ExportSpecifier>();
-  for (const ref of nameNode.findReferencesAsNodes()) {
+  for (const ref of findReferencesAsNodes(nameNode)) {
     const parent = ref.getParent();
     if (parent?.isKind(SyntaxKind.ImportSpecifier) || parent?.isKind(SyntaxKind.ExportSpecifier)) {
       specifiers.add(parent);
@@ -189,11 +190,9 @@ function removeUnusedImports(file: SourceFile): boolean {
 }
 
 function isBindingUsed(binding: Identifier, file: SourceFile, importDecl: ImportDeclaration): boolean {
-  return binding
-    .findReferencesAsNodes()
-    .some(
-      ref => ref.getSourceFile() === file && ref.getFirstAncestorByKind(SyntaxKind.ImportDeclaration) !== importDecl
-    );
+  return findReferencesAsNodes(binding).some(
+    ref => ref.getSourceFile() === file && ref.getFirstAncestorByKind(SyntaxKind.ImportDeclaration) !== importDecl
+  );
 }
 
 /**
@@ -209,7 +208,7 @@ function removeUnusedLocals(file: SourceFile): boolean {
       if (statement.hasExportKeyword() || statement.hasDeclareKeyword()) continue;
       for (const decl of [...statement.getDeclarations()]) {
         const name = decl.getNameNode();
-        if (name.isKind(SyntaxKind.Identifier) && name.findReferencesAsNodes().length === 0) {
+        if (name.isKind(SyntaxKind.Identifier) && findReferencesAsNodes(name).length === 0) {
           removeDeclaration(decl);
           changed = true;
         }
@@ -225,7 +224,7 @@ function removeUnusedLocals(file: SourceFile): boolean {
     ) {
       if (statement.isExported() || statement.hasDeclareKeyword()) continue;
       const name = statement.getNameNode();
-      if (name?.isKind(SyntaxKind.Identifier) && name.findReferencesAsNodes().length === 0) {
+      if (name?.isKind(SyntaxKind.Identifier) && findReferencesAsNodes(name).length === 0) {
         statement.remove();
         changed = true;
       }
