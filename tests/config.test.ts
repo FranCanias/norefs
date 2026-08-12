@@ -2,16 +2,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../src/config';
+import { initConfig, loadConfig } from '../src/config';
 
 function dirWith(content?: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'noref-config-'));
-  if (content !== undefined) fs.writeFileSync(path.join(dir, 'noref.json'), content);
+  if (content !== undefined) fs.writeFileSync(path.join(dir, 'noref.config.json'), content);
   return dir;
 }
 
 describe('loadConfig', () => {
-  it('returns empty defaults when noref.json is missing', () => {
+  it('returns empty defaults when noref.config.json is missing', () => {
     expect(loadConfig(dirWith())).toEqual({
       project: [],
       entry: [],
@@ -55,5 +55,32 @@ describe('loadConfig', () => {
 
   it('throws on a wrong value type', () => {
     expect(() => loadConfig(dirWith('{ "entry": "src" }'))).toThrow(/"entry" must be an array of strings/);
+  });
+});
+
+describe('initConfig', () => {
+  it('writes every key with its default, and loadConfig reads it back', () => {
+    const dir = dirWith();
+    expect(initConfig(dir)).toBe('noref.config.json');
+    expect(fs.readFileSync(path.join(dir, 'noref.config.json'), 'utf8')).toBe(
+      `${JSON.stringify(
+        { project: ['tsconfig.json'], entry: [], ignore: [], only: [], ignoreDependencies: [] },
+        null,
+        2
+      )}\n`
+    );
+    expect(loadConfig(dir)).toEqual({
+      project: ['tsconfig.json'],
+      entry: [],
+      ignore: [],
+      only: [],
+      ignoreDependencies: [],
+    });
+  });
+
+  it('refuses to overwrite an existing config', () => {
+    const dir = dirWith('{ "entry": ["src/worker.ts"] }');
+    expect(() => initConfig(dir)).toThrow(/already exists/);
+    expect(loadConfig(dir).entry).toEqual(['src/worker.ts']);
   });
 });

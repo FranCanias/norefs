@@ -49,6 +49,7 @@ Then run `noref` from any project with a `tsconfig.json`.
 
 ```sh
 noref [options]
+noref init      # write a noref.config.json with every option at its default
 ```
 
 | Option | Description |
@@ -70,7 +71,7 @@ noref [options]
 
 ### Configuration file
 
-Put a `noref.json` next to where you run `noref`, and CI and teammates run the same thing without a shell alias:
+Put a `noref.config.json` next to where you run `noref`, and CI and teammates run the same thing without a shell alias:
 
 ```json
 {
@@ -81,6 +82,20 @@ Put a `noref.json` next to where you run `noref`, and CI and teammates run the s
   "ignoreDependencies": ["ts-node", "@internal/*"]
 }
 ```
+
+`noref init` writes that file for you, with every key present and set to its default:
+
+```json
+{
+  "project": ["tsconfig.json"],
+  "entry": [],
+  "ignore": [],
+  "only": [],
+  "ignoreDependencies": []
+}
+```
+
+Fill in the keys you need and delete the rest — an empty array means the default: no extra entry points, nothing ignored, every kind reported. `init` never overwrites an existing config.
 
 All keys are optional. `project` also accepts an array of tsconfig paths for a monorepo. `entry` merges with `--entry`; for the other keys the command-line flag wins. `ignore` takes globs, matched against paths relative to the current directory (and absolute paths). Ignored files produce no findings, but their contents still count as usage of other code. `ignoreDependencies` takes package names or globs the dependency checks never report.
 
@@ -125,7 +140,7 @@ While you clean up a codebase, run noref in a terminal on the side:
 noref --watch
 ```
 
-Loading the project is the expensive part of a run, so watch mode does it once. On every save it refreshes only the changed files in memory, re-analyzes, and reports again — created and deleted files included. Changes to `tsconfig.json` or `noref.json` need a restart; `--watch` does not combine with `--fix` or `--baseline`.
+Loading the project is the expensive part of a run, so watch mode does it once. On every save it refreshes only the changed files in memory, re-analyzes, and reports again — created and deleted files included. Changes to `tsconfig.json` or `noref.config.json` need a restart; `--watch` does not combine with `--fix` or `--baseline`.
 
 ### Fixing automatically
 
@@ -226,7 +241,7 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 ```
 src/
   index.ts      CLI entry point
-  config.ts     noref.json loading
+  config.ts     noref.config.json loading and `noref init`
   engine/       project loading, the module-level checks (files, exports, namespaces, dependencies),
                 the unused-reference check, suppression comments, human-readable labels, orchestration,
                 output formatting

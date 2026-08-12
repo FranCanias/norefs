@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { applyBaseline, writeBaseline } from './baseline';
-import { loadConfig } from './config';
+import { initConfig, loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { applyFixes } from './engine/fix';
@@ -17,6 +17,7 @@ import type { Finding } from './types';
 const HELP = `noref - find unused files, exports, and properties in a TypeScript project
 
 Usage: noref [options]
+       noref init            Write a noref.config.json with every option at its default
 
 Options:
   -p, --project <path>  Path to tsconfig.json (default: ./tsconfig.json).
@@ -43,12 +44,12 @@ Options:
                          diff without writing any file
   --watch                Re-run on save: keep the loaded project in memory,
                          refresh the changed files, and report again
-                         (tsconfig and noref.json changes need a restart)
+                         (tsconfig and noref.config.json changes need a restart)
   --no-anonymous         Hide findings on unnamed inline types and anonymous functions
   -h, --help             Show this help message
 
 Configuration:
-  noref reads noref.json from the current directory when it exists:
+  noref reads noref.config.json from the current directory when it exists:
     { "project": "…"|[…], "entry": […], "ignore": ["globs"],
       "only": […], "ignoreDependencies": ["names or globs"] }
   Command-line flags win over the config file; entries merge.
@@ -59,7 +60,8 @@ Suppressing findings:
 `;
 
 function main(): void {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
     options: {
       project: { type: 'string', short: 'p', multiple: true },
       scope: { type: 'string' },
@@ -79,6 +81,24 @@ function main(): void {
 
   if (values.help) {
     process.stdout.write(HELP);
+    return;
+  }
+
+  const command = positionals[0];
+  if (command !== undefined && command !== 'init') {
+    process.stderr.write(`error: unknown command "${command}" (the only command is "init")\n`);
+    process.exitCode = 2;
+    return;
+  }
+
+  if (command === 'init') {
+    try {
+      const fileName = initConfig(process.cwd());
+      process.stderr.write(`Wrote ${fileName}\n`);
+    } catch (error) {
+      process.stderr.write(`error: ${(error as Error).message}\n`);
+      process.exitCode = 2;
+    }
     return;
   }
 
