@@ -53,7 +53,7 @@ noref [options]
 
 | Option | Description |
 | --- | --- |
-| `-p, --project <path>` | Path to `tsconfig.json` (default: `./tsconfig.json`); repeatable for a monorepo |
+| `-p, --project <path>` | Path to `tsconfig.json` (default: `./tsconfig.json`); repeatable for a monorepo, where each package resolves imports with its own tsconfig's options |
 | `--scope <path>` | Only report findings declared under this path; the whole project still resolves usages |
 | `--entry <path>` | Treat this file or directory as an entry point: never reported unused, exports never reported (repeatable) |
 | `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members`, `empty-types`, `dependencies`, `unlisted` |
@@ -62,6 +62,7 @@ noref [options]
 | `--export <md\|json>` | Also write findings to `noref-findings.md` or `noref-findings.json` in the current directory |
 | `--fix` | Remove reported members and dead `export` keywords from the source files |
 | `--dry-run` | With `--fix`: print the would-be changes as a unified diff without writing any file |
+| `--watch` | Re-run on save: keep the loaded project in memory, refresh the changed files, and report again |
 | `--no-anonymous` | Hide findings on unnamed inline types and anonymous functions |
 | `-h, --help` | Show the help message |
 
@@ -116,6 +117,16 @@ Two reporters are made for CI:
 - `--reporter github` prints one workflow command (`::error file=…`) per finding, so GitHub Actions shows them inline on the pull request.
 - `--reporter sarif` prints a SARIF 2.1.0 run for anything that ingests SARIF, like GitHub code scanning.
 
+### Watch mode
+
+While you clean up a codebase, run noref in a terminal on the side:
+
+```sh
+noref --watch
+```
+
+Loading the project is the expensive part of a run, so watch mode does it once. On every save it refreshes only the changed files in memory, re-analyzes, and reports again — created and deleted files included. Changes to `tsconfig.json` or `noref.json` need a restart; `--watch` does not combine with `--fix` or `--baseline`.
+
 ### Fixing automatically
 
 `noref --fix` prints the findings, then fixes what it safely can and saves the files:
@@ -162,7 +173,7 @@ Pass `-p` once per package and noref loads them all into one scan, so cross-pack
 noref -p packages/app/tsconfig.json -p packages/lib/tsconfig.json
 ```
 
-The first tsconfig provides the compiler options — including `paths` aliases — and the rest contribute their source files. Entry-file conventions and `package.json` entries apply per package. When the packages import each other through aliases or package names, put those mappings in the first tsconfig's `paths` (or write a small umbrella tsconfig and pass it first).
+Every file resolves its imports with the compiler options of the tsconfig that owns it, so per-package `paths` aliases work as they do in each package's own build, and `package.json` entries map back to source through each package's own `outDir` and `rootDir`. The scan still builds one program — that is what lets a reference in one package count as usage of another. When the packages import each other by package name, map that name in the importing package's `paths` to the target's source entry point, not its built `.d.ts`.
 
 To find unused properties in a library whose only consumer lives in another repo, the umbrella approach still applies:
 

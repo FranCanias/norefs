@@ -7,10 +7,12 @@ import { loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { applyFixes } from './engine/fix';
-import { loadProject } from './engine/project';
+import { loadPackages, loadProject } from './engine/project';
 import { formatGitHub, formatJson, formatMarkdown, formatPatch, formatSarif, formatText } from './engine/report';
+import { watchProject } from './engine/watch';
 import type { FilterOptions } from './filters';
 import { applyFilters, parseKinds } from './filters';
+import type { Finding } from './types';
 
 const HELP = `noref - find unused files, exports, and properties in a TypeScript project
 
@@ -18,8 +20,8 @@ Usage: noref [options]
 
 Options:
   -p, --project <path>  Path to tsconfig.json (default: ./tsconfig.json).
-                         Repeatable for a monorepo: the first tsconfig provides
-                         the compiler options, the rest add their source files
+                         Repeatable for a monorepo: every package resolves its
+                         imports with its own tsconfig's compiler options
   --scope <path>         Only report findings declared under this path
                          (still uses the whole project to resolve usages —
                          handy when a tsconfig spans an SDK and its consumer)
@@ -39,6 +41,9 @@ Options:
   --fix                  Remove reported members and export keywords from the source files
   --dry-run              With --fix: print the would-be changes as a unified
                          diff without writing any file
+  --watch                Re-run on save: keep the loaded project in memory,
+                         refresh the changed files, and report again
+                         (tsconfig and noref.json changes need a restart)
   --no-anonymous         Hide findings on unnamed inline types and anonymous functions
   -h, --help             Show this help message
 
@@ -65,6 +70,7 @@ function main(): void {
       export: { type: 'string' },
       fix: { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
+      watch: { type: 'boolean', default: false },
       anonymous: { type: 'boolean', default: true },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -88,10 +94,18 @@ function main(): void {
     return;
   }
 
+  if (values.watch && (values.fix || values.baseline)) {
+    process.stderr.write('error: --watch cannot combine with --fix or --baseline\n');
+    process.exitCode = 2;
+    return;
+  }
+
   const reporters = { text: formatText, json: formatJson, github: formatGitHub, sarif: formatSarif };
   const reporter = reporters[values.reporter as keyof typeof reporters];
   if (!reporter) {
-    process.stderr.write(`error: --reporter must be one of ${Object.keys(reporters).join(', ')}, got "${values.reporter}"\n`);
+    process.stderr.write(
+      `error: --reporter must be one of ${Object.keys(reporters).join(', ')}, got "${values.reporter}"\n`
+    );
     process.exitCode = 2;
     return;
   }
@@ -117,10 +131,12 @@ function main(): void {
   const cliProjects = values.project ?? [];
   const tsConfigPaths = (cliProjects.length > 0 ? cliProjects : config.project).map(p => path.resolve(cwd, p));
   if (tsConfigPaths.length === 0) tsConfigPaths.push(path.resolve(cwd, 'tsconfig.json'));
+  const packages = loadPackages(tsConfigPaths);
   const project = loadProject(tsConfigPaths);
 
-  const unresolved = findUnresolvedImports(project);
-  if (unresolved.length > 0) {
+  const warnUnresolved = (): void => {
+    const unresolved = findUnresolvedImports(project);
+    if (unresolved.length === 0) return;
     const examples = unresolved.slice(0, 5).join(', ');
     const more = unresolved.length > 5 ? ', …' : '';
     process.stderr.write(
@@ -128,19 +144,68 @@ function main(): void {
         `References through them are invisible, so used properties may be reported as unused.\n` +
         `Check the tsconfig "paths" and "include" settings.\n\n`
     );
-  }
+  };
 
   const scopeDir = values.scope ? path.resolve(cwd, values.scope) : undefined;
   const entries = [...config.entry, ...(values.entry ?? [])].map(entry => path.resolve(cwd, entry));
   const rootDirs = [...new Set(tsConfigPaths.map(p => path.dirname(p)))];
-  const analyzeOptions = { scopeDir, entries, rootDirs, ignoreDependencies: config.ignoreDependencies };
-  let findings = applyFilters(analyze(project, analyzeOptions), filterOptions);
+  const analyzeOptions = { scopeDir, entries, rootDirs, packages, ignoreDependencies: config.ignoreDependencies };
+  const runAnalysis = (): Finding[] => applyFilters(analyze(project, analyzeOptions), filterOptions);
+
+  const printReport = (findings: Finding[], baseline: ReturnType<typeof applyBaseline>): void => {
+    process.stdout.write(reporter(findings, cwd));
+    process.stdout.write('\n');
+
+    if (baseline) {
+      process.stderr.write(`Baseline: ${baseline.matched} finding(s) matched and were not reported\n`);
+      if (baseline.stale > 0) {
+        process.stderr.write(
+          `${baseline.stale} baseline finding(s) no longer occur — run noref --baseline to refresh the file\n`
+        );
+      }
+    }
+
+    if (values.export) {
+      const fileName = values.export === 'md' ? 'noref-findings.md' : 'noref-findings.json';
+      const content = values.export === 'md' ? formatMarkdown(findings, cwd) : formatJson(findings, cwd);
+      fs.writeFileSync(path.join(cwd, fileName), `${content}\n`);
+      process.stderr.write(`Wrote ${fileName}\n`);
+    }
+  };
 
   if (values.baseline) {
+    warnUnresolved();
+    const findings = runAnalysis();
     const fileName = writeBaseline(findings, cwd);
     process.stderr.write(`Wrote ${fileName} with ${findings.length} finding(s)\n`);
     return;
   }
+
+  if (values.watch) {
+    // The loop must survive anything a re-run can throw (a broken tsconfig
+    // save, an invalid baseline file): report the error and keep watching.
+    const report = (): void => {
+      try {
+        warnUnresolved();
+        let findings = runAnalysis();
+        const baseline = applyBaseline(findings, cwd);
+        if (baseline) findings = baseline.fresh;
+        printReport(findings, baseline);
+      } catch (error) {
+        process.stderr.write(`error: ${(error as Error).message}\n`);
+      }
+      process.stderr.write('Watching for file changes. Press Ctrl-C to stop.\n');
+    };
+    report();
+    watchProject(project, tsConfigPaths, () => {
+      if (process.stdout.isTTY) process.stdout.write('\x1Bc');
+      report();
+    });
+    return;
+  }
+
+  warnUnresolved();
+  let findings = runAnalysis();
 
   let baseline: ReturnType<typeof applyBaseline>;
   try {
@@ -152,24 +217,7 @@ function main(): void {
   }
   if (baseline) findings = baseline.fresh;
 
-  process.stdout.write(reporter(findings, cwd));
-  process.stdout.write('\n');
-
-  if (baseline) {
-    process.stderr.write(`Baseline: ${baseline.matched} finding(s) matched and were not reported\n`);
-    if (baseline.stale > 0) {
-      process.stderr.write(
-        `${baseline.stale} baseline finding(s) no longer occur — run noref --baseline to refresh the file\n`
-      );
-    }
-  }
-
-  if (values.export) {
-    const fileName = values.export === 'md' ? 'noref-findings.md' : 'noref-findings.json';
-    const content = values.export === 'md' ? formatMarkdown(findings, cwd) : formatJson(findings, cwd);
-    fs.writeFileSync(path.join(cwd, fileName), `${content}\n`);
-    process.stderr.write(`Wrote ${fileName}\n`);
-  }
+  printReport(findings, baseline);
 
   if (findings.length === 0) return;
 
@@ -182,7 +230,7 @@ function main(): void {
     let totalFixed = result.fixed;
     const touched = new Set(result.filePaths);
     for (let pass = 2; result.fixed > 0 && pass <= 5; pass++) {
-      let remaining = applyFilters(analyze(project, analyzeOptions), filterOptions);
+      let remaining = runAnalysis();
       if (baseline) remaining = applyBaseline(remaining, cwd)?.fresh ?? remaining;
       result = applyFixes(remaining, { save });
       if (result.fixed === 0) break;

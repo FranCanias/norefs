@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
-import { loadProject } from '../src/engine/project';
+import { findUnresolvedImports } from '../src/engine/diagnostics';
+import { loadPackages, loadProject } from '../src/engine/project';
 
 const pkgA = path.resolve('tests/monorepo-fixtures/pkg-a');
 const pkgB = path.resolve('tests/monorepo-fixtures/pkg-b');
@@ -23,5 +24,30 @@ describe('monorepo support', () => {
     const findings = analyze(project, { rootDirs: [pkgB] });
     // Without pkg-a in the project, nothing reaches lib.ts.
     expect(findings.some(f => f.kind === 'file' && f.name === 'lib.ts')).toBe(true);
+  });
+});
+
+describe('per-package compiler options', () => {
+  // Both packages alias `~/*` to their own src/, so first-tsconfig-wins
+  // resolution would leave pkg-b's imports dangling. pkg-b also names its
+  // entry through package.json main + its own outDir, so lib.ts's otherwise
+  // unused export `alone` counts as public API.
+  const pathsPkgA = path.resolve('tests/monorepo-paths-fixtures/pkg-a');
+  const pathsPkgB = path.resolve('tests/monorepo-paths-fixtures/pkg-b');
+  const tsConfigs = [path.join(pathsPkgA, 'tsconfig.json'), path.join(pathsPkgB, 'tsconfig.json')];
+
+  it('resolves each package with its own paths and maps entries through its own outDir', () => {
+    const project = loadProject(tsConfigs);
+    expect(findUnresolvedImports(project)).toEqual([]);
+    const findings = analyze(project, { rootDirs: [pathsPkgA, pathsPkgB], packages: loadPackages(tsConfigs) });
+    expect(findings).toEqual([]);
+  });
+
+  it('does not depend on the order of the tsconfigs', () => {
+    const reversed = [...tsConfigs].reverse();
+    const project = loadProject(reversed);
+    expect(findUnresolvedImports(project)).toEqual([]);
+    const findings = analyze(project, { rootDirs: [pathsPkgB, pathsPkgA], packages: loadPackages(reversed) });
+    expect(findings).toEqual([]);
   });
 });

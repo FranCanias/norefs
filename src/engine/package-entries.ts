@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { Project } from 'ts-morph';
+import type { Project, ts } from 'ts-morph';
 
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'];
 const OUTPUT_EXTENSION = /\.(?:d\.ts|d\.mts|d\.cts|js|jsx|mjs|cjs)$/;
@@ -7,10 +7,15 @@ const OUTPUT_EXTENSION = /\.(?:d\.ts|d\.mts|d\.cts|js|jsx|mjs|cjs)$/;
 /**
  * Entry files a package.json names: main, bin, and exports. A path that
  * points into the compiled output is mapped back to source through the
- * tsconfig outDir and rootDir. Only paths that resolve to a project source
- * file count.
+ * package's own tsconfig outDir and rootDir. Only paths that resolve to a
+ * project source file count.
  */
-export function packageEntries(project: Project, packageDir: string, fallbackSourceRoot: string): string[] {
+export function packageEntries(
+  project: Project,
+  packageDir: string,
+  fallbackSourceRoot: string,
+  compilerOptions: ts.CompilerOptions
+): string[] {
   const fileSystem = project.getFileSystem();
   const manifestPath = path.join(packageDir, 'package.json');
   if (!fileSystem.fileExistsSync(manifestPath)) return [];
@@ -29,7 +34,6 @@ export function packageEntries(project: Project, packageDir: string, fallbackSou
   collectStrings(data.bin, candidates);
   collectStrings(data.exports, candidates);
 
-  const compilerOptions = project.getCompilerOptions();
   const outDir = compilerOptions.outDir ? path.resolve(packageDir, compilerOptions.outDir) : undefined;
   const sourceRoot = compilerOptions.rootDir ? path.resolve(packageDir, compilerOptions.rootDir) : fallbackSourceRoot;
 

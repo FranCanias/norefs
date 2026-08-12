@@ -4,9 +4,11 @@ import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
 import type { Finding, FindingKind } from '../types';
 import { analyzeDependencies } from './dependencies';
 import { packageEntries } from './package-entries';
+import type { PackageConfig } from './project';
+import { optionsForDir } from './project';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 
-export interface ModuleAnalysis {
+interface ModuleAnalysis {
   findings: Finding[];
   /** Files reported unused; member analysis skips everything inside them. */
   deadFiles: Set<SourceFile>;
@@ -21,6 +23,8 @@ export interface ModuleOptions {
   entries?: string[];
   /** Directories that anchor the entry-file and harness-file patterns — one per tsconfig. */
   rootDirs?: string[];
+  /** Per-package compiler options; each package's manifest entries map through its own outDir. */
+  packages?: PackageConfig[];
   /** Dependency names or globs the dependency checks never report. */
   ignoreDependencies?: string[];
 }
@@ -37,7 +41,14 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
   const entries = [
     ...(options.entries ?? []),
-    ...rootDirs.flatMap(dir => packageEntries(project, dir, fallbackRoot)),
+    ...rootDirs.flatMap(dir =>
+      packageEntries(
+        project,
+        dir,
+        fallbackRoot,
+        optionsForDir(options.packages ?? [], dir) ?? project.getCompilerOptions()
+      )
+    ),
   ];
   const reachable = reachableFiles(sourceFiles, rootDirs, entries);
   const namespaceConsumers = findNamespaceConsumers(project);

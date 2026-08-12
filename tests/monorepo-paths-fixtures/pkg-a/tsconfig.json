@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "~/*": ["src/*"],
+      "@acme/b": ["../pkg-b/src/lib.ts"]
+    }
+  },
+  "include": ["src"]
+}
