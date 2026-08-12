@@ -30,7 +30,7 @@ const collectors: Array<(sourceFile: SourceFile, ctx: CollectContext) => Candida
   collectClassCandidates,
 ];
 
-export interface CollectOptions {
+interface CollectOptions {
   /** Only collect candidates from files under this absolute path prefix. Reference resolution still uses the whole project. */
   scopeDir?: string;
 }

@@ -66,9 +66,7 @@ describe('empty-owner findings', () => {
   });
 
   it('stays silent when nothing references the type', () => {
-    const findings = findingsOf(
-      ['interface Ghost {', '  dead: number;', '}', 'export const keep = 1;', ''].join('\n')
-    );
+    const findings = findingsOf(['interface Ghost {', '  dead: number;', '}', 'export const keep = 1;', ''].join('\n'));
     expect(findings.map(f => [f.kind, f.name])).toEqual([['member', 'dead']]);
   });
 

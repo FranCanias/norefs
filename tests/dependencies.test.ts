@@ -3,11 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import type { Finding } from '../src/types';
 
-function depFindings(
-  manifest: object,
-  files: Record<string, string>,
-  ignoreDependencies: string[] = []
-): Finding[] {
+function depFindings(manifest: object, files: Record<string, string>, ignoreDependencies: string[] = []): Finding[] {
   const project = new Project({ useInMemoryFileSystem: true });
   project.getFileSystem().writeFileSync('/package.json', JSON.stringify(manifest, null, 2));
   for (const [filePath, text] of Object.entries(files)) project.createSourceFile(filePath, text);
@@ -30,7 +26,10 @@ describe('dependency checks', () => {
   it('counts deep imports and dynamic imports as usage', () => {
     const findings = depFindings(
       { dependencies: { 'used-pkg': '1.0.0', lazy: '1.0.0' } },
-      { '/main.ts': "import { x } from 'used-pkg/sub/path';\nexport const load = () => import('lazy');\nexport const y = x;\n" }
+      {
+        '/main.ts':
+          "import { x } from 'used-pkg/sub/path';\nexport const load = () => import('lazy');\nexport const y = x;\n",
+      }
     );
     expect(findings).toEqual([]);
   });
@@ -64,7 +63,8 @@ describe('dependency checks', () => {
     const findings = depFindings(
       { dependencies: {} },
       {
-        '/main.ts': "import fs from 'node:fs';\nimport path from 'path';\nimport { z } from './lib';\nexport const y = [fs, path, z];\n",
+        '/main.ts':
+          "import fs from 'node:fs';\nimport path from 'path';\nimport { z } from './lib';\nexport const y = [fs, path, z];\n",
         '/lib.ts': 'export const z = 1;\n',
       }
     );

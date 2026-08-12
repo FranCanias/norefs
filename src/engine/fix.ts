@@ -3,7 +3,7 @@ import { Node as NodeGuards, SyntaxKind } from 'ts-morph';
 import type { Finding } from '../types';
 import { declarationNameNode } from './modules';
 
-export interface FixResult {
+interface FixResult {
   /** Paths of the files that changed. */
   filePaths: string[];
   fixed: number;

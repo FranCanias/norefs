@@ -1,7 +1,7 @@
 import type { Node } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 
-export interface Described {
+interface Described {
   label: string;
   anonymous: boolean;
 }

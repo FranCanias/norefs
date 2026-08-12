@@ -7,7 +7,7 @@ import type { ModuleOptions } from './modules';
 import { analyzeModules } from './modules';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 
-export type AnalyzeOptions = ModuleOptions;
+type AnalyzeOptions = ModuleOptions;
 
 export function analyze(project: Project, options: AnalyzeOptions = {}): Finding[] {
   const modules = analyzeModules(project, options);

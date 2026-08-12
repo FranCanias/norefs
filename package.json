@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",
     "lint": "biome lint .",
+    "typecheck": "tsc --noEmit",
     "format": "biome format --write .",
     "test": "vitest run"
   },

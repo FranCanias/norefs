@@ -18,7 +18,7 @@ interface BaselineEntry {
   count: number;
 }
 
-export interface BaselineResult {
+interface BaselineResult {
   /** Findings not in the baseline — the ones that should fail the run. */
   fresh: Finding[];
   matched: number;

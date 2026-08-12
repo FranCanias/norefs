@@ -9,12 +9,7 @@ function make(kind: FindingKind, filePath = '/proj/src/a.ts'): Finding {
 describe('parseKinds', () => {
   it('parses comma-separated and repeated values', () => {
     expect(parseKinds(['files,exports'])).toEqual(['file', 'export']);
-    expect(parseKinds(['types', 'ns-exports,ns-types', 'members'])).toEqual([
-      'type',
-      'ns-export',
-      'ns-type',
-      'member',
-    ]);
+    expect(parseKinds(['types', 'ns-exports,ns-types', 'members'])).toEqual(['type', 'ns-export', 'ns-type', 'member']);
   });
 
   it('throws on an unknown kind', () => {
