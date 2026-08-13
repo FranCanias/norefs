@@ -60,6 +60,9 @@ Options:
   --verify-command <cmd> A command that must exit 0 for the fixes to count
                          (your test suite, say). Runs after the type check
                          passes; a fix that fails it is held back too
+  --allow-dirty          Let --fix write into a tree with uncommitted changes.
+                         By default it refuses, so the fixes stay separable
+                         from your own edits
   --ratchet              With a baseline: drop entries whose finding vanished,
                          so the baseline count can only go down
   --dry-run              With --fix: print the would-be changes as a unified
@@ -96,6 +99,7 @@ function main(): void {
       'fix-unsafe': { type: 'boolean', default: false },
       verify: { type: 'boolean', default: true },
       'verify-command': { type: 'string' },
+      'allow-dirty': { type: 'boolean', default: false },
       ratchet: { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
       watch: { type: 'boolean', default: false },
@@ -138,6 +142,16 @@ function main(): void {
 
   if (values['dry-run'] && !values.fix) {
     process.stderr.write('error: --dry-run requires --fix\n');
+    process.exitCode = 2;
+    return;
+  }
+
+  // Fixes written into a dirty tree cannot be reviewed or reverted apart
+  // from the user's own edits, so --fix wants a clean slate.
+  if (values.fix && !values['dry-run'] && !values['allow-dirty'] && hasUncommittedChanges(process.cwd())) {
+    process.stderr.write(
+      'error: the working tree has uncommitted changes. Commit or stash them so the fixes stay separable, or pass --allow-dirty.\n'
+    );
     process.exitCode = 2;
     return;
   }
@@ -369,6 +383,12 @@ function main(): void {
   }
 
   process.exitCode = 1;
+}
+
+/** True when this is a git tree with uncommitted changes. No git, no repo: false. */
+function hasUncommittedChanges(cwd: string): boolean {
+  const run = spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' });
+  return run.status === 0 && run.stdout.trim().length > 0;
 }
 
 /**

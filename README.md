@@ -78,6 +78,7 @@ norefs init      # write a norefs.config.json with every option at its default
 | `--ratchet` | With a baseline: drop entries whose finding vanished, so the count can only go down |
 | `--no-verify` | Skip the check after `--fix`; by default norefs type-checks in memory, holds back any fix that breaks the build, and saves only what verifies |
 | `--verify-command <cmd>` | A command that must exit 0 for the fixes to count (your test suite); runs after the type check passes, and a fix that fails it is held back too |
+| `--allow-dirty` | Let `--fix` write into a tree with uncommitted changes; by default it refuses, so the fixes stay separable from your own edits |
 | `--export <md\|json>` | Also write findings to `norefs-findings.md` or `norefs-findings.json` in the current directory |
 | `--fix` | Apply the fixes the verdicts prove safe: `dead` code is removed, `over-exported` declarations lose the `export` keyword |
 | `--fix-unsafe` | Also apply `write-only`, `contract`, and `shadowed` findings (implies `--fix`); these are claims the analysis cannot prove |
