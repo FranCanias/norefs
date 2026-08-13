@@ -17,7 +17,7 @@ type FunctionLike = FunctionDeclaration | ArrowFunction | FunctionExpression;
 
 export function collectReturnedObjectCandidates(sourceFile: SourceFile, _ctx: CollectContext): Candidate[] {
   const candidates: Candidate[] = [];
-  for (const fn of exportedFunctionsWithInferredReturn(sourceFile)) {
+  for (const fn of functionsWithInferredReturn(sourceFile)) {
     const objectLiteral = getSoleReturnedObjectLiteral(fn);
     if (!objectLiteral) continue;
     if (returnValueEscapes(fn)) continue;
@@ -36,17 +36,19 @@ function returnValueEscapes(fn: FunctionLike): boolean {
   return !nameNode || callableEscapes(nameNode);
 }
 
-function exportedFunctionsWithInferredReturn(sourceFile: SourceFile): FunctionLike[] {
+/**
+ * Every top-level function with an inferred return type, exported or not: a
+ * local producer's dead output matters as much as a public one's. The escape
+ * checks decide which of these are trackable.
+ */
+function functionsWithInferredReturn(sourceFile: SourceFile): FunctionLike[] {
   const fns: FunctionLike[] = [];
 
   for (const fn of sourceFile.getFunctions()) {
-    if ((fn.isExported() || fn.isDefaultExport()) && !fn.getReturnTypeNode()) {
-      fns.push(fn);
-    }
+    if (!fn.getReturnTypeNode()) fns.push(fn);
   }
 
   for (const statement of sourceFile.getVariableStatements()) {
-    if (!statement.isExported()) continue;
     for (const decl of statement.getDeclarations()) {
       const initializer = decl.getInitializer();
       if (!initializer) continue;

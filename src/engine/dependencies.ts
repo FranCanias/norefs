@@ -108,6 +108,7 @@ export function analyzeDependencies(
         context: '',
         anonymous: false,
         verdict: 'dead',
+        evidence: 'no source file imports it',
       });
     }
   }

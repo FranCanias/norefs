@@ -1,8 +1,9 @@
-import type { InterfaceDeclaration, Node, Project, TypeAliasDeclaration } from 'ts-morph';
+import type { InterfaceDeclaration, Node, ObjectLiteralExpression, Project, TypeAliasDeclaration } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { collectCandidates } from '../collectors';
 import type { Finding, FindingKind } from '../types';
 import { memberUsage } from './check';
+import { describeFunctionName } from './describe';
 import type { ModuleOptions } from './modules';
 import { analyzeModules } from './modules';
 import { buildReferenceIndex } from './reference-index';
@@ -67,14 +68,61 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     });
   }
 
-  const { emptyFindings, swallowed } = emptyOwnerFindings(reportedMembers);
-  findings.push(...emptyFindings);
+  const typeFold = emptyOwnerFindings(reportedMembers);
+  const sliceFold = emptyReturnedObjectFindings(reportedMembers);
+  findings.push(...typeFold.emptyFindings, ...sliceFold.emptyFindings);
   assignVerdicts(project, findings, process.cwd());
   // One logical fact, one finding: a type losing every member is the story,
   // not seven bullets. The members fold in after they lent it their verdict.
+  const swallowed = new Set([...typeFold.swallowed, ...sliceFold.swallowed]);
   const folded = findings.filter(f => !(f.kind === 'member' && f.node && swallowed.has(f.node)));
   folded.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || a.column - b.column);
   return folded;
+}
+
+/**
+ * The producer half of a dead slice: a function whose returned object loses
+ * every property. Nobody reads what it computes, so the computation itself is
+ * the finding, not the properties one by one.
+ */
+function emptyReturnedObjectFindings(reportedMembers: Set<Node>): { emptyFindings: Finding[]; swallowed: Set<Node> } {
+  const literals = new Set<Node>();
+  for (const member of reportedMembers) {
+    const parent = member.getParent();
+    if (parent?.isKind(SyntaxKind.ObjectLiteralExpression)) literals.add(parent);
+  }
+
+  const emptyFindings: Finding[] = [];
+  const swallowed = new Set<Node>();
+  for (const literal of literals) {
+    const properties = (literal as ObjectLiteralExpression).getProperties();
+    if (properties.length === 0 || !properties.every(property => reportedMembers.has(property))) continue;
+    const fn = literal
+      .getAncestors()
+      .find(
+        ancestor =>
+          ancestor.isKind(SyntaxKind.FunctionDeclaration) ||
+          ancestor.isKind(SyntaxKind.ArrowFunction) ||
+          ancestor.isKind(SyntaxKind.FunctionExpression)
+      );
+    if (!fn) continue;
+    const described = describeFunctionName(fn);
+    if (described.anonymous) continue;
+    const sourceFile = literal.getSourceFile();
+    const { line, column } = sourceFile.getLineAndColumnAtPos(literal.getStart());
+    for (const property of properties) swallowed.add(property);
+    emptyFindings.push({
+      kind: 'empty-type',
+      filePath: sourceFile.getFilePath(),
+      line,
+      column,
+      name: described.label.replace(/`/g, ''),
+      context: 'returned object',
+      anonymous: false,
+      swallowed: properties.length,
+    });
+  }
+  return { emptyFindings, swallowed };
 }
 
 /**

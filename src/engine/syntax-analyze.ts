@@ -84,6 +84,7 @@ export function analyzeSyntax(
       context: '',
       anonymous: false,
       verdict: 'dead',
+      evidence: 'no chain of imports from any entry point reaches it',
     });
   }
 

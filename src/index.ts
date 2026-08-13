@@ -70,7 +70,11 @@ Options:
   --watch                Re-run on save: keep the loaded project in memory,
                          refresh the changed files, and report again
                          (tsconfig and norefs.config.json changes need a restart)
-  --no-anonymous         Hide findings on unnamed inline types and anonymous functions
+  --explain              Append each finding's evidence chain: what was
+                         searched, what was found, why the verdict
+  --anon                 Include findings on unnamed inline types and anonymous
+                         functions. Hidden by default: with no name to anchor
+                         them, they are the most false-positive-prone
   -h, --help             Show this help message
 
 Configuration:
@@ -100,10 +104,11 @@ function main(): void {
       verify: { type: 'boolean', default: true },
       'verify-command': { type: 'string' },
       'allow-dirty': { type: 'boolean', default: false },
+      explain: { type: 'boolean', default: false },
       ratchet: { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
       watch: { type: 'boolean', default: false },
-      anonymous: { type: 'boolean', default: true },
+      anon: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
     allowNegative: true,
@@ -162,7 +167,12 @@ function main(): void {
     return;
   }
 
-  const reporters = { text: formatText, json: formatJson, github: formatGitHub, sarif: formatSarif };
+  const reporters = {
+    text: (f: Finding[], c: string) => formatText(f, c, values.explain),
+    json: formatJson,
+    github: formatGitHub,
+    sarif: formatSarif,
+  };
   const reporter = reporters[values.reporter as keyof typeof reporters];
   if (!reporter) {
     process.stderr.write(
@@ -179,7 +189,7 @@ function main(): void {
     config = loadConfig(cwd);
     const kindNames = values.only && values.only.length > 0 ? values.only : (config.only ?? []);
     filterOptions = {
-      anonymous: values.anonymous,
+      anonymous: values.anon,
       only: kindNames.length > 0 ? parseKinds(kindNames) : undefined,
       ignore: config.ignore,
       cwd,
@@ -258,7 +268,8 @@ function main(): void {
 
     if (values.export) {
       const fileName = values.export === 'md' ? 'norefs-findings.md' : 'norefs-findings.json';
-      const content = values.export === 'md' ? formatMarkdown(findings, cwd) : formatJson(findings, cwd);
+      const content =
+        values.export === 'md' ? formatMarkdown(findings, cwd, values.explain) : formatJson(findings, cwd);
       fs.writeFileSync(path.join(cwd, fileName), `${content}\n`);
       process.stderr.write(`Wrote ${fileName}\n`);
     }

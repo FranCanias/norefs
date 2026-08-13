@@ -2,7 +2,7 @@
 
 Find unused files, exports, and type/object members in a TypeScript project.
 
-Most dead-code tools stop at the declaration boundary: an interface counts as "used" even when half its members are dead. `norefs` checks both levels. It finds unused files, unused exports, and unused exported types — and then looks inside the types that *are* used, including objects returned from exported functions and objects used as React component props.
+Most dead-code tools stop at the declaration boundary: an interface counts as "used" even when half its members are dead. `norefs` checks both levels. It finds unused files, unused exports, and unused exported types — and then looks inside the types that *are* used, including objects returned from functions (exported or not) and objects used as React component props.
 
 ## How it works
 
@@ -19,7 +19,7 @@ A finding at a higher level swallows the findings inside it: an unused file hide
 
 ### Verdicts
 
-Every finding carries a verdict: the claim it makes, with its safety profile. "Unused" is not one claim — it is five:
+Every finding carries a verdict: the claim it makes, with its safety profile. "Unused" is not one claim — it is six:
 
 - **dead** — no references, no structural twin, no boundary crossing. Safe to delete, and `--fix` does.
 - **over-exported** — used in its own file only. Safe to de-export, and `--fix` does.
@@ -36,7 +36,7 @@ The member pass looks for five kinds of member owners:
 
 - `interface` declarations
 - `type` aliases, and any inline object type (parameter types, return types, variable annotations — this covers React props like `function Foo({a}: {a: string})`)
-- object literals returned from exported functions whose return type is inferred (not explicitly annotated)
+- object literals returned from functions whose return type is inferred (not explicitly annotated) — exported or not, so a local producer whose output nobody reads is one finding: the computation is dead weight
 - `enum` declarations
 - `class` declarations (properties, methods, accessors, static members, and constructor parameter properties)
 
@@ -76,6 +76,7 @@ norefs init      # write a norefs.config.json with every option at its default
 | `--reporter <name>` | Output format: `text` (default), `json`, `github`, `sarif` |
 | `--baseline` | Write the findings to `norefs-baseline.json` and exit; later runs fail on new findings only |
 | `--ratchet` | With a baseline: drop entries whose finding vanished, so the count can only go down |
+| `--explain` | Append each finding's evidence chain: what was searched, what was found, why the verdict |
 | `--no-verify` | Skip the check after `--fix`; by default norefs type-checks in memory, holds back any fix that breaks the build, and saves only what verifies |
 | `--verify-command <cmd>` | A command that must exit 0 for the fixes to count (your test suite); runs after the type check passes, and a fix that fails it is held back too |
 | `--allow-dirty` | Let `--fix` write into a tree with uncommitted changes; by default it refuses, so the fixes stay separable from your own edits |
@@ -84,7 +85,7 @@ norefs init      # write a norefs.config.json with every option at its default
 | `--fix-unsafe` | Also apply `write-only`, `contract`, and `shadowed` findings (implies `--fix`); these are claims the analysis cannot prove |
 | `--dry-run` | With `--fix`: print the would-be changes as a unified diff without writing any file |
 | `--watch` | Re-run on save: keep the loaded project in memory, refresh the changed files, and report again |
-| `--no-anonymous` | Hide findings on unnamed inline types and anonymous functions |
+| `--anon` | Include findings on unnamed inline types and anonymous functions (hidden by default: they are the most false-positive-prone) |
 | `-h, --help` | Show the help message |
 
 `norefs` exits with code `1` when it finds unused code, `0` otherwise — so it slots into CI the same way a linter does. With `--fix` it exits `0` after it removes what it found.
@@ -247,12 +248,12 @@ src/devices/DeviceLibrary.ts
 5 findings: 3 dead, 1 over-exported, 1 likely contract
 ```
 
-### Filtering out anonymous findings
+### Anonymous findings
 
-Some findings point at inline types with no name to anchor them — a `{x, y}` parameter type on an anonymous callback, for instance. These are more prone to false positives: TypeScript's reference search loses track of a value forwarded via shorthand into a *differently-declared* structural type, because the read then resolves to the other declaration. Run with `--no-anonymous` to see only findings tied to a named interface, type alias, or function:
+Some findings point at inline types with no name to anchor them — a `{x, y}` parameter type on an anonymous callback, for instance. These are the most false-positive-prone: TypeScript's reference search loses track of a value forwarded via shorthand into a *differently-declared* structural type, because the read then resolves to the other declaration. By default norefs reports only findings tied to a named interface, type alias, or function; pass `--anon` to include the anonymous ones too:
 
 ```sh
-norefs --no-anonymous
+norefs --anon
 ```
 
 ### Monorepos and cross-project scans
@@ -321,7 +322,7 @@ src/
                 the project-wide reference index, the syntax-only pipeline and its scanner,
                 suppression comments, human-readable labels, orchestration, output formatting
   collectors/   one file per source of candidate members (interfaces, type literals, returned objects, enums, classes)
-  filters/      post-collection filters (e.g. --no-anonymous)
+  filters/      post-collection filters (e.g. the anonymous-findings gate)
   types/        shared types
 ```
 

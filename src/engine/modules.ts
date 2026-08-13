@@ -89,6 +89,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
         context: '',
         anonymous: false,
         verdict: 'dead',
+        evidence: 'no chain of imports from any entry point reaches it',
       });
       continue;
     }
@@ -257,6 +258,7 @@ function makeFinding(
     dead,
     typeKind,
     verdict: dead ? 'dead' : 'over-exported',
+    evidence: dead ? 'zero references anywhere' : 'every reference sits inside its own file',
     node: nameNode.getParent() ?? nameNode,
   };
 }

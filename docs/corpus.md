@@ -16,9 +16,10 @@ log: rerun the repos, compare the counts, explain every jump.
 
 ## hono (2026-08-13, tsconfig.build.json)
 
-**242 findings: 149 dead, 79 over-exported, 12 write-only, 1 likely
+**195 findings: 104 dead, 79 over-exported, 10 write-only, 1 likely
 contract, 1 shadowed — in ~2 seconds** over a library with 76 published
-subpath entries.
+subpath entries (242 with `--anon`, which includes the anonymous findings
+hidden by default).
 
 The public-API handling carries the run: everything hono's exports map
 publishes — resolved through `export *` chains and mapped from `dist` paths
@@ -30,12 +31,12 @@ duplicated type the shadowed verdict pins with file and line.
 
 ## zod (2026-08-13, packages/zod/tsconfig.json)
 
-**81 findings: 58 dead, 16 over-exported, 2 write-only, 1 likely contract,
-4 test-only — in ~4 seconds**, running inside a workspace package of a
-monorepo.
+**43 findings: 23 dead, 16 over-exported, 1 likely contract, 3 test-only —
+in ~4 seconds**, running inside a workspace package of a monorepo (81 with
+`--anon`).
 
-The four test-only findings are a category no reference count sees: code
-with plenty of references, all of them in test files. `StandardSchemaWithJSON`
+The test-only findings are a category no reference count sees: code with
+plenty of references, all of them in test files. `StandardSchemaWithJSON`
 is an interface only zod's own tests consume; `_FlattenedError.fieldErrors`
 is read nowhere but a test. Production-dead, test-alive — reported with the
 one verdict that says so, and never auto-fixed, because deleting them means
@@ -47,6 +48,23 @@ fixtures produce no member noise, and `export * as util` namespace
 re-exports count as public API whole. What remains is the interesting part:
 zod's v3 legacy helpers carry genuinely unreferenced members, exactly the
 layer a years-old, heavily maintained codebase would accumulate.
+
+## inshellisense (2026-08-13, application-shaped)
+
+**43 findings: 24 dead, 19 over-exported — in ~2 seconds** on Microsoft's
+terminal-autocomplete CLI, the corpus's first application (entries come from
+`bin`, not an exports map).
+
+Hand-verified: `strip-ansi` and `uuid` sit in `dependencies` with no import
+anywhere; `clearGeneratorState` is a dead export. The run also shows the
+honesty machinery working: one import specifier
+(`@withfig/autocomplete/build/index.js`) does not resolve for TypeScript, and
+norefs leads the report with a warning that references through it are
+invisible — so a reader knows which findings deserve distrust before acting
+on any. `getSuggestions`, consumed through a dynamic import whose types that
+unresolved specifier poisons, is exactly the finding that warning brackets.
+Making verdicts soften automatically inside the blast radius of an
+unresolved import is the follow-up this run argues for.
 
 ## norefs on norefs (2026-08-13)
 
@@ -65,15 +83,16 @@ designed answer for consumers beyond the program's horizon.
 
 ## What the corpus says so far
 
-- **Speed**: both repos analyze member-deep in single-digit seconds.
-- **Precision**: across both repos, no confirmed false "dead" verdict from
-  the reference analysis. Boundary rules (public API, harness files,
-  workspace manifests) decide what is in scope; inside that scope, the
-  spot-checked findings have held.
-- **The verdicts earn their keep**: on hono, one shadowed and twelve
-  write-only findings would have been flat "unused" claims in any other
-  tool; here they arrive pre-triaged with evidence.
+- **Speed**: two libraries and an application, each analyzed member-deep in
+  single-digit seconds.
+- **Precision**: no confirmed false "dead" verdict from the reference
+  analysis on any repo. Boundary rules (public API, harness files, workspace
+  manifests) decide what is in scope; inside that scope, the spot-checked
+  findings have held — and the one near-miss sat behind the unresolved-import
+  warning the report itself led with.
+- **The verdicts earn their keep**: shadowed, write-only, and test-only
+  findings arrive pre-triaged with evidence where any other tool would print
+  a flat "unused".
 
-Next: an application-shaped repository (both entries above are libraries),
-and enough manual verification per repo to publish a precision number
+Next: enough manual verification per repo to publish a precision number
 instead of an anecdote.

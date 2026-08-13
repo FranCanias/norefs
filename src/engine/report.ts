@@ -29,6 +29,9 @@ function describeFinding(finding: Finding): string {
     case 'member':
       return describeMember(finding);
     case 'empty-type': {
+      if (finding.context === 'returned object') {
+        return `nobody reads what \`${finding.name}\` returns: all ${finding.swallowed} properties are unused — the computation is dead weight`;
+      }
       const count = finding.swallowed ? `all ${finding.swallowed} members are` : 'every member is';
       const claim = `${finding.context} \`${finding.name}\` becomes empty: ${count} ${memberClaim(finding)}`;
       return finding.verdict && finding.verdict !== 'dead' && finding.evidence
@@ -91,6 +94,13 @@ function summarize(findings: Finding[]): string {
   return `${findings.length} ${findings.length === 1 ? 'finding' : 'findings'}: ${parts.join(', ')}`;
 }
 
+/** The finding plus its evidence chain, for --explain. Soft verdicts embed it already. */
+function withEvidence(finding: Finding, explain: boolean): string {
+  const message = describeFinding(finding);
+  if (!explain || !finding.evidence || message.includes(finding.evidence)) return message;
+  return `${message} — ${finding.evidence}`;
+}
+
 function groupByFile(findings: Finding[]): Map<string, Finding[]> {
   const byFile = new Map<string, Finding[]>();
   for (const finding of findings) {
@@ -101,7 +111,7 @@ function groupByFile(findings: Finding[]): Map<string, Finding[]> {
   return byFile;
 }
 
-export function formatText(findings: Finding[], cwd: string): string {
+export function formatText(findings: Finding[], cwd: string, explain = false): string {
   if (findings.length === 0) return 'No unused code found.\n';
 
   const lines: string[] = [];
@@ -110,8 +120,8 @@ export function formatText(findings: Finding[], cwd: string): string {
     for (const finding of fileFindings) {
       lines.push(
         finding.kind === 'file'
-          ? `  ${describeFinding(finding)}`
-          : `  ${finding.line}:${finding.column}  ${describeFinding(finding)}`
+          ? `  ${withEvidence(finding, explain)}`
+          : `  ${finding.line}:${finding.column}  ${withEvidence(finding, explain)}`
       );
     }
   }
@@ -119,7 +129,7 @@ export function formatText(findings: Finding[], cwd: string): string {
   return lines.join('\n');
 }
 
-export function formatMarkdown(findings: Finding[], cwd: string): string {
+export function formatMarkdown(findings: Finding[], cwd: string, explain = false): string {
   const lines: string[] = ['# norefs findings', ''];
   if (findings.length === 0) {
     lines.push('No unused code found.');
@@ -133,8 +143,8 @@ export function formatMarkdown(findings: Finding[], cwd: string): string {
     for (const finding of fileFindings) {
       lines.push(
         finding.kind === 'file'
-          ? `- ${describeFinding(finding)}`
-          : `- ${describeFinding(finding)} (line ${finding.line}, column ${finding.column})`
+          ? `- ${withEvidence(finding, explain)}`
+          : `- ${withEvidence(finding, explain)} (line ${finding.line}, column ${finding.column})`
       );
     }
     lines.push('');

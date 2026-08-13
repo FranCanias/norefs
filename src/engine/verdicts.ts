@@ -48,6 +48,7 @@ export function assignVerdicts(project: Project, findings: Finding[], cwd: strin
       continue;
     }
     finding.verdict = 'dead';
+    finding.evidence = `no references anywhere, no twin type reads \`${finding.name}\`, no serialization boundary, no untracked write of the name`;
   }
 
   assignEmptyTypeVerdicts(findings);
