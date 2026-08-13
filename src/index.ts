@@ -17,10 +17,10 @@ import type { FilterOptions } from './filters';
 import { applyFilters, parseKinds } from './filters';
 import type { Finding } from './types';
 
-const HELP = `noref - find unused files, exports, and properties in a TypeScript project
+const HELP = `norefs - find unused files, exports, and properties in a TypeScript project
 
-Usage: noref [options]
-       noref init            Write a noref.config.json with every option at its default
+Usage: norefs [options]
+       norefs init            Write a norefs.config.json with every option at its default
 
 Options:
   -p, --project <path>  Path to tsconfig.json (default: ./tsconfig.json).
@@ -42,28 +42,28 @@ Options:
                          skips the costliest half of what is left
   --reporter <name>      Output format: text (default), json, github (workflow
                          commands that annotate pull requests), sarif
-  --baseline             Write the findings to noref-baseline.json and exit;
+  --baseline             Write the findings to norefs-baseline.json and exit;
                          when that file exists, later runs report and fail on
                          new findings only
-  --export <md|json>     Also write findings to noref-findings.md or noref-findings.json
+  --export <md|json>     Also write findings to norefs-findings.md or norefs-findings.json
   --fix                  Remove reported members and export keywords from the source files
   --dry-run              With --fix: print the would-be changes as a unified
                          diff without writing any file
   --watch                Re-run on save: keep the loaded project in memory,
                          refresh the changed files, and report again
-                         (tsconfig and noref.config.json changes need a restart)
+                         (tsconfig and norefs.config.json changes need a restart)
   --no-anonymous         Hide findings on unnamed inline types and anonymous functions
   -h, --help             Show this help message
 
 Configuration:
-  noref reads noref.config.json from the current directory when it exists:
+  norefs reads norefs.config.json from the current directory when it exists:
     { "project": "…"|[…], "entry": […], "ignore": ["globs"],
       "only": […], "ignoreDependencies": ["names or globs"] }
   Command-line flags win over the config file; entries merge.
 
 Suppressing findings:
-  // noref-ignore [reason]   on the reported line or the line above
-  // noref-ignore-file       before the first statement of a file
+  // norefs-ignore [reason]   on the reported line or the line above
+  // norefs-ignore-file       before the first statement of a file
 `;
 
 function main(): void {
@@ -214,13 +214,13 @@ function main(): void {
       process.stderr.write(`Baseline: ${baseline.matched} finding(s) matched and were not reported\n`);
       if (baseline.stale > 0) {
         process.stderr.write(
-          `${baseline.stale} baseline finding(s) no longer occur — run noref --baseline to refresh the file\n`
+          `${baseline.stale} baseline finding(s) no longer occur — run norefs --baseline to refresh the file\n`
         );
       }
     }
 
     if (values.export) {
-      const fileName = values.export === 'md' ? 'noref-findings.md' : 'noref-findings.json';
+      const fileName = values.export === 'md' ? 'norefs-findings.md' : 'norefs-findings.json';
       const content = values.export === 'md' ? formatMarkdown(findings, cwd) : formatJson(findings, cwd);
       fs.writeFileSync(path.join(cwd, fileName), `${content}\n`);
       process.stderr.write(`Wrote ${fileName}\n`);

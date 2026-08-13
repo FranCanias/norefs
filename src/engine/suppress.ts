@@ -1,14 +1,14 @@
 import type { Node, SourceFile } from 'ts-morph';
 
-/** `// noref-ignore` (with an optional reason after it) suppresses one finding. */
-const LINE_MARK = /\/[/*]\s*noref-ignore(?!-)/;
-/** `// noref-ignore-file` before the first statement suppresses every finding in the file. */
-const FILE_MARK = /\/[/*]\s*noref-ignore-file\b/;
+/** `// norefs-ignore` (with an optional reason after it) suppresses one finding. */
+const LINE_MARK = /\/[/*]\s*norefs-ignore(?!-)/;
+/** `// norefs-ignore-file` before the first statement suppresses every finding in the file. */
+const FILE_MARK = /\/[/*]\s*norefs-ignore-file\b/;
 
 const lineCache = new WeakMap<SourceFile, { text: string; lines: string[] }>();
 
 /**
- * True when a `noref-ignore` comment sits on the node's line or the line
+ * True when a `norefs-ignore` comment sits on the node's line or the line
  * above it. A suppressed declaration counts as used, so the analysis still
  * looks inside it for unused members.
  */
@@ -22,7 +22,7 @@ export function isNodeSuppressed(nameNode: Node): boolean {
   return LINE_MARK.test(lines[line - 1] ?? '') || (/^\s*\/[/*]/.test(above) && LINE_MARK.test(above));
 }
 
-/** True when a `noref-ignore-file` comment appears before the file's first statement. */
+/** True when a `norefs-ignore-file` comment appears before the file's first statement. */
 export function isFileSuppressed(sourceFile: SourceFile): boolean {
   const text = sourceFile.getFullText();
   const firstStatement = sourceFile.getStatements()[0];

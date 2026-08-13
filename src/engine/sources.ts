@@ -63,7 +63,7 @@ export class SourceIndex {
   }
 
   /**
-   * True when a `noref-ignore` comment sits on this offset's line or the line
+   * True when a `norefs-ignore` comment sits on this offset's line or the line
    * above it. The line above only counts when it is a standalone comment; a
    * trailing comment there suppresses that line, not this one.
    */

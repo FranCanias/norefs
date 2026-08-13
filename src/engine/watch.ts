@@ -44,7 +44,7 @@ export function watchProject(project: Project, tsConfigFilePaths: string[], onCh
  * or delete fires one event for the directory, not its contents. Returns true
  * when anything the analysis reads actually changed.
  */
-// noref-ignore used in tests
+// norefs-ignore used in tests
 export function refreshProject(project: Project, tsConfigFilePaths: string[], changedPaths: string[]): boolean {
   const manifestDirs = new Set(tsConfigFilePaths.map(filePath => path.dirname(path.resolve(filePath))));
   let dirty = changedPaths.some(

@@ -1,19 +1,19 @@
-# noref
+# norefs
 
 Find unused files, exports, and type/object members in a TypeScript project.
 
-Most dead-code tools stop at the declaration boundary: an interface counts as "used" even when half its members are dead. `noref` checks both levels. It finds unused files, unused exports, and unused exported types — and then looks inside the types that *are* used, including objects returned from exported functions and objects used as React component props.
+Most dead-code tools stop at the declaration boundary: an interface counts as "used" even when half its members are dead. `norefs` checks both levels. It finds unused files, unused exports, and unused exported types — and then looks inside the types that *are* used, including objects returned from exported functions and objects used as React component props.
 
 ## How it works
 
-`noref` loads your project with [ts-morph](https://ts-morph.com) and runs two passes.
+`norefs` loads your project with [ts-morph](https://ts-morph.com) and runs two passes.
 
 ### Module-level checks
 
 - **Unused files** — no chain of imports from any entry point reaches the file. Because the check is reachability, not a count of direct importers, a whole dead cluster gets reported — including two unused files that only import each other. Entry points are: paths given with `--entry`, `index`/`main`/`cli` files in the project root or `src/`, and the files `package.json` names in `main`, `bin`, and `exports` (paths into the compiled output are mapped back to source through the tsconfig `outDir` and `rootDir`). Test, spec, stories, bench, and config files (and anything under a `test`, `tests`, `__tests__`, or `__mocks__` directory) are their own entry points, so they are never reported either.
 - **Unused exports** and **unused exported types** — an exported declaration that nothing outside its file uses. Interfaces, type aliases, and enums count as types; functions, classes, variables, and namespaces count as exports. References resolve through re-export chains, so a barrel between the declaration and its consumers does not hide usage. A declaration that is used inside its own file but never imported still gets reported: the `export` keyword is dead even though the code is not. Exports of entry files are the public API and are never reported.
 - **Exports in used namespace** and **exported types in used namespace** — the same check, at lower confidence, for two namespace shapes. When a module is consumed through a used `import * as ns` binding, its zero-reference exports are reported this way, because the namespace object may be consumed dynamically. And when a TS `namespace N { … }` is used, its exported members whose references never leave the namespace body are reported this way too.
-- **Unused dependencies** and **unlisted dependencies** — entries of `dependencies` in `package.json` that no source file imports, and imported packages that no scanned `package.json` lists. `devDependencies` are consumed by tooling the import graph cannot see, so they count as listed but are never reported unused; the same goes for peer and optional dependencies. `@types/*` packages are consumed by the compiler and pair with their base package. Path aliases, node builtins, and relative imports never count as packages. Use the `ignoreDependencies` config key for runtime-only dependencies noref cannot see, like a CLI invoked from npm scripts.
+- **Unused dependencies** and **unlisted dependencies** — entries of `dependencies` in `package.json` that no source file imports, and imported packages that no scanned `package.json` lists. `devDependencies` are consumed by tooling the import graph cannot see, so they count as listed but are never reported unused; the same goes for peer and optional dependencies. `@types/*` packages are consumed by the compiler and pair with their base package. Path aliases, node builtins, and relative imports never count as packages. Use the `ignoreDependencies` config key for runtime-only dependencies norefs cannot see, like a CLI invoked from npm scripts.
 
 A finding at a higher level swallows the findings inside it: an unused file hides its exports and members, and an unused export with zero references anywhere hides its members. One line per problem, not fifty.
 
@@ -31,25 +31,27 @@ For each property it finds, it asks TypeScript's own "find all references" (via 
 
 Because the check is reference-based, it follows structural typing correctly — `v.x` resolves back to `interface A { x: number }` even without an explicit cast. See [Limitations](#limitations) for where that breaks down.
 
-When every member of a named interface or type alias is unused while the type itself is still referenced, noref adds one more finding: ``interface `X` becomes empty: every member is unused``. Removing the members would leave an empty `interface X {}` behind, and only you know whether its consumers should go too. An interface that extends another is exempt — empty, it still works as an alias.
+When every member of a named interface or type alias is unused while the type itself is still referenced, norefs adds one more finding: ``interface `X` becomes empty: every member is unused``. Removing the members would leave an empty `interface X {}` behind, and only you know whether its consumers should go too. An interface that extends another is exempt — empty, it still works as an alias.
 
 ## Install
 
-`noref` isn't published yet. From a checkout of this repository:
-
 ```sh
-pnpm install
-pnpm run build
-pnpm link --global
+npm install -g norefs
 ```
 
-Then run `noref` from any project with a `tsconfig.json`.
+Or run it without installing:
+
+```sh
+npx norefs
+```
+
+Then run `norefs` from any project with a `tsconfig.json`.
 
 ## Usage
 
 ```sh
-noref [options]
-noref init      # write a noref.config.json with every option at its default
+norefs [options]
+norefs init      # write a norefs.config.json with every option at its default
 ```
 
 | Option | Description |
@@ -59,19 +61,19 @@ noref init      # write a noref.config.json with every option at its default
 | `--entry <path>` | Treat this file or directory as an entry point: never reported unused, exports never reported (repeatable) |
 | `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members`, `empty-types`, `dependencies`, `unlisted` |
 | `--reporter <name>` | Output format: `text` (default), `json`, `github`, `sarif` |
-| `--baseline` | Write the findings to `noref-baseline.json` and exit; later runs fail on new findings only |
-| `--export <md\|json>` | Also write findings to `noref-findings.md` or `noref-findings.json` in the current directory |
+| `--baseline` | Write the findings to `norefs-baseline.json` and exit; later runs fail on new findings only |
+| `--export <md\|json>` | Also write findings to `norefs-findings.md` or `norefs-findings.json` in the current directory |
 | `--fix` | Remove reported members and dead `export` keywords from the source files |
 | `--dry-run` | With `--fix`: print the would-be changes as a unified diff without writing any file |
 | `--watch` | Re-run on save: keep the loaded project in memory, refresh the changed files, and report again |
 | `--no-anonymous` | Hide findings on unnamed inline types and anonymous functions |
 | `-h, --help` | Show the help message |
 
-`noref` exits with code `1` when it finds unused code, `0` otherwise — so it slots into CI the same way a linter does. With `--fix` it exits `0` after it removes what it found.
+`norefs` exits with code `1` when it finds unused code, `0` otherwise — so it slots into CI the same way a linter does. With `--fix` it exits `0` after it removes what it found.
 
 ### Configuration file
 
-Put a `noref.config.json` next to where you run `noref`, and CI and teammates run the same thing without a shell alias:
+Put a `norefs.config.json` next to where you run `norefs`, and CI and teammates run the same thing without a shell alias:
 
 ```json
 {
@@ -83,7 +85,7 @@ Put a `noref.config.json` next to where you run `noref`, and CI and teammates ru
 }
 ```
 
-`noref init` writes that file for you, with every key present and set to its default:
+`norefs init` writes that file for you, with every key present and set to its default:
 
 ```json
 {
@@ -106,26 +108,26 @@ A finding can be wrong — a member kept for API symmetry, a type consumed by re
 ```ts
 export interface User {
   name: string;
-  // noref-ignore: kept for API symmetry
+  // norefs-ignore: kept for API symmetry
   legacyId: number;
-  createdAt: Date; // noref-ignore
+  createdAt: Date; // norefs-ignore
 }
 ```
 
-`// noref-ignore` on the reported line, or alone on the line above, suppresses that one finding. The reason after the colon is optional but kind to the next reader. A suppressed declaration counts as used, so noref still looks inside it: suppressing an unused export keeps reporting its unused members.
+`// norefs-ignore` on the reported line, or alone on the line above, suppresses that one finding. The reason after the colon is optional but kind to the next reader. A suppressed declaration counts as used, so norefs still looks inside it: suppressing an unused export keeps reporting its unused members.
 
-To silence a whole file — generated code, for instance — put `// noref-ignore-file` before its first statement. That also covers the unused-file finding.
+To silence a whole file — generated code, for instance — put `// norefs-ignore-file` before its first statement. That also covers the unused-file finding.
 
 ### Running in CI
 
-A codebase with hundreds of pre-existing findings does not need a big-bang cleanup to adopt noref. Record the debt once and fail only on new findings:
+A codebase with hundreds of pre-existing findings does not need a big-bang cleanup to adopt norefs. Record the debt once and fail only on new findings:
 
 ```sh
-noref --baseline        # writes noref-baseline.json; commit it
-noref                   # from now on: exit 1 only for findings not in the baseline
+norefs --baseline        # writes norefs-baseline.json; commit it
+norefs                   # from now on: exit 1 only for findings not in the baseline
 ```
 
-The baseline matches findings by kind, file, and name — not by line — so ordinary edits do not break it. When findings are actually removed, noref tells you the baseline has stale entries; run `--baseline` again to refresh it. `--fix` also skips baselined findings, so it only removes new dead code.
+The baseline matches findings by kind, file, and name — not by line — so ordinary edits do not break it. When findings are actually removed, norefs tells you the baseline has stale entries; run `--baseline` again to refresh it. `--fix` also skips baselined findings, so it only removes new dead code.
 
 Two reporters are made for CI:
 
@@ -135,23 +137,23 @@ Two reporters are made for CI:
 ### Speed
 
 Unused files and both dependency checks are decided by the import graph, and the
-import graph is in the source text. Ask for only those and noref never builds a
+import graph is in the source text. Ask for only those and norefs never builds a
 type checker: a single-pass scanner reads every file, the compiler resolves the
 specifiers it found, and the answer arrives in well under a second.
 
 ```sh
-noref --only files,dependencies,unlisted
+norefs --only files,dependencies,unlisted
 ```
 
 The member checks are the other half. To know that `{ id: 1 }` writes the `id`
-an interface declares, noref has to ask the compiler what type that object
+an interface declares, norefs has to ask the compiler what type that object
 literal is read as — and answering that resolves the types of the surrounding
 call or component. It is most of what a full run costs, and nothing but a
 member finding rests on it, so a run that asks for no member findings does not
 pay for it either:
 
 ```sh
-noref --only files,exports,types,ns-exports,ns-types,dependencies,unlisted
+norefs --only files,exports,types,ns-exports,ns-types,dependencies,unlisted
 ```
 
 On a 338-file application:
@@ -165,7 +167,7 @@ On a 338-file application:
 The findings are the same either way — the kinds you ask for change the work
 done, not the answers.
 
-For the checks that do need references, noref indexes the whole project once —
+For the checks that do need references, norefs indexes the whole project once —
 one pass over every identifier, each filed under the declaration it names —
 instead of asking the language service per declaration, which would rebuild an
 import tracker every time.
@@ -184,27 +186,27 @@ component — still pay the checker's price.
 
 ### Watch mode
 
-While you clean up a codebase, run noref in a terminal on the side:
+While you clean up a codebase, run norefs in a terminal on the side:
 
 ```sh
-noref --watch
+norefs --watch
 ```
 
-Loading the project is the expensive part of a run, so watch mode does it once. On every save it refreshes only the changed files in memory, re-analyzes, and reports again — created and deleted files included. Changes to `tsconfig.json` or `noref.config.json` need a restart; `--watch` does not combine with `--fix` or `--baseline`.
+Loading the project is the expensive part of a run, so watch mode does it once. On every save it refreshes only the changed files in memory, re-analyzes, and reports again — created and deleted files included. Changes to `tsconfig.json` or `norefs.config.json` need a restart; `--watch` does not combine with `--fix` or `--baseline`.
 
 ### Fixing automatically
 
-`noref --fix` prints the findings, then fixes what it safely can and saves the files:
+`norefs --fix` prints the findings, then fixes what it safely can and saves the files:
 
 - An unused member is deleted. One case is special: an unused parameter property (`constructor(private readonly dead: number)`) only loses its modifiers and stays a plain parameter, so the constructor signature and every `new` call site keep working.
 - An unused export with references inside its own file loses only the `export` keyword. One with no references at all is removed whole, together with every import and re-export specifier that forwarded it — nothing dangles in a barrel.
-- After the removals, noref cleans each touched file: imports and unexported top-level declarations that only the removed code used are removed too. Then it re-analyzes and fixes again until nothing fixable is left, so cascades converge in one command.
+- After the removals, norefs cleans each touched file: imports and unexported top-level declarations that only the removed code used are removed too. Then it re-analyzes and fixes again until nothing fixable is left, so cascades converge in one command.
 - Unused files, namespace findings, and emptied types are never touched. Deleting a file is your call, a namespace finding is a lower-confidence guess, and an emptied type needs your judgment about its consumers.
 - `--fix` only touches what is reported, so `--only`, `ignore` globs, and suppression comments limit the fixes the same way they limit the findings.
 
 Review the diff before you commit. The emptied-type findings point at the leftovers that need human judgment.
 
-To see the diff without touching anything, run `noref --fix --dry-run`. It applies the full fix — cascades included — to the in-memory project only and prints one unified diff per file. The exit code stays `1`, so it also works as a strict CI check.
+To see the diff without touching anything, run `norefs --fix --dry-run`. It applies the full fix — cascades included — to the in-memory project only and prints one unified diff per file. The exit code stays `1`, so it also works as a strict CI check.
 
 ### Example
 
@@ -227,15 +229,15 @@ Unused code (4): 1 file, 1 export, 2 properties
 Some findings point at inline types with no name to anchor them — a `{x, y}` parameter type on an anonymous callback, for instance. These are more prone to false positives: TypeScript's reference search loses track of a value forwarded via shorthand into a *differently-declared* structural type, because the read then resolves to the other declaration. Run with `--no-anonymous` to see only findings tied to a named interface, type alias, or function:
 
 ```sh
-noref --no-anonymous
+norefs --no-anonymous
 ```
 
 ### Monorepos and cross-project scans
 
-Pass `-p` once per package and noref loads them all into one scan, so cross-package usage counts:
+Pass `-p` once per package and norefs loads them all into one scan, so cross-package usage counts:
 
 ```sh
-noref -p packages/app/tsconfig.json -p packages/lib/tsconfig.json
+norefs -p packages/app/tsconfig.json -p packages/lib/tsconfig.json
 ```
 
 Every file resolves its imports with the compiler options of the tsconfig that owns it, so per-package `paths` aliases work as they do in each package's own build, and `package.json` entries map back to source through each package's own `outDir` and `rootDir`. The scan still builds one program — that is what lets a reference in one package count as usage of another. When the packages import each other by package name, map that name in the importing package's `paths` to the target's source entry point, not its built `.d.ts`.
@@ -244,9 +246,9 @@ To find unused properties in a library whose only consumer lives in another repo
 
 1. Write an umbrella `tsconfig.json` whose `include` covers both projects' source files.
 2. Reproduce **every** path alias from both repos in its `paths` — including the library's internal aliases — and map the package specifier (`"my-lib"`) to the library's `src` entry point, not its built `.d.ts`.
-3. Run `noref -p umbrella.tsconfig.json --scope path/to/library/src`.
+3. Run `norefs -p umbrella.tsconfig.json --scope path/to/library/src`.
 
-Resolution is everything here: each import that fails to resolve hides all references flowing through it, which turns used properties into "unused" findings. noref checks for this and prints a warning listing the unresolved specifiers — fix those before trusting the results.
+Resolution is everything here: each import that fails to resolve hides all references flowing through it, which turns used properties into "unused" findings. norefs checks for this and prints a warning listing the unresolved specifiers — fix those before trusting the results.
 
 ## What counts as usage
 
@@ -262,9 +264,9 @@ The test suite verifies that the reference check resolves all of these — none 
 - class members reached through a declared `implements` or `extends` — TypeScript merges those reference groups
 - reads through a spread copy of a class instance resolve back to the class members
 
-## When noref stays silent
+## When norefs stays silent
 
-Some consumption is invisible to static reference search. Rather than guess, noref suppresses those findings entirely:
+Some consumption is invisible to static reference search. Rather than guess, norefs suppresses those findings entirely:
 
 - **`keyof`-targeted types**: when `keyof T` appears anywhere, code is enumerating or indexing T's keys dynamically. All of T's members are skipped.
 - **Key-enumerating and serializing sinks**: a value passed to `Object.keys`/`values`/`entries`/`assign`, `JSON.stringify`, `structuredClone`, or `Reflect.ownKeys`, iterated with `for...in`, or probed with a dynamic `key in v` marks its whole type as dynamically consumed.
@@ -291,7 +293,7 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 ```
 src/
   index.ts      CLI entry point
-  config.ts     noref.config.json loading and `noref init`
+  config.ts     norefs.config.json loading and `norefs init`
   engine/       project loading, the module-level checks (files, exports, namespaces, dependencies),
                 the project-wide reference index, the syntax-only pipeline and its scanner,
                 suppression comments, human-readable labels, orchestration, output formatting

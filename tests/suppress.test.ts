@@ -14,9 +14,9 @@ describe('suppression comments', () => {
       '/main.ts': [
         'export interface User {',
         '  name: string;',
-        '  // noref-ignore: kept for API symmetry',
+        '  // norefs-ignore: kept for API symmetry',
         '  legacyId: number;',
-        '  probed: number; // noref-ignore',
+        '  probed: number; // norefs-ignore',
         '  reallyDead: number;',
         '}',
         'export function greet(u: User): string {',
@@ -32,7 +32,7 @@ describe('suppression comments', () => {
     const findings = findingsOf({
       '/main.ts': "import { used } from './lib';\nused();\n",
       '/lib.ts': [
-        '// noref-ignore: consumers arrive next release',
+        '// norefs-ignore: consumers arrive next release',
         'export interface DeadShape {',
         '  alsoDead: number;',
         '}',
@@ -43,28 +43,28 @@ describe('suppression comments', () => {
     expect(findings.map(f => [f.kind, f.name])).toEqual([['member', 'alsoDead']]);
   });
 
-  it('suppresses everything in a file marked noref-ignore-file', () => {
+  it('suppresses everything in a file marked norefs-ignore-file', () => {
     const findings = findingsOf({
       '/main.ts': 'export const keep = 1;\n',
-      '/orphan.ts': '// noref-ignore-file: generated\nexport const gone = 1;\n',
+      '/orphan.ts': '// norefs-ignore-file: generated\nexport const gone = 1;\n',
     });
     expect(findings).toEqual([]);
   });
 
-  it('ignores a noref-ignore-file comment that is not in the file header', () => {
+  it('ignores a norefs-ignore-file comment that is not in the file header', () => {
     const findings = findingsOf({
       '/main.ts': 'export const keep = 1;\n',
-      '/orphan.ts': 'export const gone = 1;\n// noref-ignore-file\n',
+      '/orphan.ts': 'export const gone = 1;\n// norefs-ignore-file\n',
     });
     expect(findings.map(f => [f.kind, f.name])).toEqual([['file', 'orphan.ts']]);
   });
 
-  it('does not let noref-ignore-file act as a line suppression', () => {
+  it('does not let norefs-ignore-file act as a line suppression', () => {
     const findings = findingsOf({
       '/main.ts': [
         'export interface User {',
         '  name: string;',
-        '  // noref-ignore-file',
+        '  // norefs-ignore-file',
         '  dead: number;',
         '}',
         'export function greet(u: User): string {',

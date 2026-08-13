@@ -10,7 +10,7 @@ function make(cwd: string, kind: FindingKind, relativePath: string, name: string
 }
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'noref-baseline-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-baseline-'));
 }
 
 describe('baseline', () => {
@@ -37,7 +37,7 @@ describe('baseline', () => {
     const a = make(cwd, 'member', 'src/a.ts', 'x', 1);
     const b = make(cwd, 'member', 'src/a.ts', 'x', 9);
     writeBaseline([a, b], cwd);
-    const entries = JSON.parse(fs.readFileSync(path.join(cwd, 'noref-baseline.json'), 'utf8'));
+    const entries = JSON.parse(fs.readFileSync(path.join(cwd, 'norefs-baseline.json'), 'utf8'));
     expect(entries).toHaveLength(1);
     expect(entries[0].count).toBe(2);
 
@@ -57,7 +57,7 @@ describe('baseline', () => {
 
   it('throws on an invalid baseline file', () => {
     const cwd = tempDir();
-    fs.writeFileSync(path.join(cwd, 'noref-baseline.json'), '{ nope');
+    fs.writeFileSync(path.join(cwd, 'norefs-baseline.json'), '{ nope');
     expect(() => applyBaseline([], cwd)).toThrow(/not valid JSON/);
   });
 });

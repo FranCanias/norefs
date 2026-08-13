@@ -6,7 +6,7 @@ import { ts } from 'ts-morph';
  *
  * The language service answers "where is this name used?" one declaration at a
  * time, and every answer rebuilds an import tracker and re-resolves every
- * module specifier in the project first: about 7 ms a call. noref asks the
+ * module specifier in the project first: about 7 ms a call. norefs asks the
  * question for nearly every declaration it finds — thousands of calls, most of
  * that time spent on the same setup over and over.
  *

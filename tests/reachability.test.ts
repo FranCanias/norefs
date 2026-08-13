@@ -33,10 +33,10 @@ describe('reachability-based unused files', () => {
     ]);
   });
 
-  it('treats a noref-ignore-file file as a root that keeps its imports alive', () => {
+  it('treats a norefs-ignore-file file as a root that keeps its imports alive', () => {
     const findings = findingsOf({
       '/main.ts': 'export const keep = 1;\n',
-      '/kept.ts': "// noref-ignore-file\nimport { dep } from './dep';\nexport const value = dep;\n",
+      '/kept.ts': "// norefs-ignore-file\nimport { dep } from './dep';\nexport const value = dep;\n",
       '/dep.ts': 'export const dep = 1;\n',
     });
     expect(findings).toEqual([]);

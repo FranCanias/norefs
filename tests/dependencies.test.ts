@@ -80,10 +80,10 @@ describe('dependency checks', () => {
     expect(findings).toEqual([]);
   });
 
-  it('honors a noref-ignore comment on an unlisted import line', () => {
+  it('honors a norefs-ignore comment on an unlisted import line', () => {
     const findings = depFindings(
       { dependencies: {} },
-      { '/main.ts': "import { x } from 'mystery'; // noref-ignore: injected at runtime\nexport const y = x;\n" }
+      { '/main.ts': "import { x } from 'mystery'; // norefs-ignore: injected at runtime\nexport const y = x;\n" }
     );
     expect(findings).toEqual([]);
   });

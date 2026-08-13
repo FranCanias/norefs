@@ -92,21 +92,21 @@ describe('the scanner reports positions TypeScript agrees with', () => {
 
 describe('the scanner finds the suppression marks', () => {
   it('a line mark, and not the -file form', () => {
-    expect([...scanText('const a = 1; // noref-ignore\n').suppressedLines]).toEqual([1]);
-    expect([...scanText('// noref-ignore-file\nconst a = 1;\n').suppressedLines]).toEqual([]);
-    expect([...scanText('const a = 1; // noref-ignore because reasons\n').suppressedLines]).toEqual([1]);
+    expect([...scanText('const a = 1; // norefs-ignore\n').suppressedLines]).toEqual([1]);
+    expect([...scanText('// norefs-ignore-file\nconst a = 1;\n').suppressedLines]).toEqual([]);
+    expect([...scanText('const a = 1; // norefs-ignore because reasons\n').suppressedLines]).toEqual([1]);
   });
 
   it('which lines open with a comment, so a trailing mark stays on its own line', () => {
-    const scan = scanText('  // noref-ignore\nconst a = 1;\nconst b = 2; // noref-ignore\n');
+    const scan = scanText('  // norefs-ignore\nconst a = 1;\nconst b = 2; // norefs-ignore\n');
     expect([...scan.suppressedLines]).toEqual([1, 3]);
     expect([...scan.commentLines]).toEqual([1]);
   });
 
   it('a file mark, only in the leading comments', () => {
-    expect(scanText('// noref-ignore-file\nconst a = 1;\n').fileSuppressed).toBe(true);
-    expect(scanText('/* noref-ignore-file */\nconst a = 1;\n').fileSuppressed).toBe(true);
-    expect(scanText('const a = 1;\n// noref-ignore-file\n').fileSuppressed).toBe(false);
-    expect(scanText('// noref-ignore-files\n').fileSuppressed).toBe(false);
+    expect(scanText('// norefs-ignore-file\nconst a = 1;\n').fileSuppressed).toBe(true);
+    expect(scanText('/* norefs-ignore-file */\nconst a = 1;\n').fileSuppressed).toBe(true);
+    expect(scanText('const a = 1;\n// norefs-ignore-file\n').fileSuppressed).toBe(false);
+    expect(scanText('// norefs-ignore-files\n').fileSuppressed).toBe(false);
   });
 });

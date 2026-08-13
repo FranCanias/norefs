@@ -5,13 +5,13 @@ import { describe, expect, it } from 'vitest';
 import { initConfig, loadConfig } from '../src/config';
 
 function dirWith(content?: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'noref-config-'));
-  if (content !== undefined) fs.writeFileSync(path.join(dir, 'noref.config.json'), content);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-config-'));
+  if (content !== undefined) fs.writeFileSync(path.join(dir, 'norefs.config.json'), content);
   return dir;
 }
 
 describe('loadConfig', () => {
-  it('returns empty defaults when noref.config.json is missing', () => {
+  it('returns empty defaults when norefs.config.json is missing', () => {
     expect(loadConfig(dirWith())).toEqual({
       project: [],
       entry: [],
@@ -61,8 +61,8 @@ describe('loadConfig', () => {
 describe('initConfig', () => {
   it('writes every key with its default, and loadConfig reads it back', () => {
     const dir = dirWith();
-    expect(initConfig(dir)).toBe('noref.config.json');
-    expect(fs.readFileSync(path.join(dir, 'noref.config.json'), 'utf8')).toBe(
+    expect(initConfig(dir)).toBe('norefs.config.json');
+    expect(fs.readFileSync(path.join(dir, 'norefs.config.json'), 'utf8')).toBe(
       `${JSON.stringify(
         { project: ['tsconfig.json'], entry: [], ignore: [], only: [], ignoreDependencies: [] },
         null,

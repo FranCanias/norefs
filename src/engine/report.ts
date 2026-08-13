@@ -69,7 +69,7 @@ export function formatText(findings: Finding[], cwd: string): string {
 }
 
 export function formatMarkdown(findings: Finding[], cwd: string): string {
-  const lines: string[] = ['# noref findings', ''];
+  const lines: string[] = ['# norefs findings', ''];
   if (findings.length === 0) {
     lines.push('No unused code found.');
     return lines.join('\n');
@@ -107,7 +107,7 @@ export function formatGitHub(findings: Finding[], cwd: string): string {
   if (findings.length === 0) return 'No unused code found.';
   const lines = findings.map(f => {
     const file = escapeProperty(path.relative(cwd, f.filePath));
-    return `::error file=${file},line=${f.line},col=${f.column},title=noref::${escapeData(describeFinding(f))}`;
+    return `::error file=${file},line=${f.line},col=${f.column},title=norefs::${escapeData(describeFinding(f))}`;
   });
   lines.push(summarize(findings));
   return lines.join('\n');
@@ -130,8 +130,8 @@ export function formatSarif(findings: Finding[], cwd: string): string {
         {
           tool: {
             driver: {
-              name: 'noref',
-              informationUri: 'https://github.com/FranCanias/noref',
+              name: 'norefs',
+              informationUri: 'https://github.com/FranCanias/norefs',
               rules: [...new Set(findings.map(f => f.kind))].map(kind => ({ id: kind })),
             },
           },

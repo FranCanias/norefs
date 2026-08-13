@@ -1,21 +1,43 @@
 {
-  "name": "noref",
-  "version": "alpha-0.0.0",
-  "description": "",
-  "main": "dist/index.js",
+  "name": "norefs",
+  "version": "0.1.0",
+  "description": "Find unused files, exports, and type/object members in a TypeScript project.",
   "bin": {
-    "noref": "dist/index.js"
+    "norefs": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",
     "lint": "biome lint .",
     "typecheck": "tsc --noEmit",
     "format": "biome format --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "typescript",
+    "dead-code",
+    "unused-exports",
+    "unused-files",
+    "lint",
+    "cli",
+    "ts-morph"
+  ],
+  "author": "Fran Cañas",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FranCanias/norefs.git"
+  },
+  "homepage": "https://github.com/FranCanias/norefs#readme",
+  "bugs": {
+    "url": "https://github.com/FranCanias/norefs/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "packageManager": "pnpm@10.33.0",
   "devDependencies": {
     "@biomejs/biome": "2.5.8",

@@ -12,7 +12,7 @@ import { isFileSuppressed, isNodeSuppressed } from './suppress';
 export interface AnalyzeOptions extends ModuleOptions {
   /**
    * The kinds this run will report. Member analysis is the expensive half of
-   * noref — it has to know which member every object literal and every JSX
+   * norefs — it has to know which member every object literal and every JSX
    * attribute writes — so a run that asks for none of it skips that work
    * rather than doing it and filtering the findings away.
    */

@@ -10,11 +10,11 @@ interface Config {
   ignoreDependencies: string[];
 }
 
-const CONFIG_FILE = 'noref.config.json';
+const CONFIG_FILE = 'norefs.config.json';
 
 const KNOWN_KEYS = ['project', 'entry', 'ignore', 'only', 'ignoreDependencies'];
 
-/** Read noref.config.json from the directory, if present. Throws when the file is invalid. */
+/** Read norefs.config.json from the directory, if present. Throws when the file is invalid. */
 export function loadConfig(dir: string): Config {
   const filePath = path.join(dir, CONFIG_FILE);
   if (!fs.existsSync(filePath)) return { project: [], entry: [], ignore: [], ignoreDependencies: [] };
@@ -44,7 +44,7 @@ export function loadConfig(dir: string): Config {
 }
 
 /**
- * Write a noref.config.json holding every key at its default. Empty arrays keep
+ * Write a norefs.config.json holding every key at its default. Empty arrays keep
  * the defaults: no extra entry points, nothing ignored, every kind reported.
  * Returns the file name. Throws when the file already exists.
  */

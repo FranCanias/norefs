@@ -25,7 +25,7 @@ export function isHarnessFile(filePath: string, rootDirs: string[]): boolean {
 
 /**
  * Files reachable through imports from any root: entry files, harness files,
- * and files suppressed with noref-ignore-file (keeping a file means keeping
+ * and files suppressed with norefs-ignore-file (keeping a file means keeping
  * what it imports). Counting reachability instead of direct importers catches
  * dead clusters, like two unused files that import each other.
  */

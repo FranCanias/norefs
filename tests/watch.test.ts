@@ -6,7 +6,7 @@ import { analyze } from '../src/engine/analyze';
 import { loadProject } from '../src/engine/project';
 import { refreshProject } from '../src/engine/watch';
 
-const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'noref-watch-')));
+const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-watch-')));
 const tsConfigPath = path.join(dir, 'tsconfig.json');
 const libPath = path.join(dir, 'src/lib.ts');
 const orphanPath = path.join(dir, 'src/orphan.ts');

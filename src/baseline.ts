@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Finding, FindingKind } from './types';
 
-const FILE_NAME = 'noref-baseline.json';
+const FILE_NAME = 'norefs-baseline.json';
 
 /**
  * One recorded finding. The key deliberately has no line or column: code moves,
@@ -26,7 +26,7 @@ interface BaselineResult {
   stale: number;
 }
 
-/** Record the findings in noref-baseline.json and return the file name. */
+/** Record the findings in norefs-baseline.json and return the file name. */
 export function writeBaseline(findings: Finding[], cwd: string): string {
   const entries = new Map<string, BaselineEntry>();
   for (const finding of findings) {
@@ -45,7 +45,7 @@ export function writeBaseline(findings: Finding[], cwd: string): string {
 
 /**
  * Subtract the baseline from the findings. Returns undefined when no
- * noref-baseline.json exists; throws when the file is invalid.
+ * norefs-baseline.json exists; throws when the file is invalid.
  */
 export function applyBaseline(findings: Finding[], cwd: string): BaselineResult | undefined {
   const filePath = path.join(cwd, FILE_NAME);

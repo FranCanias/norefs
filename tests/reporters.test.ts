@@ -10,7 +10,7 @@ describe('formatGitHub', () => {
   it('emits one workflow command per finding plus the summary', () => {
     const output = formatGitHub([make('export', 'dead')], '/proj');
     const lines = output.split('\n');
-    expect(lines[0]).toBe('::error file=src/a.ts,line=4,col=3,title=noref::unused export `dead`');
+    expect(lines[0]).toBe('::error file=src/a.ts,line=4,col=3,title=norefs::unused export `dead`');
     expect(lines[1]).toBe('Unused code (1): 1 export');
   });
 
@@ -40,7 +40,7 @@ describe('formatSarif', () => {
     const sarif = JSON.parse(formatSarif([make('member', 'legacyId', 'interface `User`')], '/proj'));
     expect(sarif.version).toBe('2.1.0');
     const run = sarif.runs[0];
-    expect(run.tool.driver.name).toBe('noref');
+    expect(run.tool.driver.name).toBe('norefs');
     expect(run.tool.driver.rules).toEqual([{ id: 'member' }]);
     const result = run.results[0];
     expect(result.ruleId).toBe('member');

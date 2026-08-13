@@ -13,11 +13,11 @@ export interface Specifier {
 export interface FileScan {
   /** The file could not be read; every other field is empty. */
   unreadable: boolean;
-  /** A `noref-ignore-file` mark stands in the file's leading comments. */
+  /** A `norefs-ignore-file` mark stands in the file's leading comments. */
   fileSuppressed: boolean;
   /** Offset where each line begins; line N is at index N - 1. */
   lineStarts: number[];
-  /** 1-based lines carrying a `noref-ignore` mark. */
+  /** 1-based lines carrying a `norefs-ignore` mark. */
   suppressedLines: number[];
   /** 1-based lines whose first non-blank character opens a comment. */
   commentLines: number[];
@@ -348,9 +348,9 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
   return out;
 }
 
-/** `noref-ignore` after a comment opener, and not the `-file` form. */
+/** `norefs-ignore` after a comment opener, and not the `-file` form. */
 function hasLineMark(line: string): boolean {
-  const mark = 'noref-ignore';
+  const mark = 'norefs-ignore';
   for (let i = 0; i + 1 < line.length; i++) {
     if (line[i] !== '/' || (line[i + 1] !== '/' && line[i + 1] !== '*')) continue;
     let j = i + 2;
@@ -362,9 +362,9 @@ function hasLineMark(line: string): boolean {
   return false;
 }
 
-/** `noref-ignore-file` after a comment opener, as a whole word. */
+/** `norefs-ignore-file` after a comment opener, as a whole word. */
 function hasFileMark(text: string): boolean {
-  const mark = 'noref-ignore-file';
+  const mark = 'norefs-ignore-file';
   for (let i = 0; i + 1 < text.length; i++) {
     if (text[i] !== '/' || (text[i + 1] !== '/' && text[i + 1] !== '*')) continue;
     let j = i + 2;
