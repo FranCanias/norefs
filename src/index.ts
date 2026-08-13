@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import './compile-cache';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import type { Project } from 'ts-morph';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import type { Project } from 'ts-morph';
 import { applyBaseline, writeBaseline } from './baseline';
 import { initConfig, loadConfig } from './config';
 import { analyze } from './engine/analyze';
@@ -56,6 +57,9 @@ Options:
   --no-verify            Skip the check after --fix. By default norefs
                          type-checks in memory, holds back any fix that breaks
                          the build, and saves only what verifies
+  --verify-command <cmd> A command that must exit 0 for the fixes to count
+                         (your test suite, say). Runs after the type check
+                         passes; a fix that fails it is held back too
   --ratchet              With a baseline: drop entries whose finding vanished,
                          so the baseline count can only go down
   --dry-run              With --fix: print the would-be changes as a unified
@@ -91,6 +95,7 @@ function main(): void {
       fix: { type: 'boolean', default: false },
       'fix-unsafe': { type: 'boolean', default: false },
       verify: { type: 'boolean', default: true },
+      'verify-command': { type: 'string' },
       ratchet: { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
       watch: { type: 'boolean', default: false },
@@ -307,6 +312,7 @@ function main(): void {
     const save = !values['dry-run'];
     const unsafe = values['fix-unsafe'];
     const verify = values.verify && findings.some(f => isFixable(f, unsafe));
+    const command = values['verify-command'];
 
     const result = applyVerifiedFixes({
       project: project(),
@@ -317,6 +323,7 @@ function main(): void {
       },
       unsafe,
       verify,
+      check: command ? commandCheck(command, cwd) : undefined,
       cwd,
       log: line => process.stderr.write(`${line}\n`),
     });
@@ -351,7 +358,7 @@ function main(): void {
     if (verify) process.stderr.write('Verified: tsc reports no new errors after the fixes.\n');
     process.stderr.write(`Fixed ${result.fixed} finding(s) in ${result.touched.length} file(s)\n`);
 
-    const skipped = findings.filter(f => !isFixable(f, unsafe)).length + result.heldBack.length;
+    const skipped = findings.filter(f => !isFixable(f, unsafe)).length;
     if (skipped > 0) {
       const untouched = unsafe
         ? 'files, namespaces, emptied types, dependencies'
@@ -362,6 +369,29 @@ function main(): void {
   }
 
   process.exitCode = 1;
+}
+
+/**
+ * The --verify-command probe. An external command reads from disk, so the
+ * candidate texts go to disk for the run and the originals come back before
+ * the verdict — a failed probe leaves no trace.
+ */
+function commandCheck(command: string, cwd: string): (project: Project, dirtyFilePaths: string[]) => string[] {
+  return (project, dirtyFilePaths) => {
+    const originals = new Map(dirtyFilePaths.map(filePath => [filePath, fs.readFileSync(filePath, 'utf8')]));
+    try {
+      for (const filePath of dirtyFilePaths) {
+        const text = project.getSourceFile(filePath)?.getFullText();
+        if (text !== undefined) fs.writeFileSync(filePath, text);
+      }
+      const run = spawnSync(command, { shell: true, cwd, encoding: 'utf8' });
+      if (run.status === 0) return [];
+      const tail = `${run.stdout ?? ''}\n${run.stderr ?? ''}`.trim().split('\n').slice(-3).join(' | ');
+      return [`\`${command}\` exited with ${run.status ?? 'a signal'}: ${tail}`];
+    } finally {
+      for (const [filePath, text] of originals) fs.writeFileSync(filePath, text);
+    }
+  };
 }
 
 main();

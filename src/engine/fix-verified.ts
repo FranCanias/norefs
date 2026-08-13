@@ -4,13 +4,13 @@ import type { Finding } from '../types';
 import { applyFixes, isFixable } from './fix';
 import { errorInventory, newErrors, snapshotTexts } from './verify';
 
-export interface HeldBack {
+interface HeldBack {
   finding: Finding;
   /** The verification errors that appeared while this fix was applied. */
   errors: string[];
 }
 
-export interface VerifiedFixOptions {
+interface VerifiedFixOptions {
   project: Project;
   /** The findings of the pristine project, already baseline-filtered. */
   findings: Finding[];
@@ -20,15 +20,17 @@ export interface VerifiedFixOptions {
   /** Verify with the type checker: no new errors compared to the pre-fix inventory. */
   verify: boolean;
   /**
-   * A custom probe instead of the type-error inventory: empty result means
-   * the project is healthy. The seam a test-command check plugs into.
+   * An extra probe on top of the type-error inventory: empty result means the
+   * project is healthy. It runs only when the type check is green, and gets
+   * the files currently changed in memory. The seam --verify-command plugs
+   * into.
    */
-  check?: (project: Project) => string[];
+  check?: (project: Project, dirtyFilePaths: string[]) => string[];
   cwd: string;
   log: (line: string) => void;
 }
 
-export interface VerifiedFixResult {
+interface VerifiedFixResult {
   fixed: number;
   /** Files changed in memory. Nothing is saved — that is the caller's call. */
   touched: string[];
@@ -54,11 +56,12 @@ const MAX_HELD_BACK = 8;
 export function applyVerifiedFixes(options: VerifiedFixOptions): VerifiedFixResult {
   const { project, cwd } = options;
   const pristine = snapshotTexts(project);
-  const inventory = options.verify && !options.check ? errorInventory(project) : undefined;
+  const inventory = options.verify ? errorInventory(project) : undefined;
   const verifying = options.verify || options.check !== undefined;
   const probe = (): string[] => {
-    if (options.check) return options.check(project);
-    return inventory ? newErrors(inventory, project, cwd) : [];
+    const typeErrors = inventory ? newErrors(inventory, project, cwd) : [];
+    if (typeErrors.length > 0) return typeErrors;
+    return options.check ? options.check(project, [...dirty]) : [];
   };
 
   const dirty = new Set<string>();
@@ -78,7 +81,7 @@ export function applyVerifiedFixes(options: VerifiedFixOptions): VerifiedFixResu
   // probe is green on the pristine tree by construction, so only a custom
   // check needs the pre-flight.
   if (options.check) {
-    const preExisting = options.check(project);
+    const preExisting = options.check(project, []);
     if (preExisting.length > 0) return { fixed: 0, touched: [], heldBack: [], aborted: preExisting };
   }
 

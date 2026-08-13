@@ -76,6 +76,7 @@ norefs init      # write a norefs.config.json with every option at its default
 | `--baseline` | Write the findings to `norefs-baseline.json` and exit; later runs fail on new findings only |
 | `--ratchet` | With a baseline: drop entries whose finding vanished, so the count can only go down |
 | `--no-verify` | Skip the check after `--fix`; by default norefs type-checks in memory, holds back any fix that breaks the build, and saves only what verifies |
+| `--verify-command <cmd>` | A command that must exit 0 for the fixes to count (your test suite); runs after the type check passes, and a fix that fails it is held back too |
 | `--export <md\|json>` | Also write findings to `norefs-findings.md` or `norefs-findings.json` in the current directory |
 | `--fix` | Apply the fixes the verdicts prove safe: `dead` code is removed, `over-exported` declarations lose the `export` keyword |
 | `--fix-unsafe` | Also apply `write-only`, `contract`, and `shadowed` findings (implies `--fix`); these are claims the analysis cannot prove |
@@ -219,6 +220,7 @@ Loading the project is the expensive part of a run, so watch mode does it once. 
 - Unused files, namespace findings, and emptied types are never touched. Deleting a file is your call, a namespace finding is a lower-confidence guess, and an emptied type needs your judgment about its consumers.
 - `--fix` only touches what is reported, so `--only`, `ignore` globs, and suppression comments limit the fixes the same way they limit the findings.
 - Every fix happens in memory first. After the last pass, norefs verifies its own work: it type-checks the fixed project and compares against the errors that existed before. When a fix introduced an error, norefs bisects the fix set to the culprit, holds that one fix back with the errors as evidence, and re-verifies the rest — then it saves only the verified result. Disk never sees an unverified edit. `--no-verify` skips the check when the double type-check costs more than you want to pay.
+- `--verify-command "npm test"` raises the bar: after the type check passes, the candidate files go to disk, the command runs, and the originals come back before the verdict. A fix your test suite rejects is held back like any other — the diff you get is one your own tests already passed.
 
 Review the diff before you commit. The emptied-type findings point at the leftovers that need human judgment.
 
