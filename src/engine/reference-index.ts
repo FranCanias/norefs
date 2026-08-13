@@ -224,14 +224,16 @@ class ReferenceIndex {
         ts.isMethodDeclaration(assignment)) &&
       ts.isObjectLiteralExpression(assignment.parent)
     ) {
-      const filed = this.fileProperties(this.attributableTypes(assignment.parent, contextualTypes), node);
-      if (!filed) this.recordUnattributedWrite(propertyName(node), node);
+      const types = this.attributableTypes(assignment.parent, contextualTypes);
+      const filed = this.fileProperties(types, node);
+      if (!filed) this.recordUnattributedWrite(propertyName(node), node, undefined, isConcreteKnowledge(types));
     } else if (ts.isBindingElement(parent)) {
       const pattern = safely(() => this.checker.getTypeAtLocation(parent.parent));
       this.fileProperties(pattern ? [pattern] : [], node);
     } else if (ts.isJsxAttribute(parent)) {
-      const filed = this.fileProperties(this.attributableTypes(parent.parent, contextualTypes), node);
-      if (!filed) this.recordUnattributedWrite(propertyName(node), node);
+      const types = this.attributableTypes(parent.parent, contextualTypes);
+      const filed = this.fileProperties(types, node);
+      if (!filed) this.recordUnattributedWrite(propertyName(node), node, undefined, isConcreteKnowledge(types));
     }
   }
 
@@ -250,9 +252,10 @@ class ReferenceIndex {
     if (carried.length === 0) return;
 
     const types = this.attributableTypes(spread.parent, contextualTypes);
+    const known = isConcreteKnowledge(types);
     for (const symbol of carried) {
       const attributed = types.some(type => this.propertiesOf(type, symbol.name).length > 0);
-      if (!attributed) this.recordUnattributedWrite(symbol.name, spread, symbol);
+      if (!attributed) this.recordUnattributedWrite(symbol.name, spread, symbol, known);
     }
   }
 
@@ -282,8 +285,13 @@ class ReferenceIndex {
     );
   }
 
-  private recordUnattributedWrite(name: string, site: ts.Node, source?: ts.Symbol): void {
-    const entry = { site, source };
+  private recordUnattributedWrite(
+    name: string,
+    site: ts.Node,
+    source: ts.Symbol | undefined,
+    knownDifferent: boolean
+  ): void {
+    const entry = { site, source, knownDifferent };
     const entries = this.unattributedWrites.get(name);
     if (entries) entries.push(entry);
     else this.unattributedWrites.set(name, [entry]);
@@ -291,21 +299,242 @@ class ReferenceIndex {
 
   /**
    * The write sites of this member's name that no member could be charged
-   * with, ordered by file and position. An empty answer is the "no untracked
-   * write" axiom the dead verdict rests on. A spread that copied the value
-   * of this very member does not count: reads through the copy resolve back
-   * to the member, so the copy hides nothing.
+   * with, each validated against the type its value feeds:
+   * - `typed` — the value provably flows into a use whose contextual type
+   *   declares this very member. The write is proven; only a read is missing.
+   * - `accounted` — the site writes some other type: its contextual type was
+   *   known and lacks the member, its own literal property is read as itself,
+   *   or every use of its value lands on concrete types unrelated to this
+   *   member. No evidence against `dead`.
+   * - `unverified` — a bare name match the analysis could not type either way.
+   * A spread that copied the value of this very member is dropped outright:
+   * reads through the copy resolve back to the member, so the copy hides
+   * nothing. Empty `typed` and `unverified` together are the axiom the dead
+   * verdict rests on.
    */
-  unattributedWriteSites(name: string, member?: Node): Node[] {
+  unattributedWriteSites(name: string, member?: Node): WriteSites {
     const entries = this.unattributedWrites.get(name) ?? [];
-    if (entries.length === 0) return [];
+    // The common case: no write of the name exists, and no symbol work is owed.
+    if (entries.length === 0) return { typed: [], accounted: [], unverified: [] };
+    const sites = { typed: [] as ts.Node[], accounted: [] as ts.Node[], unverified: [] as ts.Node[] };
     const memberSymbol = member && this.checker.getSymbolAtLocation(member.compilerNode);
-    const own = memberSymbol && new Set(this.relatedSymbols(memberSymbol));
-    return entries
-      .filter(entry => !entry.source || !own || !this.relatedSymbols(entry.source).some(s => own.has(s)))
-      .map(entry => entry.site)
-      .sort((a, b) => a.getSourceFile().fileName.localeCompare(b.getSourceFile().fileName) || a.pos - b.pos)
-      .map(node => this.wrap(node));
+    const own = memberSymbol ? new Set(this.relatedSymbols(memberSymbol)) : undefined;
+    for (const entry of entries) {
+      // The member's own declaration site is the finding, not evidence for it.
+      if (member && entry.site === member.compilerNode) continue;
+      if (entry.source && own && this.relatedSymbols(entry.source).some(s => own.has(s))) continue;
+      sites[this.classifyWrite(entry, name, own)].push(entry.site);
+    }
+    const wrapSorted = (nodes: ts.Node[]): Node[] =>
+      nodes
+        .sort((a, b) => a.getSourceFile().fileName.localeCompare(b.getSourceFile().fileName) || a.pos - b.pos)
+        .map(node => this.wrap(node));
+    return {
+      typed: wrapSorted(sites.typed),
+      accounted: wrapSorted(sites.accounted),
+      unverified: wrapSorted(sites.unverified),
+    };
+  }
+
+  /**
+   * The rule that keeps a name match from becoming a claim: every site is
+   * validated against the type its value feeds. Known and same — the member's
+   * owner — proves the write. Known and different discards the site. Only a
+   * site the checker cannot type either way stays a heuristic, and it says so.
+   */
+  private classifyWrite(
+    entry: UnattributedWrite,
+    name: string,
+    own: Set<ts.Symbol> | undefined
+  ): 'typed' | 'accounted' | 'unverified' {
+    // The contextual type was known when the write was indexed, and it does
+    // not declare the name: the write feeds that type, not this member.
+    if (entry.knownDifferent) return 'accounted';
+    const literal = containingObjectLiteral(entry.site);
+    if (!literal) return 'unverified';
+    const ownProperty = safely(() => this.checker.getPropertyOfType(this.checker.getTypeAtLocation(literal), name));
+    if (!ownProperty) return 'unverified';
+
+    // Where does the literal's value end up? A destination type that declares
+    // this member proves the write; checked first, because a proven write
+    // must win over every reason to discard the site.
+    const destinations = own ? this.destinationsOfLiteral(literal, name, ownProperty) : NO_DESTINATIONS;
+    if (own) {
+      for (const type of destinations.types) {
+        if (this.propertiesOf(type, name).some(p => this.relatedSymbols(p).some(s => own.has(s)))) return 'typed';
+      }
+    }
+
+    // Something reads the literal's own property — through destructuring, a
+    // property access, the inferred type. That write belongs to a living
+    // member of its own shape; sharing a name with this one proves nothing.
+    if (this.hasReadsBesides(ownProperty, entry.site)) return 'accounted';
+
+    // Every use of the value has a concrete type and none declares the
+    // member: the write cannot reach it.
+    if (destinations.conclusive) return 'accounted';
+    return 'unverified';
+  }
+
+  /**
+   * True when an indexed occurrence beyond the write site itself *reads* the
+   * property: a property access, a destructuring binding, an element access.
+   * Declarations and other writes of the property do not count — the question
+   * is whether the value is consumed, not whether the name exists elsewhere.
+   */
+  private hasReadsBesides(property: ts.Symbol, site: ts.Node): boolean {
+    for (const related of this.relatedSymbols(property)) {
+      for (const node of this.buckets.get(related) ?? []) {
+        if (node !== site && isReadOccurrence(node)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The types the literal's value is used as, found by following the value:
+   * through parentheses, out of the factory the literal is returned from —
+   * inline (`useMemo(() => ({ … }))`) or named (`function build() { return
+   * { … } }`, followed to every direct call site) — into the variable that
+   * holds the result, across `const b = a` aliases, and finally to the
+   * contextual type at each use. Every hop is verified by symbol identity:
+   * the carrier's type must hold the literal's own property, so a wrapper
+   * that returns something else cannot smuggle a wrong type in. The walk is
+   * bounded by MAX_FLOW_HOPS so equivalent shapes converge without risking a
+   * runaway. `conclusive` means every use was typed and concrete; one
+   * untyped or `any`/`unknown` use, and the value escapes where the analysis
+   * cannot follow.
+   */
+  private destinationsOfLiteral(
+    literal: ts.ObjectLiteralExpression,
+    name: string,
+    ownProperty: ts.Symbol
+  ): Destinations {
+    return this.destinationsOfExpression(literal, name, ownProperty, MAX_FLOW_HOPS);
+  }
+
+  private destinationsOfExpression(start: ts.Node, name: string, ownProperty: ts.Symbol, hops: number): Destinations {
+    if (hops <= 0) return NO_DESTINATIONS;
+    let expression: ts.Node = start;
+    for (;;) {
+      const parent: ts.Node | undefined = expression.parent;
+      if (!parent) return NO_DESTINATIONS;
+      if (ts.isParenthesizedExpression(parent)) {
+        expression = parent;
+        continue;
+      }
+      const factory = ts.isReturnStatement(parent)
+        ? enclosingFunction(parent)
+        : ts.isArrowFunction(parent) && parent.body === expression
+          ? parent
+          : undefined;
+      if (factory) {
+        // An inline factory: the call it is passed to returns the value.
+        const holder = factory.parent;
+        if (ts.isCallExpression(holder) && holder.arguments.includes(factory as ts.Expression)) {
+          expression = holder;
+          continue;
+        }
+        // A named factory: every direct call of it returns the value.
+        const factoryName =
+          ts.isFunctionDeclaration(factory) && factory.name
+            ? factory.name
+            : ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name)
+              ? holder.name
+              : undefined;
+        if (!factoryName) return NO_DESTINATIONS;
+        return this.destinationsOfFactoryCalls(factoryName, name, ownProperty, hops - 1);
+      }
+      if (ts.isVariableDeclaration(parent) && parent.initializer === expression && ts.isIdentifier(parent.name)) {
+        if (!this.carriesProperty(parent.name, name, ownProperty)) return NO_DESTINATIONS;
+        return this.destinationsOfVariable(parent.name, name, ownProperty, hops - 1);
+      }
+      return NO_DESTINATIONS;
+    }
+  }
+
+  /** True when this node's type holds the very property symbol in question. */
+  private carriesProperty(node: ts.Node, name: string, ownProperty: ts.Symbol): boolean {
+    const type = safely(() => this.checker.getTypeAtLocation(node));
+    const carried = type && safely(() => this.checker.getPropertyOfType(type, name));
+    if (!carried) return false;
+    const carriedSet = new Set(this.relatedSymbols(carried));
+    return this.relatedSymbols(ownProperty).some(s => carriedSet.has(s));
+  }
+
+  /** The union of destinations across every direct call of a named factory. */
+  private destinationsOfFactoryCalls(
+    factoryName: ts.Identifier,
+    name: string,
+    ownProperty: ts.Symbol,
+    hops: number
+  ): Destinations {
+    const symbol = safely(() => this.checker.getSymbolAtLocation(factoryName));
+    if (!symbol) return NO_DESTINATIONS;
+    const types: ts.Type[] = [];
+    let conclusive = true;
+    const seen = new Set<ts.Node>([factoryName]);
+    for (const related of this.relatedSymbols(symbol)) {
+      for (const ref of this.buckets.get(related) ?? []) {
+        if (seen.has(ref)) continue;
+        seen.add(ref);
+        // A specifier only forwards the name; the uses behind it are indexed too.
+        if (ts.isImportSpecifier(ref.parent) || ts.isExportSpecifier(ref.parent)) continue;
+        const call = ref.parent;
+        if (!ts.isCallExpression(call) || call.expression !== ref || !this.carriesProperty(call, name, ownProperty)) {
+          // The factory itself escapes — passed around, aliased — and the
+          // value can surface anywhere; not followable.
+          conclusive = false;
+          continue;
+        }
+        const fromCall = this.destinationsOfExpression(call, name, ownProperty, hops);
+        conclusive = conclusive && fromCall.conclusive;
+        types.push(...fromCall.types);
+      }
+    }
+    return { types, conclusive };
+  }
+
+  /** The contextual type at every indexed use of the variable, following `const b = a` aliases. */
+  private destinationsOfVariable(
+    nameNode: ts.Identifier,
+    name: string,
+    ownProperty: ts.Symbol,
+    hops: number
+  ): Destinations {
+    const symbol = safely(() => this.checker.getSymbolAtLocation(nameNode));
+    if (!symbol) return NO_DESTINATIONS;
+    const types: ts.Type[] = [];
+    let conclusive = true;
+    const seen = new Set<ts.Node>([nameNode]);
+    for (const related of this.relatedSymbols(symbol)) {
+      for (const ref of this.buckets.get(related) ?? []) {
+        if (seen.has(ref)) continue;
+        seen.add(ref);
+        // A specifier only forwards the name; the uses behind it are indexed too.
+        if (ts.isImportSpecifier(ref.parent) || ts.isExportSpecifier(ref.parent)) continue;
+        // `const b = a` hands the value to another variable; follow it.
+        if (
+          hops > 0 &&
+          ts.isVariableDeclaration(ref.parent) &&
+          ref.parent.initializer === ref &&
+          ts.isIdentifier(ref.parent.name) &&
+          this.carriesProperty(ref.parent.name, name, ownProperty)
+        ) {
+          const fromAlias = this.destinationsOfVariable(ref.parent.name, name, ownProperty, hops - 1);
+          conclusive = conclusive && fromAlias.conclusive;
+          types.push(...fromAlias.types);
+          continue;
+        }
+        const contextual = safely(() => this.checker.getContextualType(ref as ts.Expression));
+        if (!contextual || !isConcreteKnowledge([contextual])) {
+          conclusive = false;
+          continue;
+        }
+        types.push(contextual);
+      }
+    }
+    return { types, conclusive };
   }
 
   /**
@@ -668,6 +897,65 @@ interface Anchor {
 interface UnattributedWrite {
   site: ts.Node;
   source?: ts.Symbol;
+  /** The contextual types were known and concrete, and none declares the name. */
+  knownDifferent: boolean;
+}
+
+/** Unattributed writes of one name, validated site by site. */
+interface WriteSites {
+  /** The value provably feeds the member's owner. Written, never read. */
+  typed: Node[];
+  /** The write belongs to some other, known type. No evidence against `dead`. */
+  accounted: Node[];
+  /** A bare name match the analysis could not type either way. */
+  unverified: Node[];
+}
+
+/** Where a value ends up. `conclusive`: every use was typed and concrete. */
+interface Destinations {
+  types: ts.Type[];
+  conclusive: boolean;
+}
+
+const NO_DESTINATIONS: Destinations = { types: [], conclusive: false };
+
+/** How many value hops the flow proof follows before giving up. */
+const MAX_FLOW_HOPS = 4;
+
+/** True when this occurrence consumes the property rather than declaring or writing it. */
+function isReadOccurrence(node: ts.Node): boolean {
+  const parent = node.parent;
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return true;
+  if (ts.isBindingElement(parent) && (parent.propertyName ?? parent.name) === node) return true;
+  return ts.isElementAccessExpression(parent) && parent.argumentExpression === node;
+}
+
+/**
+ * Types that count as knowledge: at least one, and no `any` or `unknown`
+ * part. A write into `unknown` proves nothing about where the value is read.
+ */
+function isConcreteKnowledge(types: ts.Type[]): boolean {
+  return (
+    types.length > 0 &&
+    types.every(type => partsOf(type).every(part => (part.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) === 0))
+  );
+}
+
+/** The object literal a write site sits in: its type owns the written property. */
+function containingObjectLiteral(site: ts.Node): ts.ObjectLiteralExpression | undefined {
+  if (ts.isSpreadAssignment(site)) {
+    return ts.isObjectLiteralExpression(site.parent) ? site.parent : undefined;
+  }
+  const assignment = ts.isComputedPropertyName(site.parent) ? site.parent.parent : site.parent;
+  const literal = assignment?.parent;
+  return literal !== undefined && ts.isObjectLiteralExpression(literal) ? literal : undefined;
+}
+
+/** The function a return statement returns from. */
+function enclosingFunction(statement: ts.Node): ts.Node | undefined {
+  let node: ts.Node | undefined = statement.parent;
+  while (node && !ts.isFunctionLike(node)) node = node.parent;
+  return node;
 }
 
 interface WrappingSourceFile {
@@ -709,7 +997,7 @@ function partsOf(type: ts.Type): ts.Type[] {
 }
 
 /** True when `node` sits at or inside `container` in the same file. */
-function isInside(node: ts.Node, container: ts.Node): boolean {
+export function isInside(node: ts.Node, container: ts.Node): boolean {
   return node.getSourceFile() === container.getSourceFile() && node.pos >= container.pos && node.end <= container.end;
 }
 

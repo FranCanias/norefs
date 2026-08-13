@@ -270,6 +270,55 @@ describe('applyFixes', () => {
     expect(file.getFullText()).not.toContain('timeout: number');
   });
 
+  it('reports the comment kept on a statement a fix edited without removing', () => {
+    // The half-survival case: one specifier leaves a commented re-export.
+    // The prose may now be half false, and only a human can reread it.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile('/lib.ts', 'export function used(): void {}\nexport function dead(): void {}\n');
+    const barrel = project.createSourceFile(
+      '/barrel.ts',
+      "// re-export everything, but with our custom render\nexport { used, dead } from './lib';\n"
+    );
+    project.createSourceFile('/main.ts', "import { used } from './barrel';\nused();\n");
+    const result = applyFixes(analyze(project));
+    expect(barrel.getFullText()).toContain('custom render');
+    expect(barrel.getFullText()).not.toContain('dead');
+    expect(result.keptComments).toEqual([
+      { filePath: '/barrel.ts', line: 1, text: '// re-export everything, but with our custom render' },
+    ]);
+  });
+
+  it('reports a comment kept one blank line above a removed member', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    const file = project.createSourceFile(
+      '/main.ts',
+      [
+        'interface User {',
+        '  name: string;',
+        '  // the legacy block',
+        '',
+        '  legacyId: number;',
+        '}',
+        'export function greet(u: User): string {',
+        '  return u.name;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    const result = applyFixes(analyze(project));
+    expect(file.getFullText()).not.toContain('legacyId');
+    expect(file.getFullText()).toContain('the legacy block');
+    expect(result.keptComments).toEqual([{ filePath: '/main.ts', line: 3, text: '// the legacy block' }]);
+  });
+
+  it('keeps the kept-comment list empty when nothing suspicious remains', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile('/main.ts', 'interface A { dead: number }\n');
+    const result = applyFixes(analyze(project));
+    expect(result.fixed).toBe(1);
+    expect(result.keptComments).toEqual([]);
+  });
+
   it('reports unused files as skipped instead of deleting them', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile('/main.ts', 'export const keep = 1;\n');

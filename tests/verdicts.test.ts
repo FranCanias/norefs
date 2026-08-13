@@ -185,6 +185,165 @@ describe('verdicts', () => {
     expect(name?.evidence).toContain('b.ts');
   });
 
+  it('merges contract and shadowed when the twin sits across the boundary', () => {
+    // One wire format, declared once per process. The far side crosses a
+    // project-declared bridge; the near side is its same-named drifted copy.
+    // That is one conceptual fact, and both findings must tell it as one
+    // contract instead of competing by precedence.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/bridge.d.ts',
+      [
+        'interface Bridge {',
+        '  invoke(channel: string, payload?: unknown): Promise<unknown>;',
+        '}',
+        'declare const api: Bridge;',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/electron.ts',
+      [
+        'interface DeviceIO {',
+        '  ip: string;',
+        '  mask: string;',
+        '  gateway: string;',
+        '}',
+        'declare const io: DeviceIO;',
+        "export const persist = () => api.invoke('deviceLibrary:save', io);",
+        'export const gateway = () => io.gateway;',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/renderer.ts',
+      [
+        'interface DeviceIO {',
+        '  ip: string;',
+        '  mask: string;',
+        '  label: string;',
+        '}',
+        'declare const local: DeviceIO;',
+        'export const render = () => local.label;',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/index.ts',
+      "import { persist, gateway } from './electron';\nimport { render } from './renderer';\npersist();\nrender();\ngateway();\n"
+    );
+    const findings = analyze(project);
+
+    const nearSide = findings.find(f => f.kind === 'member' && f.name === 'ip' && f.filePath === '/renderer.ts');
+    expect(nearSide?.verdict).toBe('contract');
+    expect(nearSide?.evidence).toContain('far side');
+    expect(nearSide?.evidence).toContain('electron.ts');
+
+    const farSide = findings.find(f => f.kind === 'member' && f.name === 'ip' && f.filePath === '/electron.ts');
+    expect(farSide?.verdict).toBe('contract');
+    expect(farSide?.evidence).toContain('api.invoke');
+    // The far side names its twin too: one fact, told from both ends.
+    expect(farSide?.evidence).toContain('renderer.ts');
+  });
+
+  it('does not let a read structural twin mask a boundary twin', () => {
+    // shared.ts holds a structurally identical, read copy; main.ts holds a
+    // same-named drifted copy across the bridge. The cross-boundary link
+    // must win, not whichever twin an iterator yields first.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/bridge.d.ts',
+      [
+        'interface Bridge {',
+        '  invoke(channel: string, payload?: unknown): Promise<unknown>;',
+        '}',
+        'declare const api: Bridge;',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/renderer.ts',
+      [
+        'interface Options {',
+        '  alpha: string;',
+        '  beta: string;',
+        '  gamma: string;',
+        '}',
+        'declare const options: Options;',
+        'export const render = () => options.gamma;',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/shared.ts',
+      [
+        'interface Options {',
+        '  alpha: string;',
+        '  beta: string;',
+        '  gamma: string;',
+        '}',
+        'declare const shared: Options;',
+        'export const use = () => [shared.alpha, shared.beta, shared.gamma];',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'interface Options {',
+        '  alpha: string;',
+        '  beta: string;',
+        '  wire: string;',
+        '}',
+        'declare const wireOptions: Options;',
+        "export const persist = () => api.invoke('options:save', wireOptions);",
+        'export const wire = () => wireOptions.wire;',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/index.ts',
+      [
+        "import { render } from './renderer';",
+        "import { use } from './shared';",
+        "import { persist, wire } from './main';",
+        'render();',
+        'use();',
+        'persist();',
+        'wire();',
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project);
+    const nearSide = findings.find(f => f.kind === 'member' && f.name === 'alpha' && f.filePath === '/renderer.ts');
+    expect(nearSide?.verdict).toBe('contract');
+    expect(nearSide?.evidence).toContain('main.ts');
+  });
+
+  it('spells out three write sites and counts the rest honestly', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'interface Config {',
+        '  retries: number;',
+        '  timeout: number;',
+        '}',
+        'export const read = (c: Config) => c.retries;',
+        'declare function stash(payload: unknown): void;',
+        'stash({ timeout: 1 });',
+        'stash({ timeout: 2 });',
+        'stash({ timeout: 3 });',
+        'stash({ timeout: 4 });',
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project);
+    const member = findings.find(f => f.kind === 'member' && f.name === 'timeout');
+    expect(member?.verdict).toBe('write-only');
+    expect(member?.evidence).toMatch(/main\.ts:7, .*main\.ts:8, .*main\.ts:9 and 1 more site\b/);
+  });
+
   it('leaves a member with no signals dead', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(

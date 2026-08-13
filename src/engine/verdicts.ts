@@ -11,9 +11,13 @@ import { findReferencesAsNodes } from './references';
  * Export findings carry their verdict already (dead or over-exported, from the
  * reference classification). Member findings start as `dead` and soften when a
  * signal says the analysis is on thin ice:
- * - the owner type sits in the serialization-boundary closure → `contract`
+ * - the owner type — or a twin of it — sits in the serialization-boundary
+ *   closure → `contract`; a twin across the boundary merges into the same
+ *   verdict instead of competing with it, because the duplication is the
+ *   contract evidence
  * - a structural twin of the owner is read where this member is not → `shadowed`
- * - a write of this name exists that no member could be charged with → `write-only`
+ * - a write of this name survives validation against the type it feeds →
+ *   `write-only`, as a proven typed write or a labeled unverified name match
  *
  * An empty-type finding takes the most cautious verdict of its members: it
  * only exists because every member was reported.
@@ -31,12 +35,21 @@ export function assignVerdicts(project: Project, findings: Finding[], cwd: strin
 
   for (const finding of memberFindings) {
     const owner = namedTypeAncestor(finding.node as Node);
-    if (owner && boundary.has(owner)) {
+    const ownEvidence = owner ? boundary.get(owner) : undefined;
+    // The twin candidates cost only map lookups — no reference queries — so
+    // every one of them can be checked against the boundary. A read
+    // structural twin must not mask a same-named twin across the boundary.
+    const candidates = owner ? twins.twinDeclarations(owner) : [];
+    const far = candidates.find(candidate => boundary.has(candidate.declaration));
+    if (ownEvidence !== undefined || far) {
       finding.verdict = 'contract';
-      finding.evidence = boundary.get(owner);
+      const farEvidence = far && boundary.get(far.declaration);
+      finding.evidence = contractEvidence(ownEvidence, far ?? candidates[0], farEvidence, cwd);
       continue;
     }
-    const shadow = owner && twins.readTwinMember(owner, finding.name);
+    // Only a member outside every boundary pays for the reference-checked
+    // twin lookup the shadowed verdict needs.
+    const shadow = owner ? twins.readTwinMember(owner, finding.name) : undefined;
     if (shadow) {
       finding.verdict = 'shadowed';
       const where = `\`${shadow.typeName}\` (${location(shadow.node, cwd)})`;
@@ -46,18 +59,65 @@ export function assignVerdicts(project: Project, findings: Finding[], cwd: strin
       continue;
     }
     const nameNode = (finding.node as Node & { getNameNode(): Node }).getNameNode();
-    const writeSites = index.unattributedWriteSites(finding.name, nameNode);
-    if (writeSites.length > 0) {
-      const more = writeSites.length > 1 ? ` and ${writeSites.length - 1} more site(s)` : '';
+    const sites = index.unattributedWriteSites(finding.name, nameNode);
+    if (sites.typed.length > 0) {
       finding.verdict = 'write-only';
-      finding.evidence = `\`${finding.name}\` is assigned at ${location(writeSites[0], cwd)}${more}, where the analysis lost the type it feeds`;
+      const writes = sites.typed.length === 1 ? 'a typed write at' : 'typed writes at';
+      finding.evidence = `${writes} ${siteList(sites.typed, cwd)} ${sites.typed.length === 1 ? 'feeds' : 'feed'} this member — proven, never read`;
+      continue;
+    }
+    if (sites.unverified.length > 0) {
+      finding.verdict = 'write-only';
+      const one = sites.unverified.length === 1;
+      finding.evidence = `\`${finding.name}\` is assigned at ${siteList(sites.unverified, cwd)} — ${one ? 'an unverified name match' : 'unverified name matches'} the analysis could not type either way`;
       continue;
     }
     finding.verdict = 'dead';
-    finding.evidence = `no references anywhere, no twin type reads \`${finding.name}\`, no serialization boundary, no untracked write of the name`;
+    const writes =
+      sites.accounted.length === 0
+        ? 'no untracked write of the name'
+        : `every write of the name feeds another type (${siteList(sites.accounted, cwd)})`;
+    finding.evidence = `no references anywhere, no twin type reads \`${finding.name}\`, no serialization boundary, ${writes}`;
   }
 
   assignEmptyTypeVerdicts(findings);
+}
+
+/**
+ * One conceptual fact, one verdict: when the owner crosses a boundary, when
+ * its twin does, or both, the finding is a contract and the evidence names
+ * every link the analysis has.
+ */
+function contractEvidence(
+  ownEvidence: string | undefined,
+  twin: TwinCandidate | undefined,
+  farEvidence: string | undefined,
+  cwd: string
+): string {
+  const label =
+    twin &&
+    `${twin.sameName ? 'same-named' : 'structural'} twin \`${twin.typeName}\` (${location(twin.nameNode, cwd)})`;
+  if (ownEvidence !== undefined) {
+    if (!label) return ownEvidence;
+    // A twin also inside the boundary closure is provably the far side; one
+    // outside it is still the same duplicated shape, named so the reader can
+    // connect the two declarations the analysis already linked.
+    return farEvidence !== undefined
+      ? `${ownEvidence}, and its ${label} declares the far side of the same contract`
+      : `${ownEvidence}; a ${label} duplicates this shape`;
+  }
+  return `its ${label} is the far side of a serialization boundary (${farEvidence}) — this declaration is the near side of the same contract`;
+}
+
+/** Up to three site locations, spelled out; past that, an honest count. */
+function siteList(nodes: Node[], cwd: string): string {
+  const locations = nodes.map(node => location(node, cwd));
+  if (locations.length === 1) return locations[0];
+  if (locations.length <= 3) {
+    return `${locations.slice(0, -1).join(', ')} and ${locations[locations.length - 1]}`;
+  }
+  const rest = locations.length - 3;
+  return `${locations[0]}, ${locations[1]}, ${locations[2]} and ${rest} more ${rest === 1 ? 'site' : 'sites'}`;
 }
 
 /** The most cautious verdict among an emptied type's own reported members. */
@@ -181,7 +241,7 @@ function collectBoundarySeeds(sourceFile: SourceFile, add: (decl: Node, evidence
 }
 
 /** True when the callee resolves to a declaration file inside the project. */
-function hasAmbientCallee(call: Node & { getExpression(): Node }): boolean {
+export function hasAmbientCallee(call: Node & { getExpression(): Node }): boolean {
   const symbol = call.getExpression().getSymbol();
   return (symbol?.getDeclarations() ?? []).some(decl => {
     const sourceFile = decl.getSourceFile();
@@ -284,6 +344,14 @@ interface TwinMatch {
   sameName: boolean;
 }
 
+/** A twin found by shape alone — no reference lookups — for the contract merge. */
+interface TwinCandidate {
+  declaration: Node;
+  typeName: string;
+  nameNode: Node;
+  sameName: boolean;
+}
+
 /**
  * Duplicated types, found two ways. Structural twins share their whole
  * member-name signature: when the twin's member of the flagged name is read,
@@ -317,6 +385,37 @@ class TwinIndex {
         this.bySignature.set(signature, list);
       }
     }
+  }
+
+  /**
+   * Every twin declaration of this owner — structural matches and same-named
+   * drifted copies — found by shape alone, so the contract merge can scan
+   * all of them at map-lookup cost, with no reference queries.
+   */
+  twinDeclarations(owner: Node): TwinCandidate[] {
+    if (!owner.isKind(SyntaxKind.InterfaceDeclaration) && !owner.isKind(SyntaxKind.TypeAliasDeclaration)) {
+      return [];
+    }
+    const ownNames = memberNames(owner);
+    const candidates: TwinCandidate[] = [];
+    const add = (twin: InterfaceDeclaration | TypeAliasDeclaration): void => {
+      if (twin === owner || candidates.some(c => c.declaration === twin)) return;
+      candidates.push({
+        declaration: twin,
+        typeName: twin.getName() ?? '?',
+        nameNode: twin.getNameNode(),
+        sameName: twin.getName() === owner.getName(),
+      });
+    };
+    for (const twin of this.bySignature.get(ownNames.join('\x00')) ?? []) add(twin);
+    for (const twin of this.byName.get(owner.getName() ?? '') ?? []) {
+      const twinNames = memberNames(twin);
+      const shared = twinNames.filter(n => n !== '' && ownNames.includes(n));
+      // Same name and at least half the smaller shape in common: a drifted copy.
+      if (shared.length < 2 || shared.length * 2 < Math.min(ownNames.length, twinNames.length)) continue;
+      add(twin);
+    }
+    return candidates;
   }
 
   /** The twin that shadows this member, structural matches first. */
@@ -393,8 +492,13 @@ function namedTypeAncestor(member: Node): Node | undefined {
     );
 }
 
-function location(node: Node, cwd: string): string {
+/** One canonical `relative/path:line` coordinate, shared by every reporter. */
+export function formatLocation(filePath: string, line: number, cwd: string): string {
+  return `${path.relative(cwd, filePath)}:${line}`;
+}
+
+export function location(node: Node, cwd: string): string {
   const sourceFile = node.getSourceFile();
   const { line } = sourceFile.getLineAndColumnAtPos(node.getStart());
-  return `${path.relative(cwd, sourceFile.getFilePath())}:${line}`;
+  return formatLocation(sourceFile.getFilePath(), line, cwd);
 }

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { Project } from 'ts-morph';
 import type { Finding } from '../types';
+import type { CommentLocation } from './fix';
 import { applyFixes, isFixable } from './fix';
 import { errorInventory, newErrors, snapshotTexts } from './verify';
 
@@ -36,6 +37,8 @@ interface VerifiedFixResult {
   touched: string[];
   /** Fixes withheld because applying them made the probe fail. */
   heldBack: HeldBack[];
+  /** Comments the applied fixes left next to their edits, for a human to reread. */
+  keptComments: CommentLocation[];
   /** Set when verification failed and no culprit could be isolated; the project is pristine. */
   aborted?: string[];
 }
@@ -82,7 +85,9 @@ export function applyVerifiedFixes(options: VerifiedFixOptions): VerifiedFixResu
   // check needs the pre-flight.
   if (options.check) {
     const preExisting = options.check(project, []);
-    if (preExisting.length > 0) return { fixed: 0, touched: [], heldBack: [], aborted: preExisting };
+    if (preExisting.length > 0) {
+      return { fixed: 0, touched: [], heldBack: [], keptComments: [], aborted: preExisting };
+    }
   }
 
   const excluded = new Set<string>();
@@ -92,28 +97,35 @@ export function applyVerifiedFixes(options: VerifiedFixOptions): VerifiedFixResu
    * One fixing run against the current tree. `allowed` restricts the first
    * pass to a subset under bisection; cascades re-analyze and continue to the
    * fixpoint. Findings come from the pristine analysis when the tree is
-   * untouched, from a re-analysis otherwise.
+   * untouched, from a re-analysis otherwise. The kept-comment notes belong to
+   * the run's own passes, so each caller reads the notes of the exact tree
+   * state its campaign produced — no shared mutable to go stale.
    */
-  const campaign = (allowed: Set<string> | undefined, cascades: boolean): { fixedKeys: string[]; fixed: number } => {
+  const campaign = (
+    allowed: Set<string> | undefined,
+    cascades: boolean
+  ): { fixedKeys: string[]; fixed: number; keptComments: CommentLocation[] } => {
     let findings = pristineTree ? options.findings : options.reanalyze();
     pristineTree = false;
     const fixedKeys: string[] = [];
+    const keptComments: CommentLocation[] = [];
     let fixed = 0;
     for (let pass = 1; pass <= (cascades ? MAX_PASSES : 1); pass++) {
       const fixable = findings.filter(f => {
         if (!isFixable(f, options.unsafe)) return false;
-        const key = keyOf(f, cwd);
+        const key = findingKey(f, cwd);
         if (excluded.has(key)) return false;
         return pass > 1 || allowed === undefined || allowed.has(key);
       });
       if (fixable.length === 0) break;
       const result = applyFixes(fixable, { save: false, unsafe: options.unsafe });
       for (const filePath of result.filePaths) dirty.add(filePath);
+      keptComments.push(...result.keptComments);
       if (result.fixed === 0) break;
       fixed += result.fixed;
       if (pass === 1) {
         for (const finding of fixable) {
-          const key = keyOf(finding, cwd);
+          const key = findingKey(finding, cwd);
           fixedKeys.push(key);
           byKey.set(key, finding);
         }
@@ -123,13 +135,13 @@ export function applyVerifiedFixes(options: VerifiedFixOptions): VerifiedFixResu
       if (!cascades) break;
       findings = options.reanalyze();
     }
-    return { fixedKeys, fixed };
+    return { fixedKeys, fixed, keptComments };
   };
 
-  const failsWith = (keys: string[]): boolean => {
+  const failsWith = (keys: string[]): { fails: boolean; keptComments: CommentLocation[] } => {
     restore();
-    campaign(new Set(keys), false);
-    return probe().length > 0;
+    const run = campaign(new Set(keys), false);
+    return { fails: probe().length > 0, keptComments: run.keptComments };
   };
 
   /** The smallest first-pass subset that still fails the probe. */
@@ -138,8 +150,8 @@ export function applyVerifiedFixes(options: VerifiedFixOptions): VerifiedFixResu
     const mid = keys.length >> 1;
     const left = keys.slice(0, mid);
     const right = keys.slice(mid);
-    if (failsWith(left)) return bisect(left);
-    if (failsWith(right)) return bisect(right);
+    if (failsWith(left).fails) return bisect(left);
+    if (failsWith(right).fails) return bisect(right);
     return keys; // they only break together: hold the group back whole
   };
 
@@ -147,16 +159,21 @@ export function applyVerifiedFixes(options: VerifiedFixOptions): VerifiedFixResu
   for (;;) {
     restore();
     const attempt = campaign(undefined, true);
-    if (attempt.fixed === 0) return { fixed: 0, touched: [], heldBack };
-    if (!verifying) return { fixed: attempt.fixed, touched: [...dirty], heldBack };
+    if (attempt.fixed === 0) return { fixed: 0, touched: [], heldBack, keptComments: [] };
+    if (!verifying) {
+      return { fixed: attempt.fixed, touched: [...dirty], heldBack, keptComments: attempt.keptComments };
+    }
 
     const errors = probe();
-    if (errors.length === 0) return { fixed: attempt.fixed, touched: [...dirty], heldBack };
+    if (errors.length === 0) {
+      return { fixed: attempt.fixed, touched: [...dirty], heldBack, keptComments: attempt.keptComments };
+    }
 
-    if (!failsWith(attempt.fixedKeys)) {
+    const single = failsWith(attempt.fixedKeys);
+    if (!single.fails) {
       // Only a cascade pass breaks the probe: keep the verified single-pass state.
       options.log('Cascade fixes held back: a later pass would introduce errors.');
-      return { fixed: attempt.fixedKeys.length, touched: [...dirty], heldBack };
+      return { fixed: attempt.fixedKeys.length, touched: [...dirty], heldBack, keptComments: single.keptComments };
     }
 
     const culprits = bisect(attempt.fixedKeys);
@@ -167,11 +184,12 @@ export function applyVerifiedFixes(options: VerifiedFixOptions): VerifiedFixResu
     }
     if (excluded.size > MAX_HELD_BACK || culprits.length === 0) {
       restore();
-      return { fixed: 0, touched: [], heldBack, aborted: errors };
+      return { fixed: 0, touched: [], heldBack, keptComments: [], aborted: errors };
     }
   }
 }
 
-function keyOf(finding: Finding, cwd: string): string {
+/** How --fix recognizes one finding across re-analyses: content, not object identity. */
+export function findingKey(finding: Finding, cwd: string): string {
   return [finding.kind, path.relative(cwd, finding.filePath), finding.name, finding.context].join('\x00');
 }

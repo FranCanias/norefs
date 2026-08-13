@@ -4,6 +4,76 @@ norefs follows [semver](https://semver.org). Before 1.0.0, minor versions
 (0.x.0) may change output formats, flag semantics, and verdicts; patch
 versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 
+## 0.3.0 — 2026-08-13
+
+0.2.0 named write sites but matched them by name alone, project-wide. A
+member could be protected from deletion because an unrelated function
+elsewhere shared its name, and the reader was sent to that stranger with
+confident coordinates. This release adds the missing rule: every name match
+is validated against the type its write feeds, at the point where the match
+becomes a claim.
+
+### Fixed
+
+- **A name match must survive the type its write feeds.** Three outcomes,
+  each labeled as what it is:
+  - *Known and same* — the write's value provably flows into a use whose
+    type declares this very member (followed through parentheses, a factory
+    like `useMemo(() => ({ … }))`, and the variable holding the result, with
+    the hop verified by symbol identity). The evidence now says "a typed
+    write at src/x.ts:12 feeds this member — proven, never read".
+  - *Known and different* — the write's contextual type was known and does
+    not declare the member, or its own literal property is read as itself,
+    or every use of the value lands on concrete types unrelated to the
+    member. The site is discarded; it is no evidence against `dead`, and
+    the dead evidence says so: "every write of the name feeds another type
+    (src/x.ts:12)".
+  - *Genuinely untypeable* — the value escapes into `any`/`unknown` or a
+    place the checker cannot type. The site is kept and labeled "an
+    unverified name match", so the reader knows which kind of evidence they
+    are holding.
+  Verdicts no longer depend on how popular an identifier is: three uncalled
+  siblings written the same way now get the same verdict, whatever their
+  names collide with elsewhere. Only true reads — a property access, a
+  destructuring binding, an element access — count as "read as itself";
+  declarations and other writes of the name do not. The value flow follows
+  named factories to their call sites and across `const b = a` aliases, so
+  equivalent shapes converge. A member's own declaration site is never
+  evidence about the member.
+- **Write-site lists are spelled out and pluralized honestly.** Up to three
+  sites are listed in full; past that, "and N more sites". No "(s)" on a
+  count the code just computed, and no relevant site hidden behind an
+  arbitrary first match.
+
+### Added
+
+- **Stranded far sides are reported.** A dead wrapper around a
+  project-declared bridge carries the channel string it passes. When the
+  same string reappears in a registration in another file — the
+  `ipcMain.handle` call in an entry file no reference-based analysis will
+  ever flag — the finding says so: "deleting it strands the far side of
+  `'deviceLibrary:loadDevice'` at electron/main.ts:164". The claim stays
+  honest by shape: a channel is only the first argument of a bridge call,
+  never a payload; a far side must be the same string first in a call that
+  also takes a handler; and a bridge call never counts as a far side — a
+  second dead wrapper is not anyone's handler. The note rides in every
+  reporter, survives the empty-type fold when the whole wrapper dies, and
+  prints again in the `--fix` summary for the fixes that actually applied.
+- **`--fix` points at the comments it had to keep.** A leading comment on a
+  statement a fix trimmed without removing (a barrel that lost one
+  specifier), or a comment one blank line above a deletion, may now be
+  half false — and no heuristic fixes prose. The fix summary lists each
+  location to reread.
+
+### Changed
+
+- **Contract and shadowed merge across a boundary.** When twin detection
+  links two declarations and one of them crosses a serialization boundary,
+  the near side is a `contract` too — "its same-named twin (electron.ts:1)
+  is the far side of a serialization boundary" — instead of a competing
+  `shadowed` verdict. The far side names its twin in return. One conceptual
+  fact, one story, told from both ends.
+
 ## 0.2.0 — 2026-08-13
 
 The dead verdict now earns its evidence chain. 0.1.1 could call a member

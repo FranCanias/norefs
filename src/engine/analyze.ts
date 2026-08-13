@@ -8,6 +8,7 @@ import type { ModuleOptions } from './modules';
 import { analyzeModules } from './modules';
 import { buildReferenceIndex } from './reference-index';
 import { findReferencesAsNodes } from './references';
+import { annotateStrandedChannels } from './strands';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 import { assignVerdicts } from './verdicts';
 
@@ -72,9 +73,25 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
   const sliceFold = emptyReturnedObjectFindings(reportedMembers);
   findings.push(...typeFold.emptyFindings, ...sliceFold.emptyFindings);
   assignVerdicts(project, findings, process.cwd());
+  annotateStrandedChannels(project, findings, process.cwd());
   // One logical fact, one finding: a type losing every member is the story,
   // not seven bullets. The members fold in after they lent it their verdict.
   const swallowed = new Set([...typeFold.swallowed, ...sliceFold.swallowed]);
+  // A strand note on a member about to fold must survive on the finding that
+  // replaces it, or the far side vanishes exactly when the whole wrapper dies.
+  for (const empty of findings) {
+    if (empty.kind !== 'empty-type' || empty.strands) continue;
+    const donor = findings.find(
+      f =>
+        f.kind === 'member' &&
+        f.node &&
+        swallowed.has(f.node) &&
+        f.strands &&
+        f.filePath === empty.filePath &&
+        f.context.includes(`\`${empty.name}\``)
+    );
+    if (donor) empty.strands = donor.strands;
+  }
   const folded = findings.filter(f => !(f.kind === 'member' && f.node && swallowed.has(f.node)));
   folded.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || a.column - b.column);
   return folded;

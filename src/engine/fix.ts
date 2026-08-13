@@ -10,6 +10,20 @@ interface FixResult {
   fixed: number;
   /** Findings --fix leaves for the user: unused files, namespace findings, emptied types. */
   skipped: number;
+  /**
+   * Comments that sit next to a fix but were kept: the leading comment of a
+   * statement a fix edited without removing, or a comment one blank line
+   * above a removed declaration. No heuristic can fix prose, so the fixer
+   * points a human at it instead.
+   */
+  keptComments: CommentLocation[];
+}
+
+export interface CommentLocation {
+  filePath: string;
+  line: number;
+  /** The comment's first line, so a later pass that moves it can be re-found. */
+  text: string;
 }
 
 /**
@@ -60,12 +74,13 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
   }
 
   const touched = new Set<SourceFile>();
+  const kept = new Set<Node>();
   let fixed = 0;
   for (const finding of sorted) {
     const node = finding.node;
     if (!node) continue;
     const changed =
-      finding.kind === 'member' ? fixMember(node) : fixExport(finding, node, specifiers.get(finding) ?? []);
+      finding.kind === 'member' ? fixMember(node, kept) : fixExport(finding, node, specifiers.get(finding) ?? [], kept);
     if (changed.length > 0) {
       for (const file of changed) touched.add(file);
       fixed++;
@@ -74,23 +89,41 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
     }
   }
 
-  cleanUpOrphans(touched);
+  cleanUpOrphans(touched, kept);
 
   const filePaths = [...touched].map(file => file.getFilePath());
   if (options.save ?? true) {
     for (const file of touched) file.saveSync();
   }
-  return { filePaths, fixed, skipped };
+  return { filePaths, fixed, skipped, keptComments: commentLocations(kept) };
 }
 
-function fixMember(member: Node): SourceFile[] {
+/**
+ * Resolved after every edit, so the line numbers are the ones on disk. A kept
+ * node is either the comment itself or a statement whose leading comment is
+ * the point of interest; either way the location is the comment's line.
+ */
+function commentLocations(kept: Set<Node>): CommentLocation[] {
+  const locations: CommentLocation[] = [];
+  for (const node of kept) {
+    if (node.wasForgotten()) continue;
+    const sourceFile = node.getSourceFile();
+    const range = node.getLeadingCommentRanges()[0];
+    const line = range ? sourceFile.getLineAndColumnAtPos(range.getPos()).line : node.getStartLineNumber();
+    const text = (range ? range.getText() : node.getText()).split('\n')[0].trim();
+    locations.push({ filePath: sourceFile.getFilePath(), line, text });
+  }
+  return locations.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line);
+}
+
+function fixMember(member: Node, kept: Set<Node>): SourceFile[] {
   const sourceFile = member.getSourceFile();
   if (member.isKind(SyntaxKind.Parameter)) {
     member.setHasOverrideKeyword(false);
     member.setIsReadonly(false);
     member.setScope(undefined);
   } else {
-    removeLeadingComments(member);
+    removeLeadingComments(member, kept);
     (member as unknown as { remove(): void }).remove();
   }
   return [sourceFile];
@@ -101,9 +134,11 @@ function fixMember(member: Node): SourceFile[] {
  * it, and they orphan when it goes. JSDoc travels with the node already;
  * these are the plain comment lines ts-morph models as siblings. Only
  * adjacent lines go — a comment set apart by a blank line may describe the
- * whole section, and keeping it costs nothing.
+ * whole section, and keeping it costs nothing. A comment kept at exactly one
+ * blank line's distance is close enough that it may still describe the
+ * deleted code, so it is recorded for the fix summary to point at.
  */
-function removeLeadingComments(node: Node): void {
+function removeLeadingComments(node: Node, kept: Set<Node>): void {
   const container = node.getParent() as
     | Partial<{
         getStatementsWithComments(): Node[];
@@ -124,7 +159,10 @@ function removeLeadingComments(node: Node): void {
     const previous = siblings[index - 1];
     const kind = previous.getKind();
     if (kind !== SyntaxKind.SingleLineCommentTrivia && kind !== SyntaxKind.MultiLineCommentTrivia) break;
-    if (previous.getEndLineNumber() < above.getStartLineNumber() - 1) break;
+    if (previous.getEndLineNumber() < above.getStartLineNumber() - 1) {
+      if (previous.getEndLineNumber() === above.getStartLineNumber() - 2) kept.add(previous);
+      break;
+    }
     comments.push(previous);
     above = previous;
     index--;
@@ -134,7 +172,12 @@ function removeLeadingComments(node: Node): void {
   }
 }
 
-function fixExport(finding: Finding, decl: Node, specifiers: Array<ImportSpecifier | ExportSpecifier>): SourceFile[] {
+function fixExport(
+  finding: Finding,
+  decl: Node,
+  specifiers: Array<ImportSpecifier | ExportSpecifier>,
+  kept: Set<Node>
+): SourceFile[] {
   const changed = new Set<SourceFile>();
 
   // First drop every import/export specifier that forwards the name — a barrel
@@ -142,12 +185,12 @@ function fixExport(finding: Finding, decl: Node, specifiers: Array<ImportSpecifi
   for (const specifier of specifiers) {
     if (specifier.wasForgotten()) continue; // an earlier fix removed its whole statement
     changed.add(specifier.getSourceFile());
-    removeSpecifier(specifier);
+    removeSpecifier(specifier, kept);
   }
 
   if (finding.dead) {
     changed.add(decl.getSourceFile());
-    removeDeclaration(decl);
+    removeDeclaration(decl, kept);
     return [...changed];
   }
 
@@ -176,30 +219,43 @@ function danglingSpecifiers(nameNode: Identifier): Array<ImportSpecifier | Expor
   return [...specifiers];
 }
 
-function removeSpecifier(specifier: ImportSpecifier | ExportSpecifier): void {
+/**
+ * A statement that survives a specifier removal may keep a comment that
+ * described what just left it — prose no heuristic can rewrite — so the
+ * statement is recorded for the fix summary when a comment leads it.
+ */
+function removeSpecifier(specifier: ImportSpecifier | ExportSpecifier, kept: Set<Node>): void {
   if (specifier.isKind(SyntaxKind.ExportSpecifier)) {
     const exportDecl = specifier.getExportDeclaration();
-    if (exportDecl.getNamedExports().length === 1) exportDecl.remove();
-    else specifier.remove();
+    if (exportDecl.getNamedExports().length === 1) {
+      exportDecl.remove();
+    } else {
+      if (exportDecl.getLeadingCommentRanges().length > 0) kept.add(exportDecl);
+      specifier.remove();
+    }
     return;
   }
   const importDecl = specifier.getImportDeclaration();
   const lastBinding =
     importDecl.getNamedImports().length === 1 && !importDecl.getDefaultImport() && !importDecl.getNamespaceImport();
-  if (lastBinding) importDecl.remove();
-  else specifier.remove();
+  if (lastBinding) {
+    importDecl.remove();
+  } else {
+    if (importDecl.getLeadingCommentRanges().length > 0) kept.add(importDecl);
+    specifier.remove();
+  }
 }
 
-function removeDeclaration(decl: Node): void {
+function removeDeclaration(decl: Node, kept: Set<Node>): void {
   if (decl.isKind(SyntaxKind.VariableDeclaration)) {
     const statement = decl.getVariableStatement();
     if (statement && statement.getDeclarations().length === 1) {
-      removeLeadingComments(statement);
+      removeLeadingComments(statement, kept);
       statement.remove();
       return;
     }
   }
-  removeLeadingComments(decl);
+  removeLeadingComments(decl, kept);
   (decl as unknown as { remove(): void }).remove();
 }
 
@@ -211,12 +267,12 @@ function removeDeclaration(decl: Node): void {
  * per question. One removal can orphan the next, so rounds repeat until the
  * files are stable.
  */
-function cleanUpOrphans(files: Set<SourceFile>): void {
+function cleanUpOrphans(files: Set<SourceFile>, kept: Set<Node>): void {
   for (let round = 0; round < 5; round++) {
     const removals: Array<() => void> = [];
     for (const file of files) {
       collectUnusedImports(file, removals);
-      collectUnusedLocals(file, removals);
+      collectUnusedLocals(file, removals, kept);
     }
     if (removals.length === 0) return;
     for (const removal of removals) removal();
@@ -270,7 +326,7 @@ function isBindingUsed(binding: Identifier, file: SourceFile, importDecl: Import
  * because those occurrences count as references. Exported declarations are
  * left to the analysis, which knows about entry files.
  */
-function collectUnusedLocals(file: SourceFile, removals: Array<() => void>): void {
+function collectUnusedLocals(file: SourceFile, removals: Array<() => void>, kept: Set<Node>): void {
   for (const statement of file.getStatements()) {
     if (statement.isKind(SyntaxKind.VariableStatement)) {
       if (statement.hasExportKeyword() || statement.hasDeclareKeyword()) continue;
@@ -278,7 +334,7 @@ function collectUnusedLocals(file: SourceFile, removals: Array<() => void>): voi
         const name = decl.getNameNode();
         if (name.isKind(SyntaxKind.Identifier) && !isUsedInFile(name, file)) {
           removals.push(() => {
-            if (!decl.wasForgotten()) removeDeclaration(decl);
+            if (!decl.wasForgotten()) removeDeclaration(decl, kept);
           });
         }
       }
@@ -296,7 +352,7 @@ function collectUnusedLocals(file: SourceFile, removals: Array<() => void>): voi
       if (name?.isKind(SyntaxKind.Identifier) && !isUsedInFile(name, file)) {
         removals.push(() => {
           if (statement.wasForgotten()) return;
-          removeLeadingComments(statement);
+          removeLeadingComments(statement, kept);
           statement.remove();
         });
       }

@@ -9,7 +9,7 @@ function describeFinding(finding: Finding): string {
     case 'export':
       if (finding.verdict === 'test-only') return `test-only export \`${finding.name}\`: production code never uses it`;
       return finding.dead
-        ? `dead export \`${finding.name}\``
+        ? `dead export \`${finding.name}\`${strandNote(finding)}`
         : `over-exported: \`${finding.name}\` is used only in this file`;
     case 'type':
       if (finding.verdict === 'test-only') {
@@ -30,13 +30,13 @@ function describeFinding(finding: Finding): string {
       return describeMember(finding);
     case 'empty-type': {
       if (finding.context === 'returned object') {
-        return `nobody reads what \`${finding.name}\` returns: all ${finding.swallowed} properties are unused — the computation is dead weight`;
+        return `nobody reads what \`${finding.name}\` returns: all ${finding.swallowed} properties are unused — the computation is dead weight${strandNote(finding)}`;
       }
       const count = finding.swallowed ? `all ${finding.swallowed} members are` : 'every member is';
       const claim = `${finding.context} \`${finding.name}\` becomes empty: ${count} ${memberClaim(finding)}`;
-      return finding.verdict && finding.verdict !== 'dead' && finding.evidence
-        ? `${claim} — ${finding.evidence}`
-        : claim;
+      const described =
+        finding.verdict && finding.verdict !== 'dead' && finding.evidence ? `${claim} — ${finding.evidence}` : claim;
+      return `${described}${strandNote(finding)}`;
     }
     case 'dependency':
       return `dead dependency \`${finding.name}\``;
@@ -70,8 +70,13 @@ function describeMember(finding: Finding): string {
     case 'test-only':
       return `test-only ${subject}: production code never reads it`;
     default:
-      return `dead ${subject}`;
+      return `dead ${subject}${strandNote(finding)}`;
   }
+}
+
+/** The far side of a dead bridge wrapper rides along, whatever the reporter. */
+function strandNote(finding: Finding): string {
+  return finding.strands ? ` — ${finding.strands}` : '';
 }
 
 function typeNoun(finding: Finding): string {
@@ -233,6 +238,7 @@ export function formatJson(findings: Finding[], cwd: string): string {
       verdict: f.verdict,
       evidence: f.evidence,
       swallowed: f.swallowed,
+      strands: f.strands,
     })),
     null,
     2

@@ -10,7 +10,8 @@ import { initConfig, loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { isFixable } from './engine/fix';
-import { applyVerifiedFixes } from './engine/fix-verified';
+import { applyVerifiedFixes, findingKey } from './engine/fix-verified';
+import { formatLocation } from './engine/verdicts';
 import { loadPackages, loadProject, optionsForDir } from './engine/project';
 import { analyzeSyntax, isSyntaxOnly } from './engine/syntax-analyze';
 import { formatGitHub, formatJson, formatMarkdown, formatPatch, formatSarif, formatText } from './engine/report';
@@ -363,6 +364,41 @@ function main(): void {
     for (const { finding, errors } of result.heldBack) {
       const where = `${path.relative(cwd, finding.filePath)}:${finding.line}`;
       process.stderr.write(`Held back \`${finding.name}\` (${where}): fixing it would introduce ${errors[0]}\n`);
+    }
+
+    // Two things no probe can verify, so a human gets pointed at them: prose
+    // that outlived the code it described, and the far side of a deleted
+    // bridge wrapper. Comment locations were recorded against intermediate
+    // pass states, so each one is re-found in the final text by its own words
+    // and dropped when a later pass removed it.
+    const spots: string[] = [];
+    for (const kept of result.keptComments) {
+      const content = project().getSourceFile(kept.filePath)?.getFullText();
+      if (content === undefined) continue;
+      const lines = content.split('\n');
+      const line = (lines[kept.line - 1] ?? '').includes(kept.text)
+        ? kept.line
+        : lines.findIndex(l => l.includes(kept.text)) + 1;
+      if (line === 0) continue; // the comment did not survive later passes
+      const spot = formatLocation(kept.filePath, line, cwd);
+      if (!spots.includes(spot)) spots.push(spot);
+    }
+    if (spots.length > 0) {
+      process.stderr.write(
+        spots.length === 1
+          ? `A comment near the fixes was kept: reread ${spots[0]}\n`
+          : `${spots.length} comments near the fixes were kept: reread ${spots.join(', ')}\n`
+      );
+    }
+    // Held-back findings come from a re-analysis, so they are matched by
+    // content, never by object identity: a held-back wrapper was not deleted
+    // and gets no stranding warning.
+    const held = new Set(result.heldBack.map(h => findingKey(h.finding, cwd)));
+    for (const finding of findings) {
+      if (!finding.strands || !isFixable(finding, unsafe) || held.has(findingKey(finding, cwd))) continue;
+      process.stderr.write(
+        `\`${finding.name}\`: ${finding.strands} — no analysis will flag it once the wrapper is gone\n`
+      );
     }
 
     // "Verified" must not claim more than the probe can see: de-exporting is
