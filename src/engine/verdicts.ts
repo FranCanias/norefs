@@ -39,12 +39,18 @@ export function assignVerdicts(project: Project, findings: Finding[], cwd: strin
     const shadow = owner && twins.readTwinMember(owner, finding.name);
     if (shadow) {
       finding.verdict = 'shadowed';
-      finding.evidence = `a structural twin \`${shadow.typeName}\` (${location(shadow.member, cwd)}) reads \`${finding.name}\``;
+      const where = `\`${shadow.typeName}\` (${location(shadow.node, cwd)})`;
+      finding.evidence = shadow.readsMember
+        ? `a ${shadow.sameName ? 'same-named' : 'structural'} twin ${where} reads \`${finding.name}\``
+        : `a same-named ${where} overlaps this shape`;
       continue;
     }
-    if (index.hasUnattributedWrite(finding.name)) {
+    const nameNode = (finding.node as Node & { getNameNode(): Node }).getNameNode();
+    const writeSites = index.unattributedWriteSites(finding.name, nameNode);
+    if (writeSites.length > 0) {
+      const more = writeSites.length > 1 ? ` and ${writeSites.length - 1} more site(s)` : '';
       finding.verdict = 'write-only';
-      finding.evidence = `something assigns \`${finding.name}\` where the analysis lost the type`;
+      finding.evidence = `\`${finding.name}\` is assigned at ${location(writeSites[0], cwd)}${more}, where the analysis lost the type it feeds`;
       continue;
     }
     finding.verdict = 'dead';
@@ -78,11 +84,17 @@ const SEND_CALLS = new Set(['stringify', 'postMessage', 'structuredClone']);
 
 /**
  * Named types whose values cross a serialization boundary, mapped to the
- * evidence sentence. Seeds are the types asserted or annotated on
- * `JSON.parse`/`structuredClone` results and the argument types of
- * `JSON.stringify`/`postMessage`. The closure adds every named type referenced
- * inside a boundary type's declaration: a member of a wire format is wire
- * format too.
+ * evidence sentence. Seeds come from three edges:
+ * - `JSON.parse`/`structuredClone` results and `JSON.stringify`/`postMessage`
+ *   arguments — the classic serialization calls;
+ * - calls on values a project declaration file declares (an IPC bridge, a
+ *   preload global): the implementation is outside this program, so both the
+ *   arguments and the asserted result cross a boundary;
+ * - any call whose result the types do not trace (`any`/`unknown`, or a
+ *   promise of them) landing on a named type by assertion or annotation —
+ *   `res.json() as Config` is the same pattern as `JSON.parse`.
+ * The closure adds every named type referenced inside a boundary type's
+ * declaration: a member of a wire format is wire format too.
  */
 function boundaryClosure(project: Project): Map<Node, string> {
   const boundary = new Map<Node, string>();
@@ -138,7 +150,50 @@ function collectBoundarySeeds(sourceFile: SourceFile, add: (decl: Node, evidence
         }
       }
     }
+
+    // A callee a project .d.ts declares runs outside this program: an IPC
+    // bridge, a preload global. What goes in and what is asserted out both
+    // cross that edge.
+    if (hasAmbientCallee(call)) {
+      for (const argument of call.getArguments()) {
+        for (const decl of declarationsOfExpressionType(argument)) {
+          add(decl, `its values go into \`${label}(…)\`, which runs outside this program`);
+        }
+      }
+      const typeNode = resultTypeNode(call);
+      if (typeNode) {
+        for (const decl of typeDeclarationsIn(typeNode)) {
+          add(decl, `its values come out of \`${label}(…)\`, which runs outside this program`);
+        }
+      }
+      continue;
+    }
+
+    // A result the types do not trace, pinned to a named type by hand, is
+    // the JSON.parse pattern whatever the callee is called.
+    const typeNode = resultTypeNode(call);
+    if (typeNode && returnsUntracedValue(call)) {
+      for (const decl of typeDeclarationsIn(typeNode)) {
+        add(decl, `its values come out of \`${label}(…)\`, which the types do not trace`);
+      }
+    }
   }
+}
+
+/** True when the callee resolves to a declaration file inside the project. */
+function hasAmbientCallee(call: Node & { getExpression(): Node }): boolean {
+  const symbol = call.getExpression().getSymbol();
+  return (symbol?.getDeclarations() ?? []).some(decl => {
+    const sourceFile = decl.getSourceFile();
+    return sourceFile.isDeclarationFile() && !sourceFile.isInNodeModules();
+  });
+}
+
+/** True when the call's result type is any/unknown, or a promise of them. */
+function returnsUntracedValue(call: Node): boolean {
+  const type = call.getType();
+  if (type.isAny() || type.isUnknown()) return true;
+  return type.getSymbol()?.getName() === 'Promise' && type.getTypeArguments().some(t => t.isAny() || t.isUnknown());
 }
 
 /** The type node a call result lands on: `call() as T`, `const x: T = call()`. */
@@ -218,27 +273,42 @@ function declName(decl: Node): string {
   return (decl as InterfaceDeclaration).getName() ?? '?';
 }
 
-// ------------------------------------------------------------- structural twins
+// ----------------------------------------------------------------------- twins
 
-interface TwinMember {
+interface TwinMatch {
   typeName: string;
-  member: Node;
+  /** Where the evidence points: the twin's member, or the twin itself. */
+  node: Node;
+  /** The twin declares the flagged name and something reads it there. */
+  readsMember: boolean;
+  sameName: boolean;
 }
 
 /**
- * Interfaces and type-literal aliases indexed by their member-name signature.
- * Two types with the same signature are structural twins: when the twin's
- * member of the flagged name is read, the flagged member is probably read too
- * — through the duplicate — and the real problem is the duplication.
+ * Duplicated types, found two ways. Structural twins share their whole
+ * member-name signature: when the twin's member of the flagged name is read,
+ * the flagged member is probably read too — through the duplicate. Name twins
+ * share their declared name and enough of their shape: two `IOWithSoundZones`
+ * in one codebase is a stronger duplication signal than congruence, even
+ * where the shapes have drifted apart. Either way the real finding is the
+ * duplication.
  */
 class TwinIndex {
   private readonly bySignature = new Map<string, Array<InterfaceDeclaration | TypeAliasDeclaration>>();
+  private readonly byName = new Map<string, Array<InterfaceDeclaration | TypeAliasDeclaration>>();
 
   constructor(project: Project) {
     for (const sourceFile of project.getSourceFiles()) {
       if (sourceFile.isDeclarationFile()) continue;
       for (const decl of [...sourceFile.getInterfaces(), ...sourceFile.getTypeAliases()]) {
         const names = memberNames(decl);
+        const title = decl.getName();
+        // The overlap rule needs two shared members, so smaller shapes can't match.
+        if (title && names.length >= 2) {
+          const list = this.byName.get(title) ?? [];
+          list.push(decl);
+          this.byName.set(title, list);
+        }
         // One or two members twin by accident; demand a shape with substance.
         if (names.length < 3) continue;
         const signature = names.join('\x00');
@@ -249,20 +319,48 @@ class TwinIndex {
     }
   }
 
-  /** A twin of this owner whose member of the given name has references. */
-  readTwinMember(owner: Node, name: string): TwinMember | undefined {
+  /** The twin that shadows this member, structural matches first. */
+  readTwinMember(owner: Node, name: string): TwinMatch | undefined {
     if (!owner.isKind(SyntaxKind.InterfaceDeclaration) && !owner.isKind(SyntaxKind.TypeAliasDeclaration)) {
       return undefined;
     }
-    const signature = memberNames(owner).join('\x00');
+    const ownNames = memberNames(owner);
+    const signature = ownNames.join('\x00');
     for (const twin of this.bySignature.get(signature) ?? []) {
       if (twin === owner) continue;
-      const member = typeMembers(twin).find(m => memberName(m) === name);
-      if (!member) continue;
-      const nameNode = (member as Node & { getNameNode(): Node }).getNameNode();
-      if (findReferencesAsNodes(nameNode).length > 0) return { typeName: twin.getName() ?? '?', member };
+      const match = this.readMember(twin, name, false);
+      if (match) return match;
+    }
+
+    for (const twin of this.byName.get(owner.getName() ?? '') ?? []) {
+      if (twin === owner) continue;
+      const twinNames = memberNames(twin);
+      const shared = twinNames.filter(n => n !== '' && ownNames.includes(n));
+      // Same name and at least half the smaller shape in common: a drifted copy.
+      if (shared.length < 2 || shared.length * 2 < Math.min(ownNames.length, twinNames.length)) continue;
+      const match = this.readMember(twin, name, true);
+      if (match) return match;
+      // The twin never declared (or never reads) the member; the duplication
+      // still owns the finding as long as the twin itself is alive.
+      const twinName = twin.getNameNode();
+      if (findReferencesAsNodes(twinName).some(ref => ref !== twinName)) {
+        return { typeName: twin.getName() ?? '?', node: twinName, readsMember: false, sameName: true };
+      }
     }
     return undefined;
+  }
+
+  /** The twin's member of this name, when something reads it there. */
+  private readMember(
+    twin: InterfaceDeclaration | TypeAliasDeclaration,
+    name: string,
+    sameName: boolean
+  ): TwinMatch | undefined {
+    const member = typeMembers(twin).find(m => memberName(m) === name);
+    if (!member) return undefined;
+    const nameNode = (member as Node & { getNameNode(): Node }).getNameNode();
+    if (findReferencesAsNodes(nameNode).length === 0) return undefined;
+    return { typeName: twin.getName() ?? '?', node: member, readsMember: true, sameName };
   }
 }
 

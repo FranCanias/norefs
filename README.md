@@ -23,9 +23,9 @@ Every finding carries a verdict: the claim it makes, with its safety profile. "U
 
 - **dead** — no references, no structural twin, no boundary crossing. Safe to delete, and `--fix` does.
 - **over-exported** — used in its own file only. Safe to de-export, and `--fix` does.
-- **write-only** — something assigns the member where the analysis lost the type, and nothing reads it. Suspicious, not proven dead: an object whose identity matters can be written on purpose and never read.
-- **contract** — the type's values cross a serialization boundary (`JSON.parse`, `JSON.stringify`, `structuredClone`, `postMessage`), directly or through a containing type. The members document a wire format; deleting them destroys the documentation, not the data.
-- **shadowed** — a structurally identical type elsewhere *is* read. The member is probably alive through the duplicate, and the real finding is the duplication: delete the twin, not the member.
+- **write-only** — something assigns the member where the analysis lost the type, and nothing reads it. The finding names the write site, so you can judge it. Suspicious, not proven dead: an object whose identity matters can be written on purpose and never read.
+- **contract** — the type's values cross a boundary the types cannot follow: a serialization call (`JSON.parse`, `JSON.stringify`, `structuredClone`, `postMessage`), a call on something a project `.d.ts` declares (an IPC bridge, a preload global), or any untraced result (`any`/`unknown`) pinned to the type by assertion — directly or through a containing type. The members document a wire format; deleting them destroys the documentation, not the data.
+- **shadowed** — a duplicate of the type elsewhere *is* read: a structurally identical twin, or a same-named type whose shape overlaps enough to be a drifted copy. The member is probably alive through the duplicate, and the real finding is the duplication: merge the twins, don't delete the member.
 - **test-only** — production code never touches it; only test files keep it alive. A real and common category of dead code, and never auto-fixed: the fix is deleting the code together with its tests, and only a human deletes tests.
 
 Each soft verdict prints its evidence — the twin that reads the member, the boundary the type crosses. `--fix` only applies `dead` and `over-exported` findings; the rest wait for `--fix-unsafe` or your judgment.
@@ -223,6 +223,7 @@ Loading the project is the expensive part of a run, so watch mode does it once. 
 - Unused files, namespace findings, and emptied types are never touched. Deleting a file is your call, a namespace finding is a lower-confidence guess, and an emptied type needs your judgment about its consumers.
 - `--fix` only touches what is reported, so `--only`, `ignore` globs, and suppression comments limit the fixes the same way they limit the findings.
 - Every fix happens in memory first. After the last pass, norefs verifies its own work: it type-checks the fixed project and compares against the errors that existed before. When a fix introduced an error, norefs bisects the fix set to the culprit, holds that one fix back with the errors as evidence, and re-verifies the rest — then it saves only the verified result. Disk never sees an unverified edit. `--no-verify` skips the check when the double type-check costs more than you want to pay.
+- Know what "Verified" means per fix class. De-exporting is compiler-checkable by construction. A deleted member is not: a type check cannot see runtime-only reads (an identity-tracked context value, an inference-typed producer). When member deletions ride on the type check alone, norefs says so — and `--verify-command` is the honest witness for them.
 - `--verify-command "npm test"` raises the bar: after the type check passes, the candidate files go to disk, the command runs, and the originals come back before the verdict. A fix your test suite rejects is held back like any other — the diff you get is one your own tests already passed.
 
 Review the diff before you commit. The emptied-type findings point at the leftovers that need human judgment.

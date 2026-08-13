@@ -54,7 +54,10 @@ export function describeTypeLiteralContext(node: Node): Described {
     return { label: `the return type of ${fn.label}`, anonymous: fn.anonymous };
   }
   if (parent.isKind(SyntaxKind.PropertySignature) || parent.isKind(SyntaxKind.PropertyDeclaration)) {
-    return { label: `the type of property \`${parent.getName()}\``, anonymous: false };
+    // The literal nests inside another type's member. It has no name of its
+    // own, however well-named the type around it is — and --anon promises
+    // that findings on unnamed inline types stay hidden by default.
+    return { label: `the type of property \`${parent.getName()}\``, anonymous: true };
   }
   return { label: `an object type (${location(node)})`, anonymous: true };
 }

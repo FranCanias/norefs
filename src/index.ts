@@ -365,13 +365,26 @@ function main(): void {
       process.stderr.write(`Held back \`${finding.name}\` (${where}): fixing it would introduce ${errors[0]}\n`);
     }
 
+    // "Verified" must not claim more than the probe can see: de-exporting is
+    // compiler-checkable, but a deleted member can have runtime-only readers
+    // (an identity-tracked context value, an inference-typed producer) that
+    // no type check reaches. Say so unless the user's own command also ran.
+    const memberFixes = findings.some(f => f.kind === 'member' && isFixable(f, unsafe));
+    const verifiedLine = (fixes: string): string => {
+      const caveat =
+        memberFixes && !command
+          ? ' A type check cannot see runtime-only reads of deleted members; add --verify-command to run your tests too.\n'
+          : '\n';
+      return `Verified: tsc reports no new errors after the ${fixes}.${caveat}`;
+    };
+
     if (!save) {
       for (const filePath of [...result.touched].sort()) {
         const before = fs.readFileSync(filePath, 'utf8');
         const after = project().getSourceFile(filePath)?.getFullText() ?? before;
         process.stdout.write(`${formatPatch(path.relative(cwd, filePath), before, after)}\n`);
       }
-      if (verify) process.stderr.write('Verified: tsc reports no new errors after the would-be fixes.\n');
+      if (verify) process.stderr.write(verifiedLine('would-be fixes'));
       process.stderr.write(`Dry run: would fix ${result.fixed} finding(s) in ${result.touched.length} file(s)\n`);
       process.exitCode = 1;
       return;
@@ -380,7 +393,7 @@ function main(): void {
     for (const filePath of result.touched) {
       project().getSourceFile(filePath)?.saveSync();
     }
-    if (verify) process.stderr.write('Verified: tsc reports no new errors after the fixes.\n');
+    if (verify) process.stderr.write(verifiedLine('fixes'));
     process.stderr.write(`Fixed ${result.fixed} finding(s) in ${result.touched.length} file(s)\n`);
 
     const skipped = findings.filter(f => !isFixable(f, unsafe)).length;

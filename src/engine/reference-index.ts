@@ -66,14 +66,19 @@ class ReferenceIndex {
   private readonly queryableNames = new Set<string>();
   /** Contextual occurrences, held until every file's member names are in. */
   private pending: ts.Node[] = [];
+  /** Spreads inside object literals, held with the contextual occurrences. */
+  private pendingSpreads: ts.SpreadAssignment[] = [];
   /**
-   * Names written in an object literal or a JSX attribute that this index
-   * could not attribute to any member — the contextual type was out of reach
-   * (an inferred generic, a spread, a failed resolution). A member with zero
-   * references but a name in this set may be written through the gap:
-   * write-only rather than dead.
+   * Write sites — object-literal properties, computed keys, spread sources,
+   * JSX attributes — this index could not attribute to any member: the
+   * contextual type was out of reach (an inferred generic, a failed
+   * resolution) or was the literal's own inferred type, which proves nothing.
+   * A member with zero references but a name in this map may be written
+   * through the gap: write-only rather than dead. A spread entry keeps the
+   * property symbol it copied, so a copy out of the very member under
+   * question can be told apart from a write that feeds somewhere else.
    */
-  private readonly unattributedWriteNames = new Set<string>();
+  private readonly unattributedWrites = new Map<string, UnattributedWrite[]>();
   /** Intrinsic JSX tag symbols, per file — the JSX namespace can differ per file. */
   private readonly intrinsicTags = new Map<ts.SourceFile, Map<string, ts.Symbol>>();
   /**
@@ -102,6 +107,8 @@ class ReferenceIndex {
       if (this.memberNames.has(propertyName(node))) this.indexContextual(node, contextualTypes);
     }
     this.pending = [];
+    for (const spread of this.pendingSpreads) this.indexSpread(spread, contextualTypes);
+    this.pendingSpreads = [];
   }
 
   /** Every reference to the declaration this node names, itself excluded. */
@@ -170,6 +177,7 @@ class ReferenceIndex {
           this.queryableNames.add(propertyName(node));
         }
       }
+      if (this.members && ts.isSpreadAssignment(node)) this.pendingSpreads.push(node);
       const inModuleStatement =
         moduleStatement ||
         ts.isImportDeclaration(node) ||
@@ -208,18 +216,43 @@ class ReferenceIndex {
    */
   private indexContextual(node: ts.Node, contextualTypes: Map<ts.Node, ts.Type[]>): void {
     const parent = node.parent;
+    // A string-literal computed key writes the member it spells out.
+    const assignment = ts.isComputedPropertyName(parent) ? parent.parent : parent;
     if (
-      (ts.isPropertyAssignment(parent) || ts.isShorthandPropertyAssignment(parent) || ts.isMethodDeclaration(parent)) &&
-      ts.isObjectLiteralExpression(parent.parent)
+      (ts.isPropertyAssignment(assignment) ||
+        ts.isShorthandPropertyAssignment(assignment) ||
+        ts.isMethodDeclaration(assignment)) &&
+      ts.isObjectLiteralExpression(assignment.parent)
     ) {
-      const filed = this.fileProperties(this.contextualTypesOf(parent.parent, contextualTypes), node);
-      if (!filed) this.unattributedWriteNames.add(propertyName(node));
+      const filed = this.fileProperties(this.attributableTypes(assignment.parent, contextualTypes), node);
+      if (!filed) this.recordUnattributedWrite(propertyName(node), node);
     } else if (ts.isBindingElement(parent)) {
       const pattern = safely(() => this.checker.getTypeAtLocation(parent.parent));
       this.fileProperties(pattern ? [pattern] : [], node);
     } else if (ts.isJsxAttribute(parent)) {
-      const filed = this.fileProperties(this.contextualTypesOf(parent.parent, contextualTypes), node);
-      if (!filed) this.unattributedWriteNames.add(propertyName(node));
+      const filed = this.fileProperties(this.attributableTypes(parent.parent, contextualTypes), node);
+      if (!filed) this.recordUnattributedWrite(propertyName(node), node);
+    }
+  }
+
+  /**
+   * A spread writes every member its source carries into the containing
+   * literal. A spread is a copy, not authored use, so nothing files as a
+   * reference — but a project-declared name carried into a literal whose
+   * contextual type is out of reach is a write no reference will ever land
+   * on (`{ ...base }` feeding an inference-typed provider value), and it
+   * goes into the unattributed-write map with its source symbol.
+   */
+  private indexSpread(spread: ts.SpreadAssignment, contextualTypes: Map<ts.Node, ts.Type[]>): void {
+    const source = safely(() => this.checker.getTypeAtLocation(spread.expression));
+    if (!source) return;
+    const carried = this.checker.getPropertiesOfType(source).filter(symbol => this.memberNames.has(symbol.name));
+    if (carried.length === 0) return;
+
+    const types = this.attributableTypes(spread.parent, contextualTypes);
+    for (const symbol of carried) {
+      const attributed = types.some(type => this.propertiesOf(type, symbol.name).length > 0);
+      if (!attributed) this.recordUnattributedWrite(symbol.name, spread, symbol);
     }
   }
 
@@ -236,9 +269,43 @@ class ReferenceIndex {
     return filed;
   }
 
-  /** True when a write of this name exists that no member could be charged with. */
-  hasUnattributedWrite(name: string): boolean {
-    return this.unattributedWriteNames.has(name);
+  /**
+   * The container's contextual types, minus the container's own inferred type.
+   * An inference-typed literal (`useMemo(() => ({ … }))` with no type
+   * argument) answers the contextual-type question with itself; attributing a
+   * write to the very literal that makes it is circular evidence, so such a
+   * type proves nothing and the write counts as unattributed.
+   */
+  private attributableTypes(container: ts.Node, cache: Map<ts.Node, ts.Type[]>): ts.Type[] {
+    return this.contextualTypesOf(container as ts.Expression, cache).filter(
+      type => !(type.symbol?.declarations ?? []).some(decl => isInside(decl, container))
+    );
+  }
+
+  private recordUnattributedWrite(name: string, site: ts.Node, source?: ts.Symbol): void {
+    const entry = { site, source };
+    const entries = this.unattributedWrites.get(name);
+    if (entries) entries.push(entry);
+    else this.unattributedWrites.set(name, [entry]);
+  }
+
+  /**
+   * The write sites of this member's name that no member could be charged
+   * with, ordered by file and position. An empty answer is the "no untracked
+   * write" axiom the dead verdict rests on. A spread that copied the value
+   * of this very member does not count: reads through the copy resolve back
+   * to the member, so the copy hides nothing.
+   */
+  unattributedWriteSites(name: string, member?: Node): Node[] {
+    const entries = this.unattributedWrites.get(name) ?? [];
+    if (entries.length === 0) return [];
+    const memberSymbol = member && this.checker.getSymbolAtLocation(member.compilerNode);
+    const own = memberSymbol && new Set(this.relatedSymbols(memberSymbol));
+    return entries
+      .filter(entry => !entry.source || !own || !this.relatedSymbols(entry.source).some(s => own.has(s)))
+      .map(entry => entry.site)
+      .sort((a, b) => a.getSourceFile().fileName.localeCompare(b.getSourceFile().fileName) || a.pos - b.pos)
+      .map(node => this.wrap(node));
   }
 
   /**
@@ -597,6 +664,12 @@ interface Anchor {
   generic: boolean;
 }
 
+/** A write no member could be charged with; spreads keep the copied symbol. */
+interface UnattributedWrite {
+  site: ts.Node;
+  source?: ts.Symbol;
+}
+
 interface WrappingSourceFile {
   _getNodeFromCompilerNode(compilerNode: ts.Node): Node;
 }
@@ -633,6 +706,11 @@ function isRestParameter(parameter: ts.Symbol): boolean {
 /** The constituents of a union or intersection, and the type itself otherwise. */
 function partsOf(type: ts.Type): ts.Type[] {
   return type.isUnionOrIntersection() ? type.types.flatMap(partsOf) : [type];
+}
+
+/** True when `node` sits at or inside `container` in the same file. */
+function isInside(node: ts.Node, container: ts.Node): boolean {
+  return node.getSourceFile() === container.getSourceFile() && node.pos >= container.pos && node.end <= container.end;
 }
 
 /**
@@ -701,6 +779,14 @@ function isContextualSite(node: ts.Node): boolean {
     ts.isObjectLiteralExpression(parent.parent)
   ) {
     return true;
+  }
+  // A computed key with a literal name: `{ ['foo']: … }` writes `foo`.
+  if (ts.isComputedPropertyName(parent) && ts.isStringLiteralLike(node)) {
+    const assignment = parent.parent;
+    return (
+      (ts.isPropertyAssignment(assignment) || ts.isMethodDeclaration(assignment)) &&
+      ts.isObjectLiteralExpression(assignment.parent)
+    );
   }
   if (ts.isBindingElement(parent) && (parent.propertyName ?? parent.name) === node) return true;
   return ts.isJsxAttribute(parent) && parent.name === node;

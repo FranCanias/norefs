@@ -28,6 +28,58 @@ describe('applyFixes', () => {
     expect(text).toContain('name: string;');
   });
 
+  it('removes the freestanding comments above a removed declaration', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    const lib = project.createSourceFile(
+      '/lib.ts',
+      [
+        'interface User {',
+        '  name: string;',
+        '  // kept for the legacy importer',
+        '  legacyId?: number;',
+        '}',
+        '',
+        '// we override render to wrap components in ThemeProvider',
+        'export function customRender(): void {}',
+        '',
+        'export function greet(u: User): string {',
+        '  return u.name;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile('/main.ts', "import { greet } from './lib';\ngreet({ name: 'x' });\n");
+    applyFixes(analyze(project));
+    const text = lib.getFullText();
+    expect(text).not.toContain('legacyId');
+    expect(text).not.toContain('legacy importer');
+    expect(text).not.toContain('customRender');
+    expect(text).not.toContain('ThemeProvider');
+    expect(text).toContain('name: string;');
+  });
+
+  it('keeps a comment a blank line sets apart from a removed declaration', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    const lib = project.createSourceFile(
+      '/lib.ts',
+      [
+        '// ---- section header ----',
+        '',
+        'export function gone(): void {}',
+        'export function kept(): string {',
+        "  return 'x';",
+        '}',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile('/main.ts', "import { kept } from './lib';\nkept();\n");
+    applyFixes(analyze(project));
+    const text = lib.getFullText();
+    expect(text).not.toContain('gone');
+    expect(text).toContain('section header');
+    expect(text).toContain('kept');
+  });
+
   it('removes an unused enum member', () => {
     const text = fix(
       [

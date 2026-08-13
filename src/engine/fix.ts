@@ -90,9 +90,48 @@ function fixMember(member: Node): SourceFile[] {
     member.setIsReadonly(false);
     member.setScope(undefined);
   } else {
+    removeLeadingComments(member);
     (member as unknown as { remove(): void }).remove();
   }
   return [sourceFile];
+}
+
+/**
+ * Freestanding comment lines directly above a removed declaration described
+ * it, and they orphan when it goes. JSDoc travels with the node already;
+ * these are the plain comment lines ts-morph models as siblings. Only
+ * adjacent lines go — a comment set apart by a blank line may describe the
+ * whole section, and keeping it costs nothing.
+ */
+function removeLeadingComments(node: Node): void {
+  const container = node.getParent() as
+    | Partial<{
+        getStatementsWithComments(): Node[];
+        getMembersWithComments(): Node[];
+        getPropertiesWithComments(): Node[];
+      }>
+    | undefined;
+  const siblings =
+    container?.getStatementsWithComments?.() ??
+    container?.getMembersWithComments?.() ??
+    container?.getPropertiesWithComments?.();
+  if (!siblings) return;
+
+  let index = siblings.indexOf(node);
+  let above = node;
+  const comments: Node[] = [];
+  while (index > 0) {
+    const previous = siblings[index - 1];
+    const kind = previous.getKind();
+    if (kind !== SyntaxKind.SingleLineCommentTrivia && kind !== SyntaxKind.MultiLineCommentTrivia) break;
+    if (previous.getEndLineNumber() < above.getStartLineNumber() - 1) break;
+    comments.push(previous);
+    above = previous;
+    index--;
+  }
+  for (const comment of comments) {
+    (comment as unknown as { remove(): void }).remove();
+  }
 }
 
 function fixExport(finding: Finding, decl: Node, specifiers: Array<ImportSpecifier | ExportSpecifier>): SourceFile[] {
@@ -155,10 +194,12 @@ function removeDeclaration(decl: Node): void {
   if (decl.isKind(SyntaxKind.VariableDeclaration)) {
     const statement = decl.getVariableStatement();
     if (statement && statement.getDeclarations().length === 1) {
+      removeLeadingComments(statement);
       statement.remove();
       return;
     }
   }
+  removeLeadingComments(decl);
   (decl as unknown as { remove(): void }).remove();
 }
 
@@ -254,7 +295,9 @@ function collectUnusedLocals(file: SourceFile, removals: Array<() => void>): voi
       const name = statement.getNameNode();
       if (name?.isKind(SyntaxKind.Identifier) && !isUsedInFile(name, file)) {
         removals.push(() => {
-          if (!statement.wasForgotten()) statement.remove();
+          if (statement.wasForgotten()) return;
+          removeLeadingComments(statement);
+          statement.remove();
         });
       }
     }
