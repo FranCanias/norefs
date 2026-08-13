@@ -46,7 +46,12 @@ Options:
                          when that file exists, later runs report and fail on
                          new findings only
   --export <md|json>     Also write findings to norefs-findings.md or norefs-findings.json
-  --fix                  Remove reported members and export keywords from the source files
+  --fix                  Apply the fixes the verdicts prove safe: dead code is
+                         removed, over-exported declarations lose the export
+                         keyword
+  --fix-unsafe           Also apply write-only, contract, and shadowed findings
+                         (implies --fix). These are claims the analysis cannot
+                         prove — review the diff
   --dry-run              With --fix: print the would-be changes as a unified
                          diff without writing any file
   --watch                Re-run on save: keep the loaded project in memory,
@@ -78,6 +83,7 @@ function main(): void {
       baseline: { type: 'boolean', default: false },
       export: { type: 'string' },
       fix: { type: 'boolean', default: false },
+      'fix-unsafe': { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
       watch: { type: 'boolean', default: false },
       anonymous: { type: 'boolean', default: true },
@@ -90,6 +96,8 @@ function main(): void {
     process.stdout.write(HELP);
     return;
   }
+
+  if (values['fix-unsafe']) values.fix = true;
 
   const command = positionals[0];
   if (command !== undefined && command !== 'init') {
@@ -280,13 +288,14 @@ function main(): void {
     // until nothing fixable is left. A dry run applies the same fixes to the
     // in-memory project only and prints the diff against the files on disk.
     const save = !values['dry-run'];
-    let result = applyFixes(findings, { save });
+    const unsafe = values['fix-unsafe'];
+    let result = applyFixes(findings, { save, unsafe });
     let totalFixed = result.fixed;
     const touched = new Set(result.filePaths);
     for (let pass = 2; result.fixed > 0 && pass <= 5; pass++) {
       let remaining = runAnalysis();
       if (baseline) remaining = applyBaseline(remaining, cwd)?.fresh ?? remaining;
-      result = applyFixes(remaining, { save });
+      result = applyFixes(remaining, { save, unsafe });
       if (result.fixed === 0) break;
       totalFixed += result.fixed;
       for (const filePath of result.filePaths) touched.add(filePath);
@@ -306,9 +315,10 @@ function main(): void {
 
     process.stderr.write(`Fixed ${totalFixed} finding(s) in ${touched.size} file(s)\n`);
     if (result.skipped > 0) {
-      process.stderr.write(
-        `Skipped ${result.skipped} finding(s) --fix does not touch (files, namespaces, emptied types, dependencies)\n`
-      );
+      const untouched = unsafe
+        ? 'files, namespaces, emptied types, dependencies'
+        : 'write-only, contract, and shadowed verdicts need --fix-unsafe; files, namespaces, emptied types, dependencies are never touched';
+      process.stderr.write(`Skipped ${result.skipped} finding(s) --fix does not touch (${untouched})\n`);
     }
     return;
   }

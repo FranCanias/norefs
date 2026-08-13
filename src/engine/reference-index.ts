@@ -66,6 +66,14 @@ export class ReferenceIndex {
   private readonly queryableNames = new Set<string>();
   /** Contextual occurrences, held until every file's member names are in. */
   private pending: ts.Node[] = [];
+  /**
+   * Names written in an object literal or a JSX attribute that this index
+   * could not attribute to any member — the contextual type was out of reach
+   * (an inferred generic, a spread, a failed resolution). A member with zero
+   * references but a name in this set may be written through the gap:
+   * write-only rather than dead.
+   */
+  private readonly unattributedWriteNames = new Set<string>();
   /** Intrinsic JSX tag symbols, per file — the JSX namespace can differ per file. */
   private readonly intrinsicTags = new Map<ts.SourceFile, Map<string, ts.Symbol>>();
   /**
@@ -204,22 +212,33 @@ export class ReferenceIndex {
       (ts.isPropertyAssignment(parent) || ts.isShorthandPropertyAssignment(parent) || ts.isMethodDeclaration(parent)) &&
       ts.isObjectLiteralExpression(parent.parent)
     ) {
-      this.fileProperties(this.contextualTypesOf(parent.parent, contextualTypes), node);
+      const filed = this.fileProperties(this.contextualTypesOf(parent.parent, contextualTypes), node);
+      if (!filed) this.unattributedWriteNames.add(propertyName(node));
     } else if (ts.isBindingElement(parent)) {
       const pattern = safely(() => this.checker.getTypeAtLocation(parent.parent));
       this.fileProperties(pattern ? [pattern] : [], node);
     } else if (ts.isJsxAttribute(parent)) {
-      this.fileProperties(this.contextualTypesOf(parent.parent, contextualTypes), node);
+      const filed = this.fileProperties(this.contextualTypesOf(parent.parent, contextualTypes), node);
+      if (!filed) this.unattributedWriteNames.add(propertyName(node));
     }
   }
 
-  private fileProperties(types: ts.Type[], node: ts.Node): void {
+  /** True when at least one member symbol took the occurrence. */
+  private fileProperties(types: ts.Type[], node: ts.Node): boolean {
     const name = propertyName(node);
+    let filed = false;
     for (const type of types) {
       for (const symbol of this.propertiesOf(type, name)) {
         this.fileUnder(symbol, node);
+        filed = true;
       }
     }
+    return filed;
+  }
+
+  /** True when a write of this name exists that no member could be charged with. */
+  hasUnattributedWrite(name: string): boolean {
+    return this.unattributedWriteNames.has(name);
   }
 
   /**

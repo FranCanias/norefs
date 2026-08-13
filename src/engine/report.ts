@@ -5,39 +5,65 @@ import type { Finding } from '../types';
 function describeFinding(finding: Finding): string {
   switch (finding.kind) {
     case 'file':
-      return 'unused file';
+      return 'dead file';
     case 'export':
-      return `unused export \`${finding.name}\``;
+      return finding.dead
+        ? `dead export \`${finding.name}\``
+        : `over-exported: \`${finding.name}\` is used only in this file`;
     case 'type':
-      return `unused exported type \`${finding.name}\``;
+      return finding.dead
+        ? `dead exported ${typeNoun(finding)} \`${finding.name}\``
+        : `over-exported: ${typeNoun(finding)} \`${finding.name}\` is used only in this file`;
     case 'ns-export':
-      return `unused export \`${finding.name}\` in used namespace \`${finding.context}\``;
+      return finding.dead
+        ? `dead export \`${finding.name}\` in used namespace \`${finding.context}\``
+        : `over-exported: \`${finding.name}\` is used only inside namespace \`${finding.context}\``;
     case 'ns-type':
-      return `unused exported type \`${finding.name}\` in used namespace \`${finding.context}\``;
+      return finding.dead
+        ? `dead exported ${typeNoun(finding)} \`${finding.name}\` in used namespace \`${finding.context}\``
+        : `over-exported: ${typeNoun(finding)} \`${finding.name}\` is used only inside namespace \`${finding.context}\``;
     case 'member':
-      return `unused property \`${finding.name}\` in ${finding.context}`;
+      return describeMember(finding);
     case 'empty-type':
-      return `${finding.context} \`${finding.name}\` becomes empty: every member is unused`;
+      return `${finding.context} \`${finding.name}\` becomes empty: every member is reported`;
     case 'dependency':
-      return `unused dependency \`${finding.name}\``;
+      return `dead dependency \`${finding.name}\``;
     case 'unlisted':
       return `dependency \`${finding.name}\` is not listed in package.json`;
   }
 }
 
+function describeMember(finding: Finding): string {
+  const subject = `property \`${finding.name}\` in ${finding.context}`;
+  switch (finding.verdict) {
+    case 'write-only':
+      return `write-only ${subject}: ${finding.evidence ?? 'assigned somewhere, never read'}`;
+    case 'contract':
+      return `${subject} looks like a data contract: ${finding.evidence ?? 'its type crosses a serialization boundary'}`;
+    case 'shadowed':
+      return `${subject} is unread here, but ${finding.evidence ?? 'a structural twin reads it'} — the finding is the duplication`;
+    default:
+      return `dead ${subject}`;
+  }
+}
+
+function typeNoun(finding: Finding): string {
+  return finding.typeKind ?? 'type';
+}
+
+/** The headline counts by verdict: the claim each finding makes, not one flat "unused". */
 function summarize(findings: Finding[]): string {
-  const of = (...kinds: Finding['kind'][]): number => findings.filter(f => kinds.includes(f.kind)).length;
+  const count = (match: (f: Finding) => boolean): number => findings.filter(match).length;
   const groups: Array<[number, string, string]> = [
-    [of('file'), 'file', 'files'],
-    [of('export', 'ns-export'), 'export', 'exports'],
-    [of('type', 'ns-type'), 'exported type', 'exported types'],
-    [of('member'), 'property', 'properties'],
-    [of('empty-type'), 'emptied type', 'emptied types'],
-    [of('dependency'), 'unused dependency', 'unused dependencies'],
-    [of('unlisted'), 'unlisted dependency', 'unlisted dependencies'],
+    [count(f => f.verdict === 'dead'), 'dead', 'dead'],
+    [count(f => f.verdict === 'over-exported'), 'over-exported', 'over-exported'],
+    [count(f => f.verdict === 'write-only'), 'write-only', 'write-only'],
+    [count(f => f.verdict === 'contract'), 'likely contract', 'likely contracts'],
+    [count(f => f.verdict === 'shadowed'), 'shadowed by a duplicate type', 'shadowed by duplicate types'],
+    [count(f => f.kind === 'unlisted'), 'unlisted dependency', 'unlisted dependencies'],
   ];
   const parts = groups.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
-  return `Unused code (${findings.length}): ${parts.join(', ')}`;
+  return `${findings.length} ${findings.length === 1 ? 'finding' : 'findings'}: ${parts.join(', ')}`;
 }
 
 function groupByFile(findings: Finding[]): Map<string, Finding[]> {
@@ -139,6 +165,7 @@ export function formatSarif(findings: Finding[], cwd: string): string {
             ruleId: f.kind,
             level: 'warning',
             message: { text: describeFinding(f) },
+            ...(f.verdict ? { properties: { verdict: f.verdict } } : {}),
             locations: [
               {
                 physicalLocation: {
@@ -166,6 +193,10 @@ export function formatJson(findings: Finding[], cwd: string): string {
       name: f.name,
       context: f.context,
       anonymous: f.anonymous,
+      dead: f.dead,
+      typeKind: f.typeKind,
+      verdict: f.verdict,
+      evidence: f.evidence,
     })),
     null,
     2

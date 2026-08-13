@@ -1,10 +1,16 @@
+import type { ts } from 'ts-morph';
 import { Project } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import type { Finding } from '../src/types';
 
-function depFindings(manifest: object, files: Record<string, string>, ignoreDependencies: string[] = []): Finding[] {
-  const project = new Project({ useInMemoryFileSystem: true });
+function depFindings(
+  manifest: object,
+  files: Record<string, string>,
+  ignoreDependencies: string[] = [],
+  compilerOptions: ts.CompilerOptions = {}
+): Finding[] {
+  const project = new Project({ useInMemoryFileSystem: true, compilerOptions });
   project.getFileSystem().writeFileSync('/package.json', JSON.stringify(manifest, null, 2));
   for (const [filePath, text] of Object.entries(files)) project.createSourceFile(filePath, text);
   return analyze(project, { rootDirs: ['/'], ignoreDependencies }).filter(
@@ -78,6 +84,34 @@ describe('dependency checks', () => {
       ['legacy-*']
     );
     expect(findings).toEqual([]);
+  });
+
+  it('never mistakes a path alias for a scoped package, query suffix or not', () => {
+    const findings = depFindings(
+      { dependencies: {} },
+      { '/main.ts': "import Icon from '@/assets/icons/Attention.svg?react';\nexport const y = Icon;\n" }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('treats a specifier matching a tsconfig paths pattern as project code', () => {
+    const findings = depFindings(
+      { dependencies: {} },
+      { '/main.ts': "import logo from 'assets/logo.svg?url';\nexport const y = logo;\n" },
+      [],
+      { paths: { 'assets/*': ['./src/assets/*'] } }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('ignores Node subpath imports and strips query suffixes from real packages', () => {
+    const findings = depFindings(
+      { dependencies: {} },
+      {
+        '/main.ts': "import { a } from '#internal/util';\nimport raw from 'somepkg?raw';\nexport const y = [a, raw];\n",
+      }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['unlisted', 'somepkg']]);
   });
 
   it('honors a norefs-ignore comment on an unlisted import line', () => {

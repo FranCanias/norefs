@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { ts } from 'ts-morph';
+import { stripQuerySuffix } from './dependencies';
 import type { FileScan, Specifier } from './scan';
 import { scanFiles } from './scan';
 import type { PackageConfig } from './project';
@@ -99,7 +100,8 @@ export class SourceIndex {
     const scan = this.scans.get(filePath);
     if (!scan) return [];
     return scan.specifiers.map(specifier => {
-      const resolved = ts.resolveModuleName(specifier.text, filePath, options, ts.sys, cache).resolvedModule;
+      const text = stripQuerySuffix(specifier.text);
+      const resolved = ts.resolveModuleName(text, filePath, options, ts.sys, cache).resolvedModule;
       if (!resolved) return { specifier, resolved: false, external: false };
       const target = resolved.resolvedFileName;
       return {

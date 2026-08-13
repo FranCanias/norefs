@@ -48,6 +48,7 @@ export function analyzeDependencies(
   rootDirs: string[],
   scopeDir: string | undefined,
   ignore: string[],
+  aliasPatterns: string[],
   context: DependencyContext
 ): Finding[] {
   const manifests: Manifest[] = [];
@@ -62,7 +63,9 @@ export function analyzeDependencies(
   const reportedUnlisted = new Set<string>();
 
   for (const use of uses) {
-    const name = packageName(use.text);
+    const specifier = stripQuerySuffix(use.text);
+    if (matchesAlias(specifier, aliasPatterns)) continue;
+    const name = packageName(specifier);
     if (!name) continue;
     for (const owner of owningManifests(use.filePath, manifests)) owner.used.add(name);
 
@@ -95,6 +98,7 @@ export function analyzeDependencies(
         name,
         context: '',
         anonymous: false,
+        verdict: 'dead',
       });
     }
   }
@@ -133,10 +137,38 @@ function owningManifests(filePath: string, manifests: Manifest[]): Manifest[] {
   return owners.length > 0 ? owners : manifests;
 }
 
+/**
+ * Bundler-only query suffixes like Vite's `?react`, `?raw`, `?worker` are not
+ * part of the module name and break resolution when left on.
+ */
+export function stripQuerySuffix(specifier: string): string {
+  const query = specifier.indexOf('?');
+  return query === -1 ? specifier : specifier.slice(0, query);
+}
+
+/** True when the specifier matches a tsconfig `paths` pattern: an alias into project code, never a package. */
+function matchesAlias(specifier: string, patterns: string[]): boolean {
+  return patterns.some(pattern => {
+    const star = pattern.indexOf('*');
+    if (star === -1) return specifier === pattern;
+    return (
+      specifier.length >= pattern.length - 1 &&
+      specifier.startsWith(pattern.slice(0, star)) &&
+      specifier.endsWith(pattern.slice(star + 1))
+    );
+  });
+}
+
 function packageName(specifier: string): string | undefined {
-  if (specifier.startsWith('.') || specifier.startsWith('/') || specifier.startsWith('node:')) return undefined;
+  // '.'/'/' are file paths, '#' is a Node subpath import: all project code.
+  if (/^[./#]/.test(specifier) || specifier.startsWith('node:')) return undefined;
   const parts = specifier.split('/');
-  const name = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+  if (specifier.startsWith('@')) {
+    // A scoped name needs a real scope and a real name; '@/x' is an alias, not a package.
+    if (parts[0].length < 2 || !parts[1]) return undefined;
+    return parts.slice(0, 2).join('/');
+  }
+  const name = parts[0];
   if (!name || BUILTINS.has(name)) return undefined;
   return name;
 }

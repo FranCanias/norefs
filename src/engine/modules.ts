@@ -1,11 +1,11 @@
 import type { Identifier, ModuleDeclaration, Node, Project, SourceFile } from 'ts-morph';
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
-import type { Finding, FindingKind } from '../types';
+import type { Finding, FindingKind, TypeKeyword } from '../types';
 import type { DependencyUse } from './dependencies';
 import { analyzeDependencies } from './dependencies';
 import { packageEntries } from './package-entries';
 import type { PackageConfig } from './project';
-import { optionsForDir } from './project';
+import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
 import { findReferencesAsNodes } from './references';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
@@ -78,6 +78,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
         name: sourceFile.getBaseName(),
         context: '',
         anonymous: false,
+        verdict: 'dead',
       });
       continue;
     }
@@ -90,16 +91,23 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
 
   const fileSystem = project.getFileSystem();
   findings.push(
-    ...analyzeDependencies(dependencyUses(project), rootDirs, options.scopeDir, options.ignoreDependencies ?? [], {
-      fileExists: filePath => fileSystem.fileExistsSync(filePath),
-      readFile: filePath => fileSystem.readFileSync(filePath),
-      isSuppressedAt: (filePath, offset) => {
-        const sourceFile = project.getSourceFile(filePath);
-        const node = sourceFile?.getDescendantAtPos(offset);
-        return node !== undefined && isNodeSuppressed(node);
-      },
-      positionAt: (filePath, offset) => project.getSourceFileOrThrow(filePath).getLineAndColumnAtPos(offset),
-    })
+    ...analyzeDependencies(
+      dependencyUses(project),
+      rootDirs,
+      options.scopeDir,
+      options.ignoreDependencies ?? [],
+      pathAliasPatterns(options.packages ?? [], project.getCompilerOptions()),
+      {
+        fileExists: filePath => fileSystem.fileExistsSync(filePath),
+        readFile: filePath => fileSystem.readFileSync(filePath),
+        isSuppressedAt: (filePath, offset) => {
+          const sourceFile = project.getSourceFile(filePath);
+          const node = sourceFile?.getDescendantAtPos(offset);
+          return node !== undefined && isNodeSuppressed(node);
+        },
+        positionAt: (filePath, offset) => project.getSourceFileOrThrow(filePath).getLineAndColumnAtPos(offset),
+      }
+    )
   );
   return { findings, deadFiles, deadDecls };
 }
@@ -129,9 +137,9 @@ function collectExportFindings(
       if (externallyUsed) continue;
       if (!locallyUsed) deadDecls.add(decl);
 
-      const typeOnly = isTypeDeclaration(decl);
-      const kind: FindingKind = namespaceAlias ? (typeOnly ? 'ns-type' : 'ns-export') : typeOnly ? 'type' : 'export';
-      findings.push(makeFinding(kind, nameNode, namespaceAlias ?? '', !locallyUsed));
+      const typeKind = typeKeyword(decl);
+      const kind: FindingKind = namespaceAlias ? (typeKind ? 'ns-type' : 'ns-export') : typeKind ? 'type' : 'export';
+      findings.push(makeFinding(kind, nameNode, namespaceAlias ?? '', !locallyUsed, typeKind));
     }
   }
 }
@@ -168,13 +176,21 @@ function collectNamespaceFindings(ns: ModuleDeclaration, findings: Finding[], de
         continue;
       }
       if (refs.length === 0) deadDecls.add(decl);
-      const kind: FindingKind = isTypeDeclaration(decl) ? 'ns-type' : 'ns-export';
-      findings.push(makeFinding(kind, declName, ns.getName(), refs.length === 0));
+      const typeKind = typeKeyword(decl);
+      findings.push(
+        makeFinding(typeKind ? 'ns-type' : 'ns-export', declName, ns.getName(), refs.length === 0, typeKind)
+      );
     }
   }
 }
 
-function makeFinding(kind: FindingKind, nameNode: Node, context: string, dead: boolean): Finding {
+function makeFinding(
+  kind: FindingKind,
+  nameNode: Node,
+  context: string,
+  dead: boolean,
+  typeKind?: TypeKeyword
+): Finding {
   const sourceFile = nameNode.getSourceFile();
   const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
   return {
@@ -186,6 +202,8 @@ function makeFinding(kind: FindingKind, nameNode: Node, context: string, dead: b
     context,
     anonymous: false,
     dead,
+    typeKind,
+    verdict: dead ? 'dead' : 'over-exported',
     node: nameNode.getParent() ?? nameNode,
   };
 }
@@ -268,12 +286,12 @@ export function declarationNameNode(decl: Node): Identifier | undefined {
   return undefined;
 }
 
-function isTypeDeclaration(decl: Node): boolean {
-  return (
-    decl.isKind(SyntaxKind.InterfaceDeclaration) ||
-    decl.isKind(SyntaxKind.TypeAliasDeclaration) ||
-    decl.isKind(SyntaxKind.EnumDeclaration)
-  );
+/** The keyword behind a type declaration, or undefined for a value declaration. */
+function typeKeyword(decl: Node): TypeKeyword | undefined {
+  if (decl.isKind(SyntaxKind.InterfaceDeclaration)) return 'interface';
+  if (decl.isKind(SyntaxKind.TypeAliasDeclaration)) return 'type';
+  if (decl.isKind(SyntaxKind.EnumDeclaration)) return 'enum';
+  return undefined;
 }
 
 function isAmbient(decl: Node): boolean {

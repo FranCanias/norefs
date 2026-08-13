@@ -193,6 +193,31 @@ describe('applyFixes', () => {
     expect(project.getFileSystem().readFileSync('/main.ts')).toContain('dead');
   });
 
+  it('fixes dead members but holds write-only ones for --fix-unsafe', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    const file = project.createSourceFile(
+      '/main.ts',
+      [
+        'export interface Config {',
+        '  retries: number;',
+        '  timeout: number;',
+        '}',
+        'export const read = (c: Config) => c.retries;',
+        'declare function stash(payload: unknown): void;',
+        'stash({ timeout: 250 });',
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project);
+    const timeout = findings.find(f => f.kind === 'member' && f.name === 'timeout');
+    expect(timeout?.verdict).toBe('write-only');
+    const result = applyFixes(findings);
+    expect(result.fixed).toBe(0);
+    expect(file.getFullText()).toContain('timeout');
+    applyFixes(findings, { unsafe: true });
+    expect(file.getFullText()).not.toContain('timeout: number');
+  });
+
   it('reports unused files as skipped instead of deleting them', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile('/main.ts', 'export const keep = 1;\n');

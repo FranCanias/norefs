@@ -8,6 +8,7 @@ import { analyzeModules } from './modules';
 import { buildReferenceIndex } from './reference-index';
 import { findReferencesAsNodes } from './references';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
+import { assignVerdicts } from './verdicts';
 
 export interface AnalyzeOptions extends ModuleOptions {
   /**
@@ -59,6 +60,7 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
   }
 
   findings.push(...emptyOwnerFindings(reportedMembers));
+  assignVerdicts(project, findings, process.cwd());
   findings.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || a.column - b.column);
   return findings;
 }

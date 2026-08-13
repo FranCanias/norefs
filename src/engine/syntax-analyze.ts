@@ -5,7 +5,7 @@ import type { Finding, FindingKind } from '../types';
 import type { DependencyUse } from './dependencies';
 import { analyzeDependencies } from './dependencies';
 import type { PackageConfig } from './project';
-import { optionsForDir } from './project';
+import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
 import { SourceIndex, projectFilePaths } from './sources';
 
@@ -82,16 +82,24 @@ export function analyzeSyntax(
       name: path.basename(filePath),
       context: '',
       anonymous: false,
+      verdict: 'dead',
     });
   }
 
   findings.push(
-    ...analyzeDependencies(uses, rootDirs, options.scopeDir, options.ignoreDependencies ?? [], {
-      fileExists: filePath => fs.existsSync(filePath),
-      readFile: filePath => readFile(filePath),
-      isSuppressedAt: (filePath, offset) => sources.isSuppressedAt(filePath, offset),
-      positionAt: (filePath, offset) => sources.positionAt(filePath, offset),
-    })
+    ...analyzeDependencies(
+      uses,
+      rootDirs,
+      options.scopeDir,
+      options.ignoreDependencies ?? [],
+      pathAliasPatterns(packages, fallbackOptions),
+      {
+        fileExists: filePath => fs.existsSync(filePath),
+        readFile: filePath => readFile(filePath),
+        isSuppressedAt: (filePath, offset) => sources.isSuppressedAt(filePath, offset),
+        positionAt: (filePath, offset) => sources.positionAt(filePath, offset),
+      }
+    )
   );
 
   findings.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || a.column - b.column);

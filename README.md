@@ -11,11 +11,23 @@ Most dead-code tools stop at the declaration boundary: an interface counts as "u
 ### Module-level checks
 
 - **Unused files** — no chain of imports from any entry point reaches the file. Because the check is reachability, not a count of direct importers, a whole dead cluster gets reported — including two unused files that only import each other. Entry points are: paths given with `--entry`, `index`/`main`/`cli` files in the project root or `src/`, and the files `package.json` names in `main`, `bin`, and `exports` (paths into the compiled output are mapped back to source through the tsconfig `outDir` and `rootDir`). Test, spec, stories, bench, and config files (and anything under a `test`, `tests`, `__tests__`, or `__mocks__` directory) are their own entry points, so they are never reported either.
-- **Unused exports** and **unused exported types** — an exported declaration that nothing outside its file uses. Interfaces, type aliases, and enums count as types; functions, classes, variables, and namespaces count as exports. References resolve through re-export chains, so a barrel between the declaration and its consumers does not hide usage. A declaration that is used inside its own file but never imported still gets reported: the `export` keyword is dead even though the code is not. Exports of entry files are the public API and are never reported.
+- **Unused exports** and **unused exported types** — an exported declaration that nothing outside its file uses. Interfaces, type aliases, and enums count as types; functions, classes, variables, and namespaces count as exports. References resolve through re-export chains, so a barrel between the declaration and its consumers does not hide usage. A declaration that is used inside its own file but never imported is reported as **over-exported**: the `export` keyword is dead even though the code is not, so the fix is to drop the keyword, not to delete the declaration. Exports of entry files are the public API and are never reported.
 - **Exports in used namespace** and **exported types in used namespace** — the same check, at lower confidence, for two namespace shapes. When a module is consumed through a used `import * as ns` binding, its zero-reference exports are reported this way, because the namespace object may be consumed dynamically. And when a TS `namespace N { … }` is used, its exported members whose references never leave the namespace body are reported this way too.
 - **Unused dependencies** and **unlisted dependencies** — entries of `dependencies` in `package.json` that no source file imports, and imported packages that no scanned `package.json` lists. `devDependencies` are consumed by tooling the import graph cannot see, so they count as listed but are never reported unused; the same goes for peer and optional dependencies. `@types/*` packages are consumed by the compiler and pair with their base package. Path aliases, node builtins, and relative imports never count as packages. Use the `ignoreDependencies` config key for runtime-only dependencies norefs cannot see, like a CLI invoked from npm scripts.
 
 A finding at a higher level swallows the findings inside it: an unused file hides its exports and members, and an unused export with zero references anywhere hides its members. One line per problem, not fifty.
+
+### Verdicts
+
+Every finding carries a verdict: the claim it makes, with its safety profile. "Unused" is not one claim — it is five:
+
+- **dead** — no references, no structural twin, no boundary crossing. Safe to delete, and `--fix` does.
+- **over-exported** — used in its own file only. Safe to de-export, and `--fix` does.
+- **write-only** — something assigns the member where the analysis lost the type, and nothing reads it. Suspicious, not proven dead: an object whose identity matters can be written on purpose and never read.
+- **contract** — the type's values cross a serialization boundary (`JSON.parse`, `JSON.stringify`, `structuredClone`, `postMessage`), directly or through a containing type. The members document a wire format; deleting them destroys the documentation, not the data.
+- **shadowed** — a structurally identical type elsewhere *is* read. The member is probably alive through the duplicate, and the real finding is the duplication: delete the twin, not the member.
+
+Each soft verdict prints its evidence — the twin that reads the member, the boundary the type crosses. `--fix` only applies `dead` and `over-exported` findings; the rest wait for `--fix-unsafe` or your judgment.
 
 ### Member-level checks
 
@@ -63,7 +75,8 @@ norefs init      # write a norefs.config.json with every option at its default
 | `--reporter <name>` | Output format: `text` (default), `json`, `github`, `sarif` |
 | `--baseline` | Write the findings to `norefs-baseline.json` and exit; later runs fail on new findings only |
 | `--export <md\|json>` | Also write findings to `norefs-findings.md` or `norefs-findings.json` in the current directory |
-| `--fix` | Remove reported members and dead `export` keywords from the source files |
+| `--fix` | Apply the fixes the verdicts prove safe: `dead` code is removed, `over-exported` declarations lose the `export` keyword |
+| `--fix-unsafe` | Also apply `write-only`, `contract`, and `shadowed` findings (implies `--fix`); these are claims the analysis cannot prove |
 | `--dry-run` | With `--fix`: print the would-be changes as a unified diff without writing any file |
 | `--watch` | Re-run on save: keep the loaded project in memory, refresh the changed files, and report again |
 | `--no-anonymous` | Hide findings on unnamed inline types and anonymous functions |
@@ -196,10 +209,10 @@ Loading the project is the expensive part of a run, so watch mode does it once. 
 
 ### Fixing automatically
 
-`norefs --fix` prints the findings, then fixes what it safely can and saves the files:
+`norefs --fix` prints the findings, then applies the ones whose verdict proves them safe and saves the files:
 
-- An unused member is deleted. One case is special: an unused parameter property (`constructor(private readonly dead: number)`) only loses its modifiers and stays a plain parameter, so the constructor signature and every `new` call site keep working.
-- An unused export with references inside its own file loses only the `export` keyword. One with no references at all is removed whole, together with every import and re-export specifier that forwarded it — nothing dangles in a barrel.
+- An over-exported declaration loses only the `export` keyword. A dead export is removed whole, together with every import and re-export specifier that forwarded it — nothing dangles in a barrel. A dead member is deleted; a dead parameter property (`constructor(private readonly dead: number)`) only loses its modifiers and stays a plain parameter, so the constructor signature and every `new` call site keep working.
+- `write-only`, `contract`, and `shadowed` findings wait for `--fix-unsafe` (it implies `--fix`). These are claims the analysis cannot prove — a wire format, a value alive through a duplicate type — and no type checker catches a wrong deletion. Review that diff with care.
 - After the removals, norefs cleans each touched file: imports and unexported top-level declarations that only the removed code used are removed too. Then it re-analyzes and fixes again until nothing fixable is left, so cascades converge in one command.
 - Unused files, namespace findings, and emptied types are never touched. Deleting a file is your call, a namespace finding is a lower-confidence guess, and an emptied type needs your judgment about its consumers.
 - `--fix` only touches what is reported, so `--only`, `ignore` globs, and suppression comments limit the fixes the same way they limit the findings.
@@ -212,16 +225,19 @@ To see the diff without touching anything, run `norefs --fix --dry-run`. It appl
 
 ```
 src/models/User.ts
-  4:3  unused property `legacyId` in interface `User`
+  4:3  dead property `legacyId` in interface `User`
 
 src/legacy/formatter.ts
-  unused file
+  dead file
 
 src/hooks/useConfig.ts
-  8:14  unused export `configDefaults`
-  12:5  unused property `debugMode` in the return value of `useConfig`
+  3:18  over-exported: interface `ConfigDefaults` is used only in this file
+  8:14  dead export `configDefaults`
 
-Unused code (4): 1 file, 1 export, 2 properties
+src/devices/DeviceLibrary.ts
+  12:3  property `maxPower` in interface `DeviceIO` looks like a data contract: its values come out of `JSON.parse(…)`
+
+5 findings: 3 dead, 1 over-exported, 1 likely contract
 ```
 
 ### Filtering out anonymous findings

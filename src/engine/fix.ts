@@ -13,19 +13,25 @@ interface FixResult {
 }
 
 /**
- * Fix the findings and save the touched files.
+ * Fix the findings and save the touched files, gated by verdict.
  *
- * Members are removed; a parameter property only loses its modifiers and stays
- * a plain parameter, so the constructor signature and every call site keep
- * working. An export with zero references anywhere is removed whole, together
- * with any import/export specifiers that forward it; an export still used
- * inside its file only loses the export keyword. Orphaned identifiers left
- * behind in touched files (an import only the removed code used) are cleaned
- * up before saving. Unused files, namespace findings, and emptied types are
- * never touched.
+ * A `dead` or `over-exported` finding auto-fixes: an export with zero
+ * references anywhere is removed whole, together with any import/export
+ * specifiers that forward it; an over-exported declaration only loses the
+ * export keyword; a dead member is deleted (a parameter property only loses
+ * its modifiers and stays a plain parameter, so the constructor signature and
+ * every call site keep working). A `write-only`, `contract`, or `shadowed`
+ * member is a claim the analysis cannot prove — it needs `options.unsafe`.
+ * Orphaned identifiers left behind in touched files (an import only the
+ * removed code used) are cleaned up before saving. Unused files, namespace
+ * findings, and emptied types are never touched.
  */
-export function applyFixes(findings: Finding[], options: { save?: boolean } = {}): FixResult {
-  const fixable = findings.filter(f => f.kind === 'member' || f.kind === 'export' || f.kind === 'type');
+export function applyFixes(findings: Finding[], options: { save?: boolean; unsafe?: boolean } = {}): FixResult {
+  const safeVerdict = (f: Finding): boolean =>
+    f.verdict === 'dead' || f.verdict === 'over-exported' || (options.unsafe ?? false);
+  const fixable = findings.filter(
+    f => (f.kind === 'export' || f.kind === 'type' || f.kind === 'member') && safeVerdict(f)
+  );
   let skipped = findings.length - fixable.length;
 
   // Fix inner nodes before outer ones, so a member nested inside another

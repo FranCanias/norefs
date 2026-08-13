@@ -26,6 +26,15 @@ export function optionsForDir(packages: PackageConfig[], dir: string): ts.Compil
   return packages.find(pkg => dir === pkg.dir || dir.startsWith(`${pkg.dir}/`))?.options;
 }
 
+/** Every `paths` alias pattern in play; specifiers matching one name project code, not packages. */
+export function pathAliasPatterns(packages: PackageConfig[], fallback: ts.CompilerOptions): string[] {
+  const patterns = new Set<string>();
+  for (const options of [fallback, ...packages.map(pkg => pkg.options)]) {
+    for (const pattern of Object.keys(options.paths ?? {})) patterns.add(pattern);
+  }
+  return [...patterns];
+}
+
 /**
  * Load one project from one or more tsconfigs. The first tsconfig provides
  * the program-level options; each file resolves its imports with the options
