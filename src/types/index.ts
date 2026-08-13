@@ -51,6 +51,8 @@ export interface Finding {
   verdict?: Verdict;
   /** Human-readable evidence behind a non-dead verdict: the twin that reads the member, the boundary the type crosses. */
   evidence?: string;
+  /** On empty-type findings: how many member findings folded into this one. */
+  swallowed?: number;
   /** The declaration behind the finding, kept so --fix can act on it. Unset for file findings. */
   node?: Node;
 }

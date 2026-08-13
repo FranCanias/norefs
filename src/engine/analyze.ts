@@ -59,26 +59,32 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     });
   }
 
-  findings.push(...emptyOwnerFindings(reportedMembers));
+  const { emptyFindings, swallowed } = emptyOwnerFindings(reportedMembers);
+  findings.push(...emptyFindings);
   assignVerdicts(project, findings, process.cwd());
-  findings.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || a.column - b.column);
-  return findings;
+  // One logical fact, one finding: a type losing every member is the story,
+  // not seven bullets. The members fold in after they lent it their verdict.
+  const folded = findings.filter(f => !(f.kind === 'member' && f.node && swallowed.has(f.node)));
+  folded.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || a.column - b.column);
+  return folded;
 }
 
 /**
  * A named type whose members are all reported, while the type itself is still
- * referenced, deserves one more finding: removing the members leaves an empty
- * `interface X {}` behind, and only a human knows whether its consumers should
- * go too.
+ * referenced, deserves the finding instead of its members: removing them
+ * leaves an empty `interface X {}` behind, and only a human knows whether its
+ * consumers should go too. The member findings it swallows are returned so
+ * the caller can fold them away.
  */
-function emptyOwnerFindings(reportedMembers: Set<Node>): Finding[] {
+function emptyOwnerFindings(reportedMembers: Set<Node>): { emptyFindings: Finding[]; swallowed: Set<Node> } {
   const owners = new Set<InterfaceDeclaration | TypeAliasDeclaration>();
   for (const member of reportedMembers) {
     const owner = namedOwner(member);
     if (owner) owners.add(owner);
   }
 
-  const findings: Finding[] = [];
+  const emptyFindings: Finding[] = [];
+  const swallowed = new Set<Node>();
   for (const owner of owners) {
     const members = ownerMembers(owner);
     if (members.length === 0 || !members.every(member => reportedMembers.has(member))) continue;
@@ -89,7 +95,8 @@ function emptyOwnerFindings(reportedMembers: Set<Node>): Finding[] {
     if (!findReferencesAsNodes(nameNode).some(ref => ref !== nameNode)) continue;
     const sourceFile = owner.getSourceFile();
     const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
-    findings.push({
+    for (const member of members) swallowed.add(member);
+    emptyFindings.push({
       kind: 'empty-type',
       filePath: sourceFile.getFilePath(),
       line,
@@ -97,9 +104,10 @@ function emptyOwnerFindings(reportedMembers: Set<Node>): Finding[] {
       name: owner.getName(),
       context: owner.isKind(SyntaxKind.InterfaceDeclaration) ? 'interface' : 'type',
       anonymous: false,
+      swallowed: members.length,
     });
   }
-  return findings;
+  return { emptyFindings, swallowed };
 }
 
 function namedOwner(member: Node): InterfaceDeclaration | TypeAliasDeclaration | undefined {

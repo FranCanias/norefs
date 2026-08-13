@@ -29,13 +29,15 @@ describe('verdicts', () => {
     );
     const findings = analyze(project);
 
-    expect(verdictOf(findings, 'id')?.verdict).toBe('contract');
-    expect(verdictOf(findings, 'count')?.verdict).toBe('contract');
     expect(verdictOf(findings, 'devices')?.verdict).toBe('contract');
-    expect(verdictOf(findings, 'id')?.evidence).toContain('JSON.parse');
+    expect(verdictOf(findings, 'devices')?.evidence).toContain('JSON.parse');
 
+    // DeviceIO loses every member, so the cascade folds into one finding.
     const emptied = findings.find(f => f.kind === 'empty-type' && f.name === 'DeviceIO');
     expect(emptied?.verdict).toBe('contract');
+    expect(emptied?.swallowed).toBe(2);
+    expect(verdictOf(findings, 'id')).toBeUndefined();
+    expect(verdictOf(findings, 'count')).toBeUndefined();
   });
 
   it('marks a member as shadowed when a structural twin reads it', () => {

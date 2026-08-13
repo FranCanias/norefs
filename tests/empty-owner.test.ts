@@ -22,12 +22,10 @@ describe('empty-owner findings', () => {
         '',
       ].join('\n')
     );
-    expect(findings.map(f => [f.kind, f.name])).toEqual([
-      ['empty-type', 'Zone'],
-      ['member', 'dead1'],
-      ['member', 'dead2'],
-    ]);
+    // The member findings fold into the one logical finding.
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['empty-type', 'Zone']]);
     expect(findings[0].context).toBe('interface');
+    expect(findings[0].swallowed).toBe(2);
   });
 
   it('reports a type alias that becomes empty', () => {
@@ -42,11 +40,9 @@ describe('empty-owner findings', () => {
         '',
       ].join('\n')
     );
-    expect(findings.map(f => [f.kind, f.name])).toEqual([
-      ['empty-type', 'Options'],
-      ['member', 'verbose'],
-    ]);
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['empty-type', 'Options']]);
     expect(findings[0].context).toBe('type');
+    expect(findings[0].swallowed).toBe(1);
   });
 
   it('stays silent when some member is used', () => {

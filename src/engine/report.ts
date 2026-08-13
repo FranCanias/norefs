@@ -24,12 +24,30 @@ function describeFinding(finding: Finding): string {
         : `over-exported: ${typeNoun(finding)} \`${finding.name}\` is used only inside namespace \`${finding.context}\``;
     case 'member':
       return describeMember(finding);
-    case 'empty-type':
-      return `${finding.context} \`${finding.name}\` becomes empty: every member is reported`;
+    case 'empty-type': {
+      const count = finding.swallowed ? `all ${finding.swallowed} members are` : 'every member is';
+      const claim = `${finding.context} \`${finding.name}\` becomes empty: ${count} ${memberClaim(finding)}`;
+      return finding.verdict && finding.verdict !== 'dead' && finding.evidence
+        ? `${claim} — ${finding.evidence}`
+        : claim;
+    }
     case 'dependency':
       return `dead dependency \`${finding.name}\``;
     case 'unlisted':
       return `dependency \`${finding.name}\` is not listed in package.json`;
+  }
+}
+
+function memberClaim(finding: Finding): string {
+  switch (finding.verdict) {
+    case 'write-only':
+      return 'write-only';
+    case 'contract':
+      return 'unread, and it looks like a data contract';
+    case 'shadowed':
+      return 'shadowed by a duplicate type';
+    default:
+      return 'dead';
   }
 }
 
@@ -197,6 +215,7 @@ export function formatJson(findings: Finding[], cwd: string): string {
       typeKind: f.typeKind,
       verdict: f.verdict,
       evidence: f.evidence,
+      swallowed: f.swallowed,
     })),
     null,
     2

@@ -15,7 +15,7 @@ Most dead-code tools stop at the declaration boundary: an interface counts as "u
 - **Exports in used namespace** and **exported types in used namespace** — the same check, at lower confidence, for two namespace shapes. When a module is consumed through a used `import * as ns` binding, its zero-reference exports are reported this way, because the namespace object may be consumed dynamically. And when a TS `namespace N { … }` is used, its exported members whose references never leave the namespace body are reported this way too.
 - **Unused dependencies** and **unlisted dependencies** — entries of `dependencies` in `package.json` that no source file imports, and imported packages that no scanned `package.json` lists. `devDependencies` are consumed by tooling the import graph cannot see, so they count as listed but are never reported unused; the same goes for peer and optional dependencies. `@types/*` packages are consumed by the compiler and pair with their base package. Path aliases, node builtins, and relative imports never count as packages. Use the `ignoreDependencies` config key for runtime-only dependencies norefs cannot see, like a CLI invoked from npm scripts.
 
-A finding at a higher level swallows the findings inside it: an unused file hides its exports and members, and an unused export with zero references anywhere hides its members. One line per problem, not fifty.
+A finding at a higher level swallows the findings inside it: an unused file hides its exports and members, an unused export with zero references anywhere hides its members, and a type losing every member folds them into its one `becomes empty` finding. One line per problem, not fifty.
 
 ### Verdicts
 
@@ -43,7 +43,7 @@ For each property it finds, it asks TypeScript's own "find all references" (via 
 
 Because the check is reference-based, it follows structural typing correctly — `v.x` resolves back to `interface A { x: number }` even without an explicit cast. See [Limitations](#limitations) for where that breaks down.
 
-When every member of a named interface or type alias is unused while the type itself is still referenced, norefs adds one more finding: ``interface `X` becomes empty: every member is unused``. Removing the members would leave an empty `interface X {}` behind, and only you know whether its consumers should go too. An interface that extends another is exempt — empty, it still works as an alias.
+When every member of a named interface or type alias is unused while the type itself is still referenced, the member findings fold into one: ``interface `X` becomes empty: all 6 members are dead``. That is one logical fact, so it is one finding, carrying the most cautious verdict of the members it swallowed. Removing the members would leave an empty `interface X {}` behind, and only you know whether its consumers should go too — `--fix` never touches these. An interface that extends another is exempt — empty, it still works as an alias.
 
 ## Install
 
