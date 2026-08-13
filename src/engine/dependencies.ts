@@ -15,7 +15,7 @@ export interface DependencyUse {
 }
 
 /** What the checks need to read the manifests and place a finding. */
-export interface DependencyContext {
+interface DependencyContext {
   fileExists(filePath: string): boolean;
   readFile(filePath: string): string | undefined;
   isSuppressedAt(filePath: string, offset: number): boolean;
@@ -59,6 +59,15 @@ export function analyzeDependencies(
   if (manifests.length === 0) return [];
 
   const listedAnywhere = new Set(manifests.flatMap(m => [...m.listed]));
+  // In a monorepo, the workspace root lists the hoisted tooling. Ancestor
+  // manifests satisfy the unlisted check, but their own dependencies are
+  // consumed by packages this scan cannot see, so they are never reported.
+  for (const dir of rootDirs) {
+    for (let parent = path.dirname(dir); parent !== path.dirname(parent); parent = path.dirname(parent)) {
+      const manifest = readManifest(context, parent);
+      if (manifest) for (const name of manifest.listed) listedAnywhere.add(name);
+    }
+  }
   const findings: Finding[] = [];
   const reportedUnlisted = new Set<string>();
 
