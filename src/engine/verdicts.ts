@@ -19,7 +19,7 @@ import { findReferencesAsNodes } from './references';
  * only exists because every member was reported.
  */
 export function assignVerdicts(project: Project, findings: Finding[], cwd: string): void {
-  const memberFindings = findings.filter(f => f.kind === 'member' && f.node);
+  const memberFindings = findings.filter(f => f.kind === 'member' && f.node && !f.verdict);
   if (memberFindings.length === 0) {
     assignEmptyTypeVerdicts(findings);
     return;

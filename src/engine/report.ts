@@ -7,10 +7,14 @@ function describeFinding(finding: Finding): string {
     case 'file':
       return 'dead file';
     case 'export':
+      if (finding.verdict === 'test-only') return `test-only export \`${finding.name}\`: production code never uses it`;
       return finding.dead
         ? `dead export \`${finding.name}\``
         : `over-exported: \`${finding.name}\` is used only in this file`;
     case 'type':
+      if (finding.verdict === 'test-only') {
+        return `test-only ${typeNoun(finding)} \`${finding.name}\`: production code never uses it`;
+      }
       return finding.dead
         ? `dead exported ${typeNoun(finding)} \`${finding.name}\``
         : `over-exported: ${typeNoun(finding)} \`${finding.name}\` is used only in this file`;
@@ -60,6 +64,8 @@ function describeMember(finding: Finding): string {
       return `${subject} looks like a data contract: ${finding.evidence ?? 'its type crosses a serialization boundary'}`;
     case 'shadowed':
       return `${subject} is unread here, but ${finding.evidence ?? 'a structural twin reads it'} — the finding is the duplication`;
+    case 'test-only':
+      return `test-only ${subject}: production code never reads it`;
     default:
       return `dead ${subject}`;
   }
@@ -78,6 +84,7 @@ function summarize(findings: Finding[]): string {
     [count(f => f.verdict === 'write-only'), 'write-only', 'write-only'],
     [count(f => f.verdict === 'contract'), 'likely contract', 'likely contracts'],
     [count(f => f.verdict === 'shadowed'), 'shadowed by a duplicate type', 'shadowed by duplicate types'],
+    [count(f => f.verdict === 'test-only'), 'test-only', 'test-only'],
     [count(f => f.kind === 'unlisted'), 'unlisted dependency', 'unlisted dependencies'],
   ];
   const parts = groups.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);

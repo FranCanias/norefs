@@ -30,8 +30,16 @@ duplicated type the shadowed verdict pins with file and line.
 
 ## zod (2026-08-13, packages/zod/tsconfig.json)
 
-**77 findings: 58 dead, 16 over-exported, 2 write-only, 1 likely contract —
-in ~4 seconds**, running inside a workspace package of a monorepo.
+**81 findings: 58 dead, 16 over-exported, 2 write-only, 1 likely contract,
+4 test-only — in ~4 seconds**, running inside a workspace package of a
+monorepo.
+
+The four test-only findings are a category no reference count sees: code
+with plenty of references, all of them in test files. `StandardSchemaWithJSON`
+is an interface only zod's own tests consume; `_FlattenedError.fieldErrors`
+is read nowhere but a test. Production-dead, test-alive — reported with the
+one verdict that says so, and never auto-fixed, because deleting them means
+deleting their tests.
 
 The run demonstrates three boundaries handled without configuration: the
 workspace root's hoisted tooling satisfies the dependency checks, test

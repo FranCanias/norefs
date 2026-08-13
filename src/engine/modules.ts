@@ -97,7 +97,14 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
     // down to its last member.
     if (publicDecls.has(sourceFile)) continue;
 
-    collectExportFindings(sourceFile, namespaceConsumers.get(sourceFile), findings, deadDecls, publicDecls);
+    collectExportFindings(
+      sourceFile,
+      namespaceConsumers.get(sourceFile),
+      findings,
+      deadDecls,
+      publicDecls,
+      harnessFiles
+    );
     for (const ns of sourceFile.getModules()) {
       if (publicDecls.has(ns)) continue;
       collectNamespaceFindings(ns, findings, deadDecls);
@@ -153,7 +160,8 @@ function collectExportFindings(
   namespaceAlias: string | undefined,
   findings: Finding[],
   deadDecls: Set<Node>,
-  publicDecls: Set<Node>
+  publicDecls: Set<Node>,
+  harnessFiles: Set<SourceFile>
 ): void {
   const seen = new Set<Node>();
   for (const declarations of sourceFile.getExportedDeclarations().values()) {
@@ -166,12 +174,24 @@ function collectExportFindings(
       if (!nameNode) continue;
       if (isNodeSuppressed(nameNode)) continue;
 
-      const { externallyUsed, locallyUsed } = classifyReferences(nameNode, sourceFile);
+      const { externallyUsed, locallyUsed, testOnly } = classifyReferences(nameNode, sourceFile, harnessFiles);
       if (externallyUsed) continue;
-      if (!locallyUsed) deadDecls.add(decl);
 
       const typeKind = typeKeyword(decl);
       const kind: FindingKind = namespaceAlias ? (typeKind ? 'ns-type' : 'ns-export') : typeKind ? 'type' : 'export';
+      if (testOnly) {
+        // Production code in its own file justifies the declaration; tests
+        // importing it on top of that make it simply used.
+        if (locallyUsed) continue;
+        findings.push({
+          ...makeFinding(kind, nameNode, namespaceAlias ?? '', false, typeKind),
+          verdict: 'test-only',
+          evidence: 'only test files reference it',
+        });
+        continue;
+      }
+
+      if (!locallyUsed) deadDecls.add(decl);
       findings.push(makeFinding(kind, nameNode, namespaceAlias ?? '', !locallyUsed, typeKind));
     }
   }
@@ -243,15 +263,23 @@ function makeFinding(
 
 function classifyReferences(
   nameNode: Identifier,
-  sourceFile: SourceFile
-): { externallyUsed: boolean; locallyUsed: boolean } {
+  sourceFile: SourceFile,
+  harnessFiles: Set<SourceFile>
+): { externallyUsed: boolean; locallyUsed: boolean; testOnly: boolean } {
   let locallyUsed = false;
+  let harnessUsed = false;
   for (const ref of findReferencesAsNodes(nameNode)) {
     if (ref === nameNode || isModuleBinding(ref)) continue;
-    if (ref.getSourceFile() !== sourceFile) return { externallyUsed: true, locallyUsed };
-    locallyUsed = true;
+    const refFile = ref.getSourceFile();
+    if (refFile === sourceFile) {
+      locallyUsed = true;
+    } else if (harnessFiles.has(refFile)) {
+      harnessUsed = true;
+    } else {
+      return { externallyUsed: true, locallyUsed, testOnly: false };
+    }
   }
-  return { externallyUsed: false, locallyUsed };
+  return { externallyUsed: false, locallyUsed, testOnly: harnessUsed };
 }
 
 /** True for occurrences that only bind or forward a name (import/export sites), not real usage. */

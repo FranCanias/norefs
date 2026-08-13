@@ -26,6 +26,7 @@ Every finding carries a verdict: the claim it makes, with its safety profile. "U
 - **write-only** — something assigns the member where the analysis lost the type, and nothing reads it. Suspicious, not proven dead: an object whose identity matters can be written on purpose and never read.
 - **contract** — the type's values cross a serialization boundary (`JSON.parse`, `JSON.stringify`, `structuredClone`, `postMessage`), directly or through a containing type. The members document a wire format; deleting them destroys the documentation, not the data.
 - **shadowed** — a structurally identical type elsewhere *is* read. The member is probably alive through the duplicate, and the real finding is the duplication: delete the twin, not the member.
+- **test-only** — production code never touches it; only test files keep it alive. A real and common category of dead code, and never auto-fixed: the fix is deleting the code together with its tests, and only a human deletes tests.
 
 Each soft verdict prints its evidence — the twin that reads the member, the boundary the type crosses. `--fix` only applies `dead` and `over-exported` findings; the rest wait for `--fix-unsafe` or your judgment.
 

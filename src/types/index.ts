@@ -30,8 +30,9 @@ export type TypeKeyword = 'interface' | 'type' | 'enum';
  * - `write-only` — assigned somewhere the analysis could not trace, never read. Suspicious, not dead.
  * - `contract` — its type crosses a serialization boundary. Documentation of a wire format; needs a human.
  * - `shadowed` — a structural twin elsewhere is read. The real finding is the duplication.
+ * - `test-only` — production code never touches it; only tests keep it alive. Delete it with its tests.
  */
-export type Verdict = 'dead' | 'over-exported' | 'write-only' | 'contract' | 'shadowed';
+export type Verdict = 'dead' | 'over-exported' | 'write-only' | 'contract' | 'shadowed' | 'test-only';
 
 export interface Finding {
   kind: FindingKind;

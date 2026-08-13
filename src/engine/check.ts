@@ -1,11 +1,21 @@
-import type { PropertyNamedNode } from 'ts-morph';
+import type { PropertyNamedNode, SourceFile } from 'ts-morph';
 import { referenceIndex } from './reference-index';
 import { findReferencesAsNodes } from './references';
 
-export function isUnused(member: PropertyNamedNode): boolean {
+type MemberUsage = 'used' | 'unused' | 'test-only';
+
+/**
+ * How a member is consumed. `test-only` means every reference sits in a
+ * harness file: production code never touches it, tests keep it alive. A
+ * member answering a base type's declaration is `used` whatever its count —
+ * remove it and the owner stops compiling.
+ */
+export function memberUsage(member: PropertyNamedNode, isHarness: (sourceFile: SourceFile) => boolean): MemberUsage {
   const nameNode = member.getNameNode();
-  if (findReferencesAsNodes(nameNode).length > 0) return false;
-  // Zero references still leaves a member that answers a base type's
-  // declaration, which has to stay for the owner to keep compiling.
-  return !referenceIndex(nameNode.getProject()).isRequiredByBaseType(nameNode);
+  const references = findReferencesAsNodes(nameNode);
+  if (references.length > 0) {
+    if (references.some(ref => !isHarness(ref.getSourceFile()))) return 'used';
+    return referenceIndex(nameNode.getProject()).isRequiredByBaseType(nameNode) ? 'used' : 'test-only';
+  }
+  return referenceIndex(nameNode.getProject()).isRequiredByBaseType(nameNode) ? 'used' : 'unused';
 }

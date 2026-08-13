@@ -29,6 +29,9 @@ interface FixResult {
 /** True when --fix may act on this finding, given the unsafe opt-in. */
 export function isFixable(finding: Finding, unsafe: boolean): boolean {
   if (finding.kind !== 'export' && finding.kind !== 'type' && finding.kind !== 'member') return false;
+  // A test-only finding is never fixable: the fix is deleting the code
+  // together with its tests, and only a human deletes tests.
+  if (finding.verdict === 'test-only') return false;
   return finding.verdict === 'dead' || finding.verdict === 'over-exported' || unsafe;
 }
 

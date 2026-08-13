@@ -2,7 +2,7 @@ import type { InterfaceDeclaration, Node, Project, TypeAliasDeclaration } from '
 import { SyntaxKind } from 'ts-morph';
 import { collectCandidates } from '../collectors';
 import type { Finding, FindingKind } from '../types';
-import { isUnused } from './check';
+import { memberUsage } from './check';
 import type { ModuleOptions } from './modules';
 import { analyzeModules } from './modules';
 import { buildReferenceIndex } from './reference-index';
@@ -47,10 +47,13 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     if (isFileSuppressed(member.getSourceFile())) continue;
     const nameNode = member.getNameNode();
     if (isNodeSuppressed(nameNode)) continue;
-    if (!isUnused(member)) continue;
+    const usage = memberUsage(member, sf => modules.harnessFiles.has(sf));
+    if (usage === 'used') continue;
     const sourceFile = member.getSourceFile();
     const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
-    reportedMembers.add(member);
+    // Only truly unused members feed the empty-type fold: a test-only member
+    // needs its tests deleted with it, which is not an emptied type's story.
+    if (usage === 'unused') reportedMembers.add(member);
     findings.push({
       kind: 'member',
       filePath: sourceFile.getFilePath(),
@@ -60,6 +63,7 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
       context,
       anonymous,
       node: member,
+      ...(usage === 'test-only' ? { verdict: 'test-only' as const, evidence: 'only test files reference it' } : {}),
     });
   }
 
