@@ -1,0 +1,174 @@
+import path from 'node:path';
+import type { Project } from 'ts-morph';
+import type { Finding } from '../types';
+import { applyFixes, isFixable } from './fix';
+import { errorInventory, newErrors, snapshotTexts } from './verify';
+
+export interface HeldBack {
+  finding: Finding;
+  /** The verification errors that appeared while this fix was applied. */
+  errors: string[];
+}
+
+export interface VerifiedFixOptions {
+  project: Project;
+  /** The findings of the pristine project, already baseline-filtered. */
+  findings: Finding[];
+  /** Fresh, baseline-filtered findings for the current in-memory state. */
+  reanalyze: () => Finding[];
+  unsafe: boolean;
+  /** Verify with the type checker: no new errors compared to the pre-fix inventory. */
+  verify: boolean;
+  /**
+   * A custom probe instead of the type-error inventory: empty result means
+   * the project is healthy. The seam a test-command check plugs into.
+   */
+  check?: (project: Project) => string[];
+  cwd: string;
+  log: (line: string) => void;
+}
+
+export interface VerifiedFixResult {
+  fixed: number;
+  /** Files changed in memory. Nothing is saved — that is the caller's call. */
+  touched: string[];
+  /** Fixes withheld because applying them made the probe fail. */
+  heldBack: HeldBack[];
+  /** Set when verification failed and no culprit could be isolated; the project is pristine. */
+  aborted?: string[];
+}
+
+const MAX_PASSES = 5;
+const MAX_HELD_BACK = 8;
+
+/**
+ * Fix everything fixable, prove it, and keep only what holds.
+ *
+ * Every edit stays in memory. A campaign fixes to the cascade fixpoint, then
+ * the probe runs — by default a type-check compared against the pre-fix error
+ * inventory. When the probe fails, the campaign is rolled back in memory and
+ * the first-pass fixes are bisected to the culprit, which is held back with
+ * its evidence; the loop then runs again without it. Disk is never touched:
+ * the caller saves the touched files of a verified result.
+ */
+export function applyVerifiedFixes(options: VerifiedFixOptions): VerifiedFixResult {
+  const { project, cwd } = options;
+  const pristine = snapshotTexts(project);
+  const inventory = options.verify && !options.check ? errorInventory(project) : undefined;
+  const verifying = options.verify || options.check !== undefined;
+  const probe = (): string[] => {
+    if (options.check) return options.check(project);
+    return inventory ? newErrors(inventory, project, cwd) : [];
+  };
+
+  const dirty = new Set<string>();
+  let pristineTree = true;
+  const restore = (): void => {
+    for (const filePath of dirty) {
+      const text = pristine.get(filePath);
+      const sourceFile = project.getSourceFile(filePath);
+      if (text !== undefined && sourceFile && sourceFile.getFullText() !== text) {
+        sourceFile.replaceWithText(text);
+      }
+    }
+    dirty.clear();
+  };
+
+  // A probe that is red before any fix can never vouch for one. The default
+  // probe is green on the pristine tree by construction, so only a custom
+  // check needs the pre-flight.
+  if (options.check) {
+    const preExisting = options.check(project);
+    if (preExisting.length > 0) return { fixed: 0, touched: [], heldBack: [], aborted: preExisting };
+  }
+
+  const excluded = new Set<string>();
+  const byKey = new Map<string, Finding>();
+
+  /**
+   * One fixing run against the current tree. `allowed` restricts the first
+   * pass to a subset under bisection; cascades re-analyze and continue to the
+   * fixpoint. Findings come from the pristine analysis when the tree is
+   * untouched, from a re-analysis otherwise.
+   */
+  const campaign = (allowed: Set<string> | undefined, cascades: boolean): { fixedKeys: string[]; fixed: number } => {
+    let findings = pristineTree ? options.findings : options.reanalyze();
+    pristineTree = false;
+    const fixedKeys: string[] = [];
+    let fixed = 0;
+    for (let pass = 1; pass <= (cascades ? MAX_PASSES : 1); pass++) {
+      const fixable = findings.filter(f => {
+        if (!isFixable(f, options.unsafe)) return false;
+        const key = keyOf(f, cwd);
+        if (excluded.has(key)) return false;
+        return pass > 1 || allowed === undefined || allowed.has(key);
+      });
+      if (fixable.length === 0) break;
+      const result = applyFixes(fixable, { save: false, unsafe: options.unsafe });
+      for (const filePath of result.filePaths) dirty.add(filePath);
+      if (result.fixed === 0) break;
+      fixed += result.fixed;
+      if (pass === 1) {
+        for (const finding of fixable) {
+          const key = keyOf(finding, cwd);
+          fixedKeys.push(key);
+          byKey.set(key, finding);
+        }
+      } else {
+        options.log(`Pass ${pass}: fixed ${result.fixed} more finding(s)`);
+      }
+      if (!cascades) break;
+      findings = options.reanalyze();
+    }
+    return { fixedKeys, fixed };
+  };
+
+  const failsWith = (keys: string[]): boolean => {
+    restore();
+    campaign(new Set(keys), false);
+    return probe().length > 0;
+  };
+
+  /** The smallest first-pass subset that still fails the probe. */
+  const bisect = (keys: string[]): string[] => {
+    if (keys.length <= 1) return keys;
+    const mid = keys.length >> 1;
+    const left = keys.slice(0, mid);
+    const right = keys.slice(mid);
+    if (failsWith(left)) return bisect(left);
+    if (failsWith(right)) return bisect(right);
+    return keys; // they only break together: hold the group back whole
+  };
+
+  const heldBack: HeldBack[] = [];
+  for (;;) {
+    restore();
+    const attempt = campaign(undefined, true);
+    if (attempt.fixed === 0) return { fixed: 0, touched: [], heldBack };
+    if (!verifying) return { fixed: attempt.fixed, touched: [...dirty], heldBack };
+
+    const errors = probe();
+    if (errors.length === 0) return { fixed: attempt.fixed, touched: [...dirty], heldBack };
+
+    if (!failsWith(attempt.fixedKeys)) {
+      // Only a cascade pass breaks the probe: keep the verified single-pass state.
+      options.log('Cascade fixes held back: a later pass would introduce errors.');
+      return { fixed: attempt.fixedKeys.length, touched: [...dirty], heldBack };
+    }
+
+    const culprits = bisect(attempt.fixedKeys);
+    for (const key of culprits) {
+      excluded.add(key);
+      const finding = byKey.get(key);
+      if (finding) heldBack.push({ finding, errors });
+    }
+    if (excluded.size > MAX_HELD_BACK || culprits.length === 0) {
+      restore();
+      return { fixed: 0, touched: [], heldBack, aborted: errors };
+    }
+  }
+}
+
+function keyOf(finding: Finding, cwd: string): string {
+  return [finding.kind, path.relative(cwd, finding.filePath), finding.name, finding.context].join('\x00');
+}

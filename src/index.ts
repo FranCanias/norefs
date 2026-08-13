@@ -8,8 +8,8 @@ import { applyBaseline, writeBaseline } from './baseline';
 import { initConfig, loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
-import { applyFixes, isFixable } from './engine/fix';
-import { errorInventory, newErrors, snapshotTexts } from './engine/verify';
+import { isFixable } from './engine/fix';
+import { applyVerifiedFixes } from './engine/fix-verified';
 import { loadPackages, loadProject, optionsForDir } from './engine/project';
 import { analyzeSyntax, isSyntaxOnly } from './engine/syntax-analyze';
 import { formatGitHub, formatJson, formatMarkdown, formatPatch, formatSarif, formatText } from './engine/report';
@@ -54,8 +54,8 @@ Options:
                          (implies --fix). These are claims the analysis cannot
                          prove — review the diff
   --no-verify            Skip the check after --fix. By default norefs
-                         type-checks the fixed project and reverts everything
-                         if the fixes introduced new errors
+                         type-checks in memory, holds back any fix that breaks
+                         the build, and saves only what verifies
   --ratchet              With a baseline: drop entries whose finding vanished,
                          so the baseline count can only go down
   --dry-run              With --fix: print the would-be changes as a unified
@@ -301,64 +301,62 @@ function main(): void {
   if (findings.length === 0) return;
 
   if (values.fix) {
-    // Removing code can orphan other exports, so re-analyze and fix again
-    // until nothing fixable is left. A dry run applies the same fixes to the
-    // in-memory project only and prints the diff against the files on disk.
+    // Everything happens in memory: fix to the cascade fixpoint, verify, and
+    // when a fix breaks the probe, bisect to it and hold it back. Disk is
+    // only touched by a verified result.
     const save = !values['dry-run'];
     const unsafe = values['fix-unsafe'];
+    const verify = values.verify && findings.some(f => isFixable(f, unsafe));
 
-    // The receipts: an error inventory before the first edit, and the file
-    // texts to put back when verification fails.
-    const verify = save && values.verify && findings.some(f => isFixable(f, unsafe));
-    const errorsBefore = verify ? errorInventory(project()) : undefined;
-    const textsBefore = verify ? snapshotTexts(project()) : undefined;
+    const result = applyVerifiedFixes({
+      project: project(),
+      findings,
+      reanalyze: () => {
+        const remaining = runAnalysis();
+        return baseline ? (applyBaseline(remaining, cwd)?.fresh ?? remaining) : remaining;
+      },
+      unsafe,
+      verify,
+      cwd,
+      log: line => process.stderr.write(`${line}\n`),
+    });
 
-    let result = applyFixes(findings, { save, unsafe });
-    let totalFixed = result.fixed;
-    const touched = new Set(result.filePaths);
-    for (let pass = 2; result.fixed > 0 && pass <= 5; pass++) {
-      let remaining = runAnalysis();
-      if (baseline) remaining = applyBaseline(remaining, cwd)?.fresh ?? remaining;
-      result = applyFixes(remaining, { save, unsafe });
-      if (result.fixed === 0) break;
-      totalFixed += result.fixed;
-      for (const filePath of result.filePaths) touched.add(filePath);
-      if (save) process.stderr.write(`Pass ${pass}: fixed ${result.fixed} more finding(s)\n`);
-    }
-
-    if (!save) {
-      for (const filePath of [...touched].sort()) {
-        const before = fs.readFileSync(filePath, 'utf8');
-        const after = project().getSourceFile(filePath)?.getFullText() ?? before;
-        process.stdout.write(`${formatPatch(path.relative(cwd, filePath), before, after)}\n`);
-      }
-      process.stderr.write(`Dry run: would fix ${totalFixed} finding(s) in ${touched.size} file(s)\n`);
+    if (result.aborted) {
+      process.stderr.write('Verification failed and no single fix could be isolated. Nothing was changed.\n');
+      for (const line of result.aborted) process.stderr.write(`  ${line}\n`);
       process.exitCode = 1;
       return;
     }
 
-    if (errorsBefore && textsBefore) {
-      const broke = newErrors(errorsBefore, project(), cwd);
-      if (broke.length > 0) {
-        for (const filePath of touched) {
-          const text = textsBefore.get(filePath);
-          if (text !== undefined) fs.writeFileSync(filePath, text);
-        }
-        process.stderr.write('Verification failed: the fixes would introduce new type errors.\n');
-        for (const line of broke) process.stderr.write(`  ${line}\n`);
-        process.stderr.write(`Reverted ${touched.size} file(s). Nothing on disk changed.\n`);
-        process.exitCode = 1;
-        return;
-      }
-      process.stderr.write('Verified: tsc reports no new errors after the fixes.\n');
+    for (const { finding, errors } of result.heldBack) {
+      const where = `${path.relative(cwd, finding.filePath)}:${finding.line}`;
+      process.stderr.write(`Held back \`${finding.name}\` (${where}): fixing it would introduce ${errors[0]}\n`);
     }
 
-    process.stderr.write(`Fixed ${totalFixed} finding(s) in ${touched.size} file(s)\n`);
-    if (result.skipped > 0) {
+    if (!save) {
+      for (const filePath of [...result.touched].sort()) {
+        const before = fs.readFileSync(filePath, 'utf8');
+        const after = project().getSourceFile(filePath)?.getFullText() ?? before;
+        process.stdout.write(`${formatPatch(path.relative(cwd, filePath), before, after)}\n`);
+      }
+      if (verify) process.stderr.write('Verified: tsc reports no new errors after the would-be fixes.\n');
+      process.stderr.write(`Dry run: would fix ${result.fixed} finding(s) in ${result.touched.length} file(s)\n`);
+      process.exitCode = 1;
+      return;
+    }
+
+    for (const filePath of result.touched) {
+      project().getSourceFile(filePath)?.saveSync();
+    }
+    if (verify) process.stderr.write('Verified: tsc reports no new errors after the fixes.\n');
+    process.stderr.write(`Fixed ${result.fixed} finding(s) in ${result.touched.length} file(s)\n`);
+
+    const skipped = findings.filter(f => !isFixable(f, unsafe)).length + result.heldBack.length;
+    if (skipped > 0) {
       const untouched = unsafe
         ? 'files, namespaces, emptied types, dependencies'
         : 'write-only, contract, and shadowed verdicts need --fix-unsafe; files, namespaces, emptied types, dependencies are never touched';
-      process.stderr.write(`Skipped ${result.skipped} finding(s) --fix does not touch (${untouched})\n`);
+      process.stderr.write(`Skipped ${skipped} finding(s) --fix does not touch (${untouched})\n`);
     }
     return;
   }
