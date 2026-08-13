@@ -1,12 +1,26 @@
 import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
-import type { Project, SourceFile, StringLiteral } from 'ts-morph';
-import { SyntaxKind } from 'ts-morph';
 import type { Finding } from '../types';
-import { isNodeSuppressed } from './suppress';
 
 const BUILTINS = new Set(builtinModules);
+
+/** An import that names a package rather than project code. */
+export interface DependencyUse {
+  filePath: string;
+  /** The specifier as written: "react", "lodash/fp". */
+  text: string;
+  /** Offset of the literal, for the finding's position and its suppression check. */
+  start: number;
+}
+
+/** What the checks need to read the manifests and place a finding. */
+export interface DependencyContext {
+  fileExists(filePath: string): boolean;
+  readFile(filePath: string): string | undefined;
+  isSuppressedAt(filePath: string, offset: number): boolean;
+  positionAt(filePath: string, offset: number): { line: number; column: number };
+}
 
 interface Manifest {
   filePath: string;
@@ -25,16 +39,20 @@ interface Manifest {
  * tooling the import graph cannot see, so they count as listed but are never
  * reported unused; the same goes for peer and optional dependencies, which
  * exist for consumers. @types packages are consumed by the compiler itself.
+ *
+ * The uses arrive in file order, so an unlisted package is reported at the
+ * first import that names it.
  */
 export function analyzeDependencies(
-  project: Project,
+  uses: DependencyUse[],
   rootDirs: string[],
   scopeDir: string | undefined,
-  ignore: string[]
+  ignore: string[],
+  context: DependencyContext
 ): Finding[] {
   const manifests: Manifest[] = [];
   for (const dir of rootDirs) {
-    const manifest = readManifest(project, dir);
+    const manifest = readManifest(context, dir);
     if (manifest) manifests.push(manifest);
   }
   if (manifests.length === 0) return [];
@@ -43,30 +61,26 @@ export function analyzeDependencies(
   const findings: Finding[] = [];
   const reportedUnlisted = new Set<string>();
 
-  for (const sourceFile of project.getSourceFiles()) {
-    if (sourceFile.isDeclarationFile()) continue;
-    const owners = owningManifests(sourceFile, manifests);
-    for (const specifier of moduleSpecifiers(sourceFile)) {
-      const name = packageName(specifier.getLiteralText());
-      if (!name) continue;
-      for (const owner of owners) owner.used.add(name);
+  for (const use of uses) {
+    const name = packageName(use.text);
+    if (!name) continue;
+    for (const owner of owningManifests(use.filePath, manifests)) owner.used.add(name);
 
-      if (listedAnywhere.has(name) || listedAnywhere.has(typesPackage(name))) continue;
-      if (reportedUnlisted.has(name) || isIgnored(name, ignore)) continue;
-      if (scopeDir && !sourceFile.getFilePath().startsWith(scopeDir)) continue;
-      if (isNodeSuppressed(specifier)) continue;
-      reportedUnlisted.add(name);
-      const { line, column } = sourceFile.getLineAndColumnAtPos(specifier.getStart());
-      findings.push({
-        kind: 'unlisted',
-        filePath: sourceFile.getFilePath(),
-        line,
-        column,
-        name,
-        context: '',
-        anonymous: false,
-      });
-    }
+    if (listedAnywhere.has(name) || listedAnywhere.has(typesPackage(name))) continue;
+    if (reportedUnlisted.has(name) || isIgnored(name, ignore)) continue;
+    if (scopeDir && !use.filePath.startsWith(scopeDir)) continue;
+    if (context.isSuppressedAt(use.filePath, use.start)) continue;
+    reportedUnlisted.add(name);
+    const { line, column } = context.positionAt(use.filePath, use.start);
+    findings.push({
+      kind: 'unlisted',
+      filePath: use.filePath,
+      line,
+      column,
+      name,
+      context: '',
+      anonymous: false,
+    });
   }
 
   for (const manifest of manifests) {
@@ -87,11 +101,11 @@ export function analyzeDependencies(
   return findings;
 }
 
-function readManifest(project: Project, dir: string): Manifest | undefined {
-  const fileSystem = project.getFileSystem();
+function readManifest(context: DependencyContext, dir: string): Manifest | undefined {
   const filePath = path.join(dir, 'package.json');
-  if (!fileSystem.fileExistsSync(filePath)) return undefined;
-  const text = fileSystem.readFileSync(filePath);
+  if (!context.fileExists(filePath)) return undefined;
+  const text = context.readFile(filePath);
+  if (text === undefined) return undefined;
   let data: unknown;
   try {
     data = JSON.parse(text);
@@ -114,29 +128,9 @@ function readManifest(project: Project, dir: string): Manifest | undefined {
 }
 
 /** Manifests whose directory contains the file; every manifest when none does. */
-function owningManifests(sourceFile: SourceFile, manifests: Manifest[]): Manifest[] {
-  const filePath = sourceFile.getFilePath();
+function owningManifests(filePath: string, manifests: Manifest[]): Manifest[] {
   const owners = manifests.filter(m => filePath.startsWith(`${m.dir}/`) || filePath.startsWith(`${m.dir}${path.sep}`));
   return owners.length > 0 ? owners : manifests;
-}
-
-/**
- * Module specifier literals that point outside the project. A specifier that
- * resolves to a project source file is a relative import or a path alias, not
- * a package.
- */
-function moduleSpecifiers(sourceFile: SourceFile): StringLiteral[] {
-  return sourceFile.getImportStringLiterals().filter(literal => {
-    const resolved = specifierTarget(literal);
-    return !resolved || resolved.isInNodeModules();
-  });
-}
-
-function specifierTarget(literal: StringLiteral): SourceFile | undefined {
-  const parent = literal.getParent();
-  if (parent?.isKind(SyntaxKind.ImportDeclaration)) return parent.getModuleSpecifierSourceFile();
-  if (parent?.isKind(SyntaxKind.ExportDeclaration)) return parent.getModuleSpecifierSourceFile();
-  return undefined;
 }
 
 function packageName(specifier: string): string | undefined {

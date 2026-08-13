@@ -1,11 +1,12 @@
-import path from 'node:path';
 import type { Identifier, ModuleDeclaration, Node, Project, SourceFile } from 'ts-morph';
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
 import type { Finding, FindingKind } from '../types';
+import type { DependencyUse } from './dependencies';
 import { analyzeDependencies } from './dependencies';
 import { packageEntries } from './package-entries';
 import type { PackageConfig } from './project';
 import { optionsForDir } from './project';
+import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
 import { findReferencesAsNodes } from './references';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 
@@ -30,15 +31,9 @@ export interface ModuleOptions {
   ignoreDependencies?: string[];
 }
 
-/** Default entry files, following the convention knip uses: index/main/cli in the root or src/. */
-const ENTRY_NAME = /^(index|main|cli)\.[cm]?[jt]sx?$/;
-/** Files a harness runs directly; they import code but nothing imports them. */
-const HARNESS_NAME = /\.(test|spec|stories|bench|config)\.[cm]?[jt]sx?$/;
-const HARNESS_DIRS = new Set(['test', 'tests', '__tests__', '__mocks__']);
-
 export function analyzeModules(project: Project, options: ModuleOptions = {}): ModuleAnalysis {
   const sourceFiles = project.getSourceFiles().filter(sf => !sf.isDeclarationFile());
-  const fallbackRoot = commonDirectory(sourceFiles);
+  const fallbackRoot = commonDirectory(sourceFiles.map(sf => sf.getFilePath()));
   const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
   const entries = [
     ...(options.entries ?? []),
@@ -51,7 +46,16 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       )
     ),
   ];
-  const reachable = reachableFiles(sourceFiles, rootDirs, entries);
+  const reachable = reachableFiles(
+    sourceFiles,
+    sourceFile => {
+      const filePath = sourceFile.getFilePath();
+      return (
+        isEntryFile(filePath, rootDirs, entries) || isHarnessFile(filePath, rootDirs) || isFileSuppressed(sourceFile)
+      );
+    },
+    sourceFile => sourceFile.getReferencedSourceFiles().filter(target => !target.isDeclarationFile())
+  );
   const namespaceConsumers = findNamespaceConsumers(project);
 
   const findings: Finding[] = [];
@@ -84,48 +88,20 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
     }
   }
 
-  findings.push(...analyzeDependencies(project, rootDirs, options.scopeDir, options.ignoreDependencies ?? []));
-  return { findings, deadFiles, deadDecls };
-}
-
-/**
- * Files reachable through imports from any root: entry files, harness files,
- * and files suppressed with noref-ignore-file (keeping a file means keeping
- * what it imports). Counting reachability instead of direct importers catches
- * dead clusters, like two unused files that import each other.
- */
-function reachableFiles(sourceFiles: SourceFile[], rootDirs: string[], entries: string[]): Set<SourceFile> {
-  const roots = sourceFiles.filter(sf => {
-    const filePath = sf.getFilePath();
-    return isEntryFile(filePath, rootDirs, entries) || isHarnessFile(filePath, rootDirs) || isFileSuppressed(sf);
-  });
-  const reachable = new Set<SourceFile>(roots);
-  const queue = [...roots];
-  for (let file = queue.pop(); file; file = queue.pop()) {
-    for (const target of file.getReferencedSourceFiles()) {
-      if (target.isDeclarationFile() || reachable.has(target)) continue;
-      reachable.add(target);
-      queue.push(target);
-    }
-  }
-  return reachable;
-}
-
-function isEntryFile(filePath: string, rootDirs: string[], entries: string[]): boolean {
-  if (entries.some(entry => filePath === entry || filePath.startsWith(`${entry}/`))) return true;
-  if (!ENTRY_NAME.test(path.basename(filePath))) return false;
-  const dir = path.dirname(filePath);
-  return rootDirs.some(root => dir === root || dir === path.join(root, 'src'));
-}
-
-function isHarnessFile(filePath: string, rootDirs: string[]): boolean {
-  if (HARNESS_NAME.test(path.basename(filePath))) return true;
-  return rootDirs.some(root =>
-    path
-      .relative(root, path.dirname(filePath))
-      .split(path.sep)
-      .some(segment => HARNESS_DIRS.has(segment))
+  const fileSystem = project.getFileSystem();
+  findings.push(
+    ...analyzeDependencies(dependencyUses(project), rootDirs, options.scopeDir, options.ignoreDependencies ?? [], {
+      fileExists: filePath => fileSystem.fileExistsSync(filePath),
+      readFile: filePath => fileSystem.readFileSync(filePath),
+      isSuppressedAt: (filePath, offset) => {
+        const sourceFile = project.getSourceFile(filePath);
+        const node = sourceFile?.getDescendantAtPos(offset);
+        return node !== undefined && isNodeSuppressed(node);
+      },
+      positionAt: (filePath, offset) => project.getSourceFileOrThrow(filePath).getLineAndColumnAtPos(offset),
+    })
   );
+  return { findings, deadFiles, deadDecls };
 }
 
 /**
@@ -308,14 +284,26 @@ function hasExportModifier(statement: Node): boolean {
   return (ts.getCombinedModifierFlags(statement.compilerNode as ts.Declaration) & ts.ModifierFlags.Export) !== 0;
 }
 
-function commonDirectory(sourceFiles: SourceFile[]): string {
-  const dirs = sourceFiles.map(sf => path.dirname(sf.getFilePath()).split('/'));
-  if (dirs.length === 0) return '/';
-  let prefix = dirs[0];
-  for (const segments of dirs.slice(1)) {
-    let i = 0;
-    while (i < prefix.length && i < segments.length && prefix[i] === segments[i]) i++;
-    prefix = prefix.slice(0, i);
+/**
+ * Imports that name a package rather than project code. A specifier resolving
+ * to a project source file is a relative import or a path alias.
+ */
+function dependencyUses(project: Project): DependencyUse[] {
+  const uses: DependencyUse[] = [];
+  // Sorted, so an unlisted package is always reported at the same one of its
+  // import sites however the tsconfigs happened to glob.
+  const sourceFiles = [...project.getSourceFiles()].sort((a, b) => a.getFilePath().localeCompare(b.getFilePath()));
+  for (const sourceFile of sourceFiles) {
+    if (sourceFile.isDeclarationFile()) continue;
+    for (const literal of sourceFile.getImportStringLiterals()) {
+      const parent = literal.getParent();
+      const target =
+        parent?.isKind(SyntaxKind.ImportDeclaration) || parent?.isKind(SyntaxKind.ExportDeclaration)
+          ? parent.getModuleSpecifierSourceFile()
+          : undefined;
+      if (target && !target.isInNodeModules()) continue;
+      uses.push({ filePath: sourceFile.getFilePath(), text: literal.getLiteralText(), start: literal.getStart() });
+    }
   }
-  return prefix.join('/') || '/';
+  return uses;
 }

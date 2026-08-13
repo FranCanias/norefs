@@ -1,5 +1,5 @@
 import type { ExportSpecifier, Identifier, ImportDeclaration, ImportSpecifier, Node, SourceFile } from 'ts-morph';
-import { Node as NodeGuards, SyntaxKind } from 'ts-morph';
+import { Node as NodeGuards, SyntaxKind, ts } from 'ts-morph';
 import type { Finding } from '../types';
 import { declarationNameNode } from './modules';
 import { findReferencesAsNodes } from './references';
@@ -37,12 +37,24 @@ export function applyFixes(findings: Finding[], options: { save?: boolean } = {}
       : a.filePath.localeCompare(b.filePath)
   );
 
+  // Every reference query runs before the first edit, while the analysis
+  // index still matches the project. The specifiers it hands back stay valid
+  // across the edits — ts-morph remaps wrapped nodes a manipulation did not
+  // remove — and the ones an earlier fix did remove are skipped as forgotten.
+  const specifiers = new Map<Finding, Array<ImportSpecifier | ExportSpecifier>>();
+  for (const finding of sorted) {
+    if (finding.kind === 'member' || !finding.node) continue;
+    const nameNode = declarationNameNode(finding.node);
+    if (nameNode) specifiers.set(finding, danglingSpecifiers(nameNode));
+  }
+
   const touched = new Set<SourceFile>();
   let fixed = 0;
   for (const finding of sorted) {
     const node = finding.node;
     if (!node) continue;
-    const changed = finding.kind === 'member' ? fixMember(node) : fixExport(finding, node);
+    const changed =
+      finding.kind === 'member' ? fixMember(node) : fixExport(finding, node, specifiers.get(finding) ?? []);
     if (changed.length > 0) {
       for (const file of changed) touched.add(file);
       fixed++;
@@ -51,7 +63,7 @@ export function applyFixes(findings: Finding[], options: { save?: boolean } = {}
     }
   }
 
-  for (const file of touched) cleanUpOrphans(file);
+  cleanUpOrphans(touched);
 
   const filePaths = [...touched].map(file => file.getFilePath());
   if (options.save ?? true) {
@@ -72,17 +84,15 @@ function fixMember(member: Node): SourceFile[] {
   return [sourceFile];
 }
 
-function fixExport(finding: Finding, decl: Node): SourceFile[] {
+function fixExport(finding: Finding, decl: Node, specifiers: Array<ImportSpecifier | ExportSpecifier>): SourceFile[] {
   const changed = new Set<SourceFile>();
 
   // First drop every import/export specifier that forwards the name — a barrel
   // re-export or an unused import would dangle once the export is gone.
-  const nameNode = declarationNameNode(decl);
-  if (nameNode) {
-    for (const specifier of danglingSpecifiers(nameNode)) {
-      changed.add(specifier.getSourceFile());
-      removeSpecifier(specifier);
-    }
+  for (const specifier of specifiers) {
+    if (specifier.wasForgotten()) continue; // an earlier fix removed its whole statement
+    changed.add(specifier.getSourceFile());
+    removeSpecifier(specifier);
   }
 
   if (finding.dead) {
@@ -143,56 +153,63 @@ function removeDeclaration(decl: Node): void {
 
 /**
  * Remove code the fixes orphaned: imports and unexported top-level declarations
- * that nothing references anymore. Runs until the file is stable, because one
- * removal can orphan the next.
+ * that nothing references anymore. Each round first finds every orphan in
+ * every touched file, then removes them all — queries never interleave with
+ * edits, so the checker re-reads the project once per round rather than once
+ * per question. One removal can orphan the next, so rounds repeat until the
+ * files are stable.
  */
-function cleanUpOrphans(file: SourceFile): void {
-  for (let pass = 0; pass < 5; pass++) {
-    const importsChanged = removeUnusedImports(file);
-    const localsChanged = removeUnusedLocals(file);
-    if (!importsChanged && !localsChanged) return;
+function cleanUpOrphans(files: Set<SourceFile>): void {
+  for (let round = 0; round < 5; round++) {
+    const removals: Array<() => void> = [];
+    for (const file of files) {
+      collectUnusedImports(file, removals);
+      collectUnusedLocals(file, removals);
+    }
+    if (removals.length === 0) return;
+    for (const removal of removals) removal();
   }
 }
 
-function removeUnusedImports(file: SourceFile): boolean {
-  let changed = false;
-  for (const importDecl of [...file.getImportDeclarations()]) {
+function collectUnusedImports(file: SourceFile, removals: Array<() => void>): void {
+  for (const importDecl of file.getImportDeclarations()) {
     const defaultImport = importDecl.getDefaultImport();
     const namespaceImport = importDecl.getNamespaceImport();
-    const hadBindings = importDecl.getNamedImports().length > 0 || defaultImport || namespaceImport;
-    if (!hadBindings) continue; // A bare side-effect import stays.
+    const named = importDecl.getNamedImports();
+    if (named.length === 0 && !defaultImport && !namespaceImport) continue; // A bare side-effect import stays.
 
-    for (const specifier of [...importDecl.getNamedImports()]) {
+    const unusedSpecifiers = named.filter(specifier => {
       const binding = specifier.getAliasNode() ?? specifier.getNameNode();
-      if (binding.isKind(SyntaxKind.Identifier) && !isBindingUsed(binding, file, importDecl)) {
-        specifier.remove();
-        changed = true;
+      return binding.isKind(SyntaxKind.Identifier) && !isBindingUsed(binding, file, importDecl);
+    });
+    const dropDefault = defaultImport !== undefined && !isBindingUsed(defaultImport, file, importDecl);
+    const dropNamespace = namespaceImport !== undefined && !isBindingUsed(namespaceImport, file, importDecl);
+    if (unusedSpecifiers.length === 0 && !dropDefault && !dropNamespace) continue;
+
+    const emptied = unusedSpecifiers.length === named.length && (dropDefault || !defaultImport) && !namespaceImport;
+    removals.push(() => {
+      if (importDecl.wasForgotten()) return;
+      if (emptied || (dropNamespace && named.length === 0 && (dropDefault || !defaultImport))) {
+        importDecl.remove();
+        return;
       }
-    }
-    if (defaultImport && !isBindingUsed(defaultImport, file, importDecl)) {
-      importDecl.removeDefaultImport();
-      changed = true;
-    }
-    if (namespaceImport && !isBindingUsed(namespaceImport, file, importDecl)) {
-      importDecl.removeNamespaceImport();
-      changed = true;
-    }
-    if (
-      importDecl.getNamedImports().length === 0 &&
-      !importDecl.getDefaultImport() &&
-      !importDecl.getNamespaceImport()
-    ) {
-      importDecl.remove();
-      changed = true;
-    }
+      for (const specifier of unusedSpecifiers) {
+        if (!specifier.wasForgotten()) specifier.remove();
+      }
+      if (dropDefault) importDecl.removeDefaultImport();
+      if (dropNamespace) importDecl.removeNamespaceImport();
+    });
   }
-  return changed;
 }
 
+/**
+ * True when anything in the file outside the import itself still reads the
+ * binding. Answered from the file alone: the checker resolves each identifier
+ * spelled like the binding, which never rebuilds the language service's
+ * project-wide import tracker the way a find-references call would.
+ */
 function isBindingUsed(binding: Identifier, file: SourceFile, importDecl: ImportDeclaration): boolean {
-  return findReferencesAsNodes(binding).some(
-    ref => ref.getSourceFile() === file && ref.getFirstAncestorByKind(SyntaxKind.ImportDeclaration) !== importDecl
-  );
+  return isUsedInFile(binding, file, importDecl.compilerNode);
 }
 
 /**
@@ -201,16 +218,16 @@ function isBindingUsed(binding: Identifier, file: SourceFile, importDecl: Import
  * because those occurrences count as references. Exported declarations are
  * left to the analysis, which knows about entry files.
  */
-function removeUnusedLocals(file: SourceFile): boolean {
-  let changed = false;
-  for (const statement of [...file.getStatements()]) {
+function collectUnusedLocals(file: SourceFile, removals: Array<() => void>): void {
+  for (const statement of file.getStatements()) {
     if (statement.isKind(SyntaxKind.VariableStatement)) {
       if (statement.hasExportKeyword() || statement.hasDeclareKeyword()) continue;
-      for (const decl of [...statement.getDeclarations()]) {
+      for (const decl of statement.getDeclarations()) {
         const name = decl.getNameNode();
-        if (name.isKind(SyntaxKind.Identifier) && findReferencesAsNodes(name).length === 0) {
-          removeDeclaration(decl);
-          changed = true;
+        if (name.isKind(SyntaxKind.Identifier) && !isUsedInFile(name, file)) {
+          removals.push(() => {
+            if (!decl.wasForgotten()) removeDeclaration(decl);
+          });
         }
       }
       continue;
@@ -224,11 +241,53 @@ function removeUnusedLocals(file: SourceFile): boolean {
     ) {
       if (statement.isExported() || statement.hasDeclareKeyword()) continue;
       const name = statement.getNameNode();
-      if (name?.isKind(SyntaxKind.Identifier) && findReferencesAsNodes(name).length === 0) {
-        statement.remove();
-        changed = true;
+      if (name?.isKind(SyntaxKind.Identifier) && !isUsedInFile(name, file)) {
+        removals.push(() => {
+          if (!statement.wasForgotten()) statement.remove();
+        });
       }
     }
   }
-  return changed;
+}
+
+/**
+ * True when an identifier outside `exclude` (and outside the declaration
+ * itself) resolves to the same symbol the name declares. A shorthand property
+ * and an `export { x }` specifier name the symbol without resolving to it
+ * directly, so those ask the checker their own way. When the name resolves to
+ * nothing, the declaration is kept: proof, not absence of proof, removes code.
+ */
+function isUsedInFile(name: Identifier, file: SourceFile, exclude?: ts.Node): boolean {
+  const checker = file.getProject().getTypeChecker().compilerObject;
+  const target = checker.getSymbolAtLocation(name.compilerNode);
+  if (!target) return true;
+  const text = name.compilerNode.text;
+
+  let used = false;
+  const visit = (node: ts.Node): void => {
+    if (used) return;
+    if (exclude && node === exclude) return;
+    if (ts.isIdentifier(node) && node.text === text && node !== name.compilerNode) {
+      const parent = node.parent;
+      if (ts.isShorthandPropertyAssignment(parent) && parent.name === node) {
+        if (checker.getShorthandAssignmentValueSymbol(parent) === target) {
+          used = true;
+          return;
+        }
+      }
+      if (ts.isExportSpecifier(parent) && (parent.propertyName ?? parent.name) === node) {
+        if (checker.getExportSpecifierLocalTargetSymbol(parent) === target) {
+          used = true;
+          return;
+        }
+      }
+      if (checker.getSymbolAtLocation(node) === target) {
+        used = true;
+        return;
+      }
+    }
+    node.forEachChild(visit);
+  };
+  file.compilerNode.forEachChild(visit);
+  return used;
 }

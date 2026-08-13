@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import './compile-cache';
 import fs from 'node:fs';
+import type { Project } from 'ts-morph';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { applyBaseline, writeBaseline } from './baseline';
@@ -7,7 +9,8 @@ import { initConfig, loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { applyFixes } from './engine/fix';
-import { loadPackages, loadProject } from './engine/project';
+import { loadPackages, loadProject, optionsForDir } from './engine/project';
+import { analyzeSyntax, isSyntaxOnly } from './engine/syntax-analyze';
 import { formatGitHub, formatJson, formatMarkdown, formatPatch, formatSarif, formatText } from './engine/report';
 import { watchProject } from './engine/watch';
 import type { FilterOptions } from './filters';
@@ -32,7 +35,11 @@ Options:
                          root or src/ are entry points by default)
   --only <kinds>         Report only these finding kinds, comma-separated:
                          files, exports, types, ns-exports, ns-types, members,
-                         empty-types, dependencies, unlisted
+                         empty-types, dependencies, unlisted.
+                         This prunes the analysis, it does not filter its
+                         output: asking for files and dependencies alone
+                         skips the type checker, and leaving members out
+                         skips the costliest half of what is left
   --reporter <name>      Output format: text (default), json, github (workflow
                          commands that annotate pull requests), sarif
   --baseline             Write the findings to noref-baseline.json and exit;
@@ -152,10 +159,23 @@ function main(): void {
   const tsConfigPaths = (cliProjects.length > 0 ? cliProjects : config.project).map(p => path.resolve(cwd, p));
   if (tsConfigPaths.length === 0) tsConfigPaths.push(path.resolve(cwd, 'tsconfig.json'));
   const packages = loadPackages(tsConfigPaths);
-  const project = loadProject(tsConfigPaths);
+
+  // Loading the project parses every file and builds a type checker: seconds
+  // and gigabytes. A run that only asks for unused files or dependencies never
+  // needs one, so the load waits until something actually asks for types.
+  let loaded: Project | undefined;
+  const project = (): Project => (loaded ??= loadProject(tsConfigPaths));
+
+  // Unused files and the dependency checks read the source text alone. When
+  // nothing else is asked for, the syntax scanner answers them and the type
+  // checker is never built.
+  const syntaxOnly = isSyntaxOnly(filterOptions.only) && !values.fix && !values.watch;
 
   const warnUnresolved = (): void => {
-    const unresolved = findUnresolvedImports(project);
+    // The warning is about references going missing, which a syntax-only run
+    // never looks for — and asking would build the very program it skipped.
+    if (syntaxOnly) return;
+    const unresolved = findUnresolvedImports(project());
     if (unresolved.length === 0) return;
     const examples = unresolved.slice(0, 5).join(', ');
     const more = unresolved.length > 5 ? ', …' : '';
@@ -169,8 +189,22 @@ function main(): void {
   const scopeDir = values.scope ? path.resolve(cwd, values.scope) : undefined;
   const entries = [...config.entry, ...(values.entry ?? [])].map(entry => path.resolve(cwd, entry));
   const rootDirs = [...new Set(tsConfigPaths.map(p => path.dirname(p)))];
-  const analyzeOptions = { scopeDir, entries, rootDirs, packages, ignoreDependencies: config.ignoreDependencies };
-  const runAnalysis = (): Finding[] => applyFilters(analyze(project, analyzeOptions), filterOptions);
+  // The kinds go to the analysis, not only to the filter: knowing that no
+  // member finding is wanted lets it skip the member analysis outright.
+  const analyzeOptions = {
+    scopeDir,
+    entries,
+    rootDirs,
+    packages,
+    ignoreDependencies: config.ignoreDependencies,
+    kinds: filterOptions.only,
+  };
+  const runAnalysis = (): Finding[] => {
+    const findings = syntaxOnly
+      ? analyzeSyntax(tsConfigPaths, optionsForDir(packages, rootDirs[0]) ?? {}, analyzeOptions)
+      : analyze(project(), analyzeOptions);
+    return applyFilters(findings, filterOptions);
+  };
 
   const printReport = (findings: Finding[], baseline: ReturnType<typeof applyBaseline>): void => {
     process.stdout.write(reporter(findings, cwd));
@@ -217,7 +251,7 @@ function main(): void {
       process.stderr.write('Watching for file changes. Press Ctrl-C to stop.\n');
     };
     report();
-    watchProject(project, tsConfigPaths, () => {
+    watchProject(project(), tsConfigPaths, () => {
       if (process.stdout.isTTY) process.stdout.write('\x1Bc');
       report();
     });
@@ -262,7 +296,7 @@ function main(): void {
     if (!save) {
       for (const filePath of [...touched].sort()) {
         const before = fs.readFileSync(filePath, 'utf8');
-        const after = project.getSourceFile(filePath)?.getFullText() ?? before;
+        const after = project().getSourceFile(filePath)?.getFullText() ?? before;
         process.stdout.write(`${formatPatch(path.relative(cwd, filePath), before, after)}\n`);
       }
       process.stderr.write(`Dry run: would fix ${totalFixed} finding(s) in ${touched.size} file(s)\n`);

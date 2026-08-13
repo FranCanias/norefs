@@ -132,6 +132,56 @@ Two reporters are made for CI:
 - `--reporter github` prints one workflow command (`::error file=…`) per finding, so GitHub Actions shows them inline on the pull request.
 - `--reporter sarif` prints a SARIF 2.1.0 run for anything that ingests SARIF, like GitHub code scanning.
 
+### Speed
+
+Unused files and both dependency checks are decided by the import graph, and the
+import graph is in the source text. Ask for only those and noref never builds a
+type checker: a single-pass scanner reads every file, the compiler resolves the
+specifiers it found, and the answer arrives in well under a second.
+
+```sh
+noref --only files,dependencies,unlisted
+```
+
+The member checks are the other half. To know that `{ id: 1 }` writes the `id`
+an interface declares, noref has to ask the compiler what type that object
+literal is read as — and answering that resolves the types of the surrounding
+call or component. It is most of what a full run costs, and nothing but a
+member finding rests on it, so a run that asks for no member findings does not
+pay for it either:
+
+```sh
+noref --only files,exports,types,ns-exports,ns-types,dependencies,unlisted
+```
+
+On a 338-file application:
+
+| run | time | memory |
+| --- | --- | --- |
+| everything | 4.7 s | 1.0 GB |
+| everything but members | 1.8 s | 630 MB |
+| files and dependencies only | 0.21 s | 190 MB |
+
+The findings are the same either way — the kinds you ask for change the work
+done, not the answers.
+
+For the checks that do need references, noref indexes the whole project once —
+one pass over every identifier, each filed under the declaration it names —
+instead of asking the language service per declaration, which would rebuild an
+import tracker every time.
+
+The index skips what no finding can rest on. An occurrence named like nothing
+the run will ask about is never resolved to a symbol. And where the checker's
+contextual-type answer would type-check a whole call, the index reads the
+argument's declared type off every signature of the callee instead — filing a
+reference under each candidate rather than the one overload the checker would
+pick. Filing wider costs nothing but a missed finding. Generic signatures work
+the same way — which members `TableProps<T>` declares does not depend on what
+`T` becomes — and each component or callee is read once, however many sites
+use it. Only the cases where instantiation can reshape a type's members — a
+naked type parameter, a conditional type, a mapped type, a spread, a class
+component — still pay the checker's price.
+
 ### Watch mode
 
 While you clean up a codebase, run noref in a terminal on the side:
@@ -243,8 +293,8 @@ src/
   index.ts      CLI entry point
   config.ts     noref.config.json loading and `noref init`
   engine/       project loading, the module-level checks (files, exports, namespaces, dependencies),
-                the unused-reference check, suppression comments, human-readable labels, orchestration,
-                output formatting
+                the project-wide reference index, the syntax-only pipeline and its scanner,
+                suppression comments, human-readable labels, orchestration, output formatting
   collectors/   one file per source of candidate members (interfaces, type literals, returned objects, enums, classes)
   filters/      post-collection filters (e.g. --no-anonymous)
   types/        shared types

@@ -1,21 +1,40 @@
 import type { InterfaceDeclaration, Node, Project, TypeAliasDeclaration } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { collectCandidates } from '../collectors';
-import type { Finding } from '../types';
+import type { Finding, FindingKind } from '../types';
 import { isUnused } from './check';
 import type { ModuleOptions } from './modules';
 import { analyzeModules } from './modules';
+import { buildReferenceIndex } from './reference-index';
 import { findReferencesAsNodes } from './references';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 
-type AnalyzeOptions = ModuleOptions;
+export interface AnalyzeOptions extends ModuleOptions {
+  /**
+   * The kinds this run will report. Member analysis is the expensive half of
+   * noref — it has to know which member every object literal and every JSX
+   * attribute writes — so a run that asks for none of it skips that work
+   * rather than doing it and filtering the findings away.
+   */
+  kinds?: FindingKind[];
+}
+
+/** True when the requested kinds need the member analysis. */
+function needsMembers(kinds: FindingKind[] | undefined): boolean {
+  return kinds === undefined || kinds.length === 0 || kinds.some(kind => kind === 'member' || kind === 'empty-type');
+}
 
 export function analyze(project: Project, options: AnalyzeOptions = {}): Finding[] {
+  const members = needsMembers(options.kinds);
+  // The index holds nodes of the project as it stands. A watch run and a run
+  // after --fix both see an edited project, so every analysis starts fresh.
+  buildReferenceIndex(project, { members });
+
   const modules = analyzeModules(project, options);
   const findings = [...modules.findings];
   const reportedMembers = new Set<Node>();
 
-  for (const { member, context, anonymous } of collectCandidates(project, options)) {
+  for (const { member, context, anonymous } of members ? collectCandidates(project, options) : []) {
     // An unused file or a declaration with zero references is already reported
     // as a whole; listing every member inside it would only add noise.
     if (modules.deadFiles.has(member.getSourceFile())) continue;

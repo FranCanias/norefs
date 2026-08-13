@@ -79,10 +79,30 @@ function classEscapesTracking(cls: ClassDeclaration, cache: Map<Node, boolean>):
   cache.set(cls, true);
   let escapes = classItselfEscapes(cls, cache);
   if (!escapes) {
-    escapes = cls.getDerivedClasses().some(derived => classEscapesTracking(derived, cache));
+    escapes = derivedClasses(cls).some(derived => classEscapesTracking(derived, cache));
   }
   cache.set(cls, escapes);
   return escapes;
+}
+
+/**
+ * The classes that directly extend this one, found through the project-wide
+ * reference index. ts-morph's own `getDerivedClasses` asks the language
+ * service per class, which rebuilds an import tracker every call. Recursion
+ * in `classEscapesTracking` covers the transitive subclasses.
+ */
+function derivedClasses(cls: ClassDeclaration): ClassDeclaration[] {
+  const nameNode = cls.getNameNode();
+  if (!nameNode) return [];
+  const derived: ClassDeclaration[] = [];
+  for (const ref of findReferencesAsNodes(nameNode)) {
+    const expression = ref.getParentWhileKind(SyntaxKind.PropertyAccessExpression) ?? ref;
+    const heritage = expression.getParentIfKind(SyntaxKind.ExpressionWithTypeArguments)?.getParent();
+    if (!heritage?.isKind(SyntaxKind.HeritageClause) || heritage.getToken() !== SyntaxKind.ExtendsKeyword) continue;
+    const owner = heritage.getParentIfKind(SyntaxKind.ClassDeclaration);
+    if (owner) derived.push(owner);
+  }
+  return derived;
 }
 
 const NEUTRAL_REF_PARENTS = new Set<SyntaxKind>([

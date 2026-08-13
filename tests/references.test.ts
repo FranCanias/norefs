@@ -35,14 +35,14 @@ describe('findReferencesAsNodes', () => {
     expect(findReferencesAsNodes(unused)).toEqual([]);
   });
 
-  it('keeps a declaration that its own file uses before declaring it', () => {
+  it('finds a use that comes before the declaration', () => {
     const project = projectOf({ '/main.ts': 'hoisted();\nfunction hoisted(): void {}\n' });
     const hoisted = project.getSourceFileOrThrow('/main.ts').getFunctionOrThrow('hoisted').getNameNodeOrThrow();
 
-    expect(locations(findReferencesAsNodes(hoisted))).toEqual(['main.ts:1', 'main.ts:2']);
+    expect(locations(findReferencesAsNodes(hoisted))).toEqual(['main.ts:1']);
   });
 
-  it('keeps an import binding, which forwards the name rather than declaring it', () => {
+  it('reaches the declaration and its uses from an import binding, which only forwards the name', () => {
     const project = projectOf({
       '/lib.ts': 'export const value = 1;\n',
       '/main.ts': 'import { value } from "./lib";\nconsole.log(value);\n',
@@ -53,7 +53,7 @@ describe('findReferencesAsNodes', () => {
       .getNamedImports()[0]
       .getNameNode();
 
-    expect(locations(findReferencesAsNodes(binding))).toEqual(['main.ts:1', 'main.ts:2', 'lib.ts:1']);
+    expect(locations(findReferencesAsNodes(binding))).toEqual(['lib.ts:1', 'main.ts:2']);
   });
 
   it('finds a reference written inside a string literal', () => {
