@@ -6,7 +6,8 @@
     "norefs": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",
