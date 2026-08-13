@@ -1,8 +1,20 @@
-import type { ExportSpecifier, Identifier, ImportDeclaration, ImportSpecifier, Node, SourceFile } from 'ts-morph';
+import type {
+  ArrayLiteralExpression,
+  ExportSpecifier,
+  Identifier,
+  ImportDeclaration,
+  ImportSpecifier,
+  Node,
+  SourceFile,
+  VariableDeclaration,
+} from 'ts-morph';
 import { Node as NodeGuards, SyntaxKind, ts } from 'ts-morph';
 import type { Finding } from '../types';
 import { declarationNameNode } from './modules';
 import { findReferencesAsNodes } from './references';
+
+/** Nothing to skip while walking a file for uses. */
+const NO_NODES: ReadonlySet<ts.Node> = new Set();
 
 interface FixResult {
   /** Paths of the files that changed. */
@@ -46,7 +58,38 @@ export function isFixable(finding: Finding, unsafe: boolean): boolean {
   // A test-only finding is never fixable: the fix is deleting the code
   // together with its tests, and only a human deletes tests.
   if (finding.verdict === 'test-only') return false;
+  // A fix must finish the finding it acts on. A proven write-only member goes
+  // with the writes that prove it — and when one of those writes cannot be
+  // removed on its own, the whole finding waits for a human.
+  if (unremovableWrites(finding).length > 0) return false;
   return finding.verdict === 'dead' || finding.verdict === 'over-exported' || unsafe;
+}
+
+/**
+ * The proven write sites of a finding that no single edit can retire. A
+ * spread is the case: `{ ...base }` carries members beyond this one, so
+ * deleting it would take live code with it.
+ */
+export function unremovableWrites(finding: Finding): Node[] {
+  return (finding.writeSites ?? []).filter(site => !site.wasForgotten() && writeToRemove(site) === undefined);
+}
+
+/**
+ * The node that retires a write site: the whole property assignment or method
+ * the recorded name belongs to. A site of any other shape — a spread, which
+ * carries members beyond this one — has no edit of its own.
+ */
+function writeToRemove(site: Node): Node | undefined {
+  const parent = site.getParent();
+  const assignment = parent?.isKind(SyntaxKind.ComputedPropertyName) ? parent.getParent() : parent;
+  if (
+    assignment?.isKind(SyntaxKind.PropertyAssignment) ||
+    assignment?.isKind(SyntaxKind.ShorthandPropertyAssignment) ||
+    assignment?.isKind(SyntaxKind.MethodDeclaration)
+  ) {
+    return assignment;
+  }
+  return undefined;
 }
 
 export function applyFixes(findings: Finding[], options: { save?: boolean; unsafe?: boolean } = {}): FixResult {
@@ -79,8 +122,17 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
   for (const finding of sorted) {
     const node = finding.node;
     if (!node) continue;
+    // An earlier fix already removed the very node this one is about: a write
+    // site retired with its member can be a member of its own literal. The
+    // finding is gone from the code, so it counts as fixed.
+    if (node.wasForgotten()) {
+      fixed++;
+      continue;
+    }
     const changed =
-      finding.kind === 'member' ? fixMember(node, kept) : fixExport(finding, node, specifiers.get(finding) ?? [], kept);
+      finding.kind === 'member'
+        ? fixMember(finding, node, kept)
+        : fixExport(finding, node, specifiers.get(finding) ?? [], kept);
     if (changed.length > 0) {
       for (const file of changed) touched.add(file);
       fixed++;
@@ -116,8 +168,28 @@ function commentLocations(kept: Set<Node>): CommentLocation[] {
   return locations.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line);
 }
 
-function fixMember(member: Node, kept: Set<Node>): SourceFile[] {
-  const sourceFile = member.getSourceFile();
+/**
+ * Retire a member, and with it the writes that proved it write-only. Deleting
+ * the declaration alone would leave those writes running into a shape no
+ * named type describes — the finding itself, made undetectable. The writes go
+ * first: their nodes belong to other files that must be saved too.
+ */
+function fixMember(finding: Finding, member: Node, kept: Set<Node>): SourceFile[] {
+  const changed = new Set<SourceFile>([member.getSourceFile()]);
+  const sources: VariableDeclaration[] = [];
+  const dependencies: ArrayLiteralExpression[] = [];
+  for (const site of finding.writeSites ?? []) {
+    if (site.wasForgotten()) continue;
+    const write = writeToRemove(site);
+    if (!write || write.wasForgotten()) continue;
+    changed.add(write.getSourceFile());
+    sources.push(...writtenLocals(write));
+    dependencies.push(...dependencyArrays(write));
+    removeLeadingComments(write, kept);
+    (write as unknown as { remove(): void }).remove();
+  }
+  removeOrphanedLocals(sources, dependencies, kept);
+
   if (member.isKind(SyntaxKind.Parameter)) {
     member.setHasOverrideKeyword(false);
     member.setIsReadonly(false);
@@ -126,7 +198,87 @@ function fixMember(member: Node, kept: Set<Node>): SourceFile[] {
     removeLeadingComments(member, kept);
     (member as unknown as { remove(): void }).remove();
   }
-  return [sourceFile];
+  return [...changed];
+}
+
+/**
+ * The locals a write hands to the member: `{ track }`, or `track: track`. The
+ * property is their last reader, so once it goes the computation above is
+ * dead weight — and in a project with `noUnusedLocals`, not even compilable.
+ */
+function writtenLocals(write: Node): VariableDeclaration[] {
+  // A shorthand names the local directly; its own symbol is the property, so
+  // the value behind it takes the checker's shorthand lookup.
+  const source = write.isKind(SyntaxKind.ShorthandPropertyAssignment)
+    ? write.getValueSymbol()
+    : write.isKind(SyntaxKind.PropertyAssignment)
+      ? write.getInitializer()?.asKind(SyntaxKind.Identifier)?.getSymbol()
+      : undefined;
+  const declaration = source?.getValueDeclaration();
+  if (!declaration?.isKind(SyntaxKind.VariableDeclaration)) return [];
+  if (declaration.getSourceFile() !== write.getSourceFile()) return [];
+  if (declaration.getVariableStatement()?.hasExportKeyword()) return [];
+  return [declaration];
+}
+
+/**
+ * The dependency arrays of the call the write's factory was passed to:
+ * `useMemo(() => ({ track }), [track])`. A dependency array does not read a
+ * value, it decides when to recompute one — so an entry that was there for the
+ * write we just removed is stale, not a reader.
+ */
+function dependencyArrays(write: Node): ArrayLiteralExpression[] {
+  const factory = write.getFirstAncestor(
+    node => node.isKind(SyntaxKind.ArrowFunction) || node.isKind(SyntaxKind.FunctionExpression)
+  );
+  const call = factory?.getParent();
+  if (!factory || !call?.isKind(SyntaxKind.CallExpression)) return [];
+  const args = call.getArguments();
+  if (!args.includes(factory)) return [];
+  return args.filter(argument => argument.isKind(SyntaxKind.ArrayLiteralExpression));
+}
+
+/**
+ * Drop each local the removed writes left with no reader in its file — and the
+ * stale dependency entries that were its last mention. Without that second
+ * half the common React shape survives every check: the property is gone, the
+ * computation above it still runs, and the dependency array keeps the local
+ * "used" for both norefs and `noUnusedLocals`. That is the finding, made
+ * invisible — the exact outcome removing the write is meant to prevent.
+ */
+function removeOrphanedLocals(
+  declarations: VariableDeclaration[],
+  dependencies: ArrayLiteralExpression[],
+  kept: Set<Node>
+): void {
+  for (const declaration of declarations) {
+    if (declaration.wasForgotten()) continue;
+    const name = declaration.getNameNode();
+    if (!name.isKind(SyntaxKind.Identifier)) continue;
+    const stale = staleDependencies(name, dependencies);
+    const excluded = new Set(stale.map(entry => entry.compilerNode));
+    if (isUsedInFile(name, declaration.getSourceFile(), excluded)) continue;
+    // Last entry first: removing one re-parses the file around the others.
+    for (const entry of stale.sort((a, b) => b.getStart() - a.getStart())) {
+      const array = entry.getParent();
+      if (array?.isKind(SyntaxKind.ArrayLiteralExpression)) array.removeElement(entry);
+    }
+    removeDeclaration(declaration, kept);
+  }
+}
+
+/** The entries of those arrays that are a bare mention of this local. */
+function staleDependencies(name: Identifier, arrays: ArrayLiteralExpression[]): Identifier[] {
+  const symbol = name.getSymbol();
+  if (!symbol) return [];
+  const entries: Identifier[] = [];
+  for (const array of arrays) {
+    if (array.wasForgotten()) continue;
+    for (const element of array.getElements()) {
+      if (element.isKind(SyntaxKind.Identifier) && element.getSymbol() === symbol) entries.push(element);
+    }
+  }
+  return entries;
 }
 
 /**
@@ -317,7 +469,7 @@ function collectUnusedImports(file: SourceFile, removals: Array<() => void>): vo
  * project-wide import tracker the way a find-references call would.
  */
 function isBindingUsed(binding: Identifier, file: SourceFile, importDecl: ImportDeclaration): boolean {
-  return isUsedInFile(binding, file, importDecl.compilerNode);
+  return isUsedInFile(binding, file, new Set([importDecl.compilerNode]));
 }
 
 /**
@@ -367,7 +519,7 @@ function collectUnusedLocals(file: SourceFile, removals: Array<() => void>, kept
  * directly, so those ask the checker their own way. When the name resolves to
  * nothing, the declaration is kept: proof, not absence of proof, removes code.
  */
-function isUsedInFile(name: Identifier, file: SourceFile, exclude?: ts.Node): boolean {
+function isUsedInFile(name: Identifier, file: SourceFile, exclude: ReadonlySet<ts.Node> = NO_NODES): boolean {
   const checker = file.getProject().getTypeChecker().compilerObject;
   const target = checker.getSymbolAtLocation(name.compilerNode);
   if (!target) return true;
@@ -376,7 +528,7 @@ function isUsedInFile(name: Identifier, file: SourceFile, exclude?: ts.Node): bo
   let used = false;
   const visit = (node: ts.Node): void => {
     if (used) return;
-    if (exclude && node === exclude) return;
+    if (exclude.has(node)) return;
     if (ts.isIdentifier(node) && node.text === text && node !== name.compilerNode) {
       const parent = node.parent;
       if (ts.isShorthandPropertyAssignment(parent) && parent.name === node) {

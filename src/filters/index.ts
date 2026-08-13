@@ -39,6 +39,7 @@ const KIND_NAMES: Record<string, FindingKind> = {
   'empty-types': 'empty-type',
   dependencies: 'dependency',
   unlisted: 'unlisted',
+  stranded: 'stranded',
 };
 
 /** Parse comma-separated kind lists like "files,exports". Throws on an unknown name. */

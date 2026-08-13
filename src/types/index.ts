@@ -18,7 +18,9 @@ export type FindingKind =
   /** A package.json dependency no source file imports. */
   | 'dependency'
   /** An imported package no scanned package.json lists. */
-  | 'unlisted';
+  | 'unlisted'
+  /** A handler whose every sender this report calls unused: dead once they go. */
+  | 'stranded';
 
 /** The declaration keyword behind a type finding. */
 export type TypeKeyword = 'interface' | 'type' | 'enum';
@@ -48,14 +50,25 @@ export interface Finding {
   dead?: boolean;
   /** Set on type and ns-type findings: the keyword of the declaration. */
   typeKind?: TypeKeyword;
-  /** The claim this finding makes. Unset only for `unlisted`, which claims a manifest gap, not unused code. */
+  /**
+   * The claim this finding makes. Unset for `unlisted`, which claims a
+   * manifest gap, and for `stranded`, which claims a reachability gap — code
+   * that is alive today and dead the moment you apply the rest of the report.
+   */
   verdict?: Verdict;
   /** Human-readable evidence behind a non-dead verdict: the twin that reads the member, the boundary the type crosses. */
   evidence?: string;
   /** On empty-type findings: how many member findings folded into this one. */
   swallowed?: number;
-  /** On dead bridge wrappers: where the far side of the shared channel string lives. */
+  /** On a reported bridge wrapper: where the far side of the shared channel string lives. */
   strands?: string;
+  /**
+   * On a proven `write-only` member: the write sites the evidence cites. A fix
+   * that deletes the member must delete these too — the value chain is the
+   * finding, and a declaration removed without them leaves the writes running
+   * into a shape no type describes.
+   */
+  writeSites?: Node[];
   /** The declaration behind the finding, kept so --fix can act on it. Unset for file findings. */
   node?: Node;
 }

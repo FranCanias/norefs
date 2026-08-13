@@ -5,16 +5,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import type { Project } from 'ts-morph';
+import { SyntaxKind } from 'ts-morph';
 import { applyBaseline, writeBaseline } from './baseline';
 import { initConfig, loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
-import { isFixable } from './engine/fix';
+import { isFixable, unremovableWrites } from './engine/fix';
 import { applyVerifiedFixes, findingKey } from './engine/fix-verified';
-import { formatLocation } from './engine/verdicts';
 import { loadPackages, loadProject, optionsForDir } from './engine/project';
-import { analyzeSyntax, isSyntaxOnly } from './engine/syntax-analyze';
 import { formatGitHub, formatJson, formatMarkdown, formatPatch, formatSarif, formatText } from './engine/report';
+import { analyzeSyntax, isSyntaxOnly } from './engine/syntax-analyze';
+import { formatLocation } from './engine/verdicts';
 import { watchProject } from './engine/watch';
 import type { FilterOptions } from './filters';
 import { applyFilters, parseKinds } from './filters';
@@ -38,7 +39,7 @@ Options:
                          root or src/ are entry points by default)
   --only <kinds>         Report only these finding kinds, comma-separated:
                          files, exports, types, ns-exports, ns-types, members,
-                         empty-types, dependencies, unlisted.
+                         empty-types, dependencies, unlisted, stranded.
                          This prunes the analysis, it does not filter its
                          output: asking for files and dependencies alone
                          skips the type checker, and leaving members out
@@ -53,8 +54,11 @@ Options:
                          removed, over-exported declarations lose the export
                          keyword
   --fix-unsafe           Also apply write-only, contract, and shadowed findings
-                         (implies --fix). These are claims the analysis cannot
-                         prove — review the diff
+                         (implies --fix). A proven write-only member is retired
+                         together with the writes that prove it; when one of
+                         those writes cannot be removed on its own, the whole
+                         finding is kept and the write is named. These are
+                         claims the analysis cannot prove — review the diff
   --no-verify            Skip the check after --fix. By default norefs
                          type-checks in memory, holds back any fix that breaks
                          the build, and saves only what verifies
@@ -340,6 +344,39 @@ function main(): void {
     const verify = values.verify && findings.some(f => isFixable(f, unsafe));
     const command = values['verify-command'];
 
+    // A fix finishes the finding it acts on or says why it can't. Read before
+    // the first edit, so the coordinates are the ones the report printed.
+    const refusals = unsafe
+      ? findings.flatMap(finding => {
+          const stuck = unremovableWrites(finding);
+          if (stuck.length === 0) return [];
+          const where = stuck
+            .map(site => {
+              const at = formatLocation(site.getSourceFile().getFilePath(), site.getStartLineNumber(), cwd);
+              return site.isKind(SyntaxKind.SpreadAssignment)
+                ? `the spread at ${at}, which carries members beyond this one,`
+                : `the write at ${at}`;
+            })
+            .join(' and ');
+          const at = formatLocation(finding.filePath, finding.line, cwd);
+          return [`Kept \`${finding.name}\` (${at}): ${where} is why this isn't safe — removing it is yours to do`];
+        })
+      : [];
+    // Counted here for the same reason: a fix the verify loop rolled back
+    // leaves the findings it touched holding nodes the project has forgotten.
+    const skipped = findings.filter(f => !isFixable(f, unsafe)).length;
+
+    // "Verified" must not claim more than the probe can see: de-exporting is
+    // compiler-checkable, but a deleted member can have runtime-only readers
+    // (an identity-tracked context value, an inference-typed producer) that no
+    // type check reaches — and a retired write takes a computation with it
+    // that no type check weighs. Say so unless the user's own command also ran.
+    const memberFixes = findings.some(f => f.kind === 'member' && isFixable(f, unsafe));
+    const writeFixes = findings.some(f => (f.writeSites?.length ?? 0) > 0 && isFixable(f, unsafe));
+    const blindSpot = writeFixes
+      ? 'runtime-only reads of a deleted member, and it does not weigh what the writes deleted with it were doing'
+      : 'runtime-only reads of deleted members';
+
     const result = applyVerifiedFixes({
       project: project(),
       findings,
@@ -390,6 +427,7 @@ function main(): void {
           : `${spots.length} comments near the fixes were kept: reread ${spots.join(', ')}\n`
       );
     }
+    for (const refusal of refusals) process.stderr.write(`${refusal}\n`);
     // Held-back findings come from a re-analysis, so they are matched by
     // content, never by object identity: a held-back wrapper was not deleted
     // and gets no stranding warning.
@@ -401,15 +439,10 @@ function main(): void {
       );
     }
 
-    // "Verified" must not claim more than the probe can see: de-exporting is
-    // compiler-checkable, but a deleted member can have runtime-only readers
-    // (an identity-tracked context value, an inference-typed producer) that
-    // no type check reaches. Say so unless the user's own command also ran.
-    const memberFixes = findings.some(f => f.kind === 'member' && isFixable(f, unsafe));
     const verifiedLine = (fixes: string): string => {
       const caveat =
         memberFixes && !command
-          ? ' A type check cannot see runtime-only reads of deleted members; add --verify-command to run your tests too.\n'
+          ? ` A type check cannot see ${blindSpot}; add --verify-command to run your tests too.\n`
           : '\n';
       return `Verified: tsc reports no new errors after the ${fixes}.${caveat}`;
     };
@@ -432,10 +465,9 @@ function main(): void {
     if (verify) process.stderr.write(verifiedLine('fixes'));
     process.stderr.write(`Fixed ${result.fixed} finding(s) in ${result.touched.length} file(s)\n`);
 
-    const skipped = findings.filter(f => !isFixable(f, unsafe)).length;
     if (skipped > 0) {
       const untouched = unsafe
-        ? 'files, namespaces, emptied types, dependencies'
+        ? 'files, namespaces, emptied types, dependencies, proven writes no single edit can retire'
         : 'write-only, contract, and shadowed verdicts need --fix-unsafe; files, namespaces, emptied types, dependencies are never touched';
       process.stderr.write(`Skipped ${skipped} finding(s) --fix does not touch (${untouched})\n`);
     }

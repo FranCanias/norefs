@@ -24,7 +24,13 @@ interface AnalyzeOptions extends ModuleOptions {
 
 /** True when the requested kinds need the member analysis. */
 function needsMembers(kinds: FindingKind[] | undefined): boolean {
-  return kinds === undefined || kinds.length === 0 || kinds.some(kind => kind === 'member' || kind === 'empty-type');
+  return (
+    kinds === undefined ||
+    kinds.length === 0 ||
+    // A stranded handler is found through the wrapper that sends to it, and
+    // that wrapper is usually a member.
+    kinds.some(kind => kind === 'member' || kind === 'empty-type' || kind === 'stranded')
+  );
 }
 
 export function analyze(project: Project, options: AnalyzeOptions = {}): Finding[] {
@@ -73,7 +79,19 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
   const sliceFold = emptyReturnedObjectFindings(reportedMembers);
   findings.push(...typeFold.emptyFindings, ...sliceFold.emptyFindings);
   assignVerdicts(project, findings, process.cwd());
-  annotateStrandedChannels(project, findings, process.cwd());
+  // A far side earns a finding on the same terms as everything else: nothing
+  // already reported covers it, it sits inside the scope this run was asked
+  // for, and nobody suppressed it.
+  const reportFarSide = (far: Node): boolean => {
+    const sourceFile = far.getSourceFile();
+    if (modules.deadFiles.has(sourceFile)) return false;
+    if (far.getAncestors().some(ancestor => modules.deadDecls.has(ancestor))) return false;
+    if (modules.harnessFiles.has(sourceFile)) return false;
+    if (options.scopeDir && !sourceFile.getFilePath().startsWith(options.scopeDir)) return false;
+    if (isFileSuppressed(sourceFile)) return false;
+    return !isNodeSuppressed(far);
+  };
+  findings.push(...annotateStrandedChannels(project, findings, process.cwd(), reportFarSide));
   // One logical fact, one finding: a type losing every member is the story,
   // not seven bullets. The members fold in after they lent it their verdict.
   const swallowed = new Set([...typeFold.swallowed, ...sliceFold.swallowed]);

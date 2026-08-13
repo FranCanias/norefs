@@ -64,6 +64,9 @@ export function assignVerdicts(project: Project, findings: Finding[], cwd: strin
       finding.verdict = 'write-only';
       const writes = sites.typed.length === 1 ? 'a typed write at' : 'typed writes at';
       finding.evidence = `${writes} ${siteList(sites.typed, cwd)} ${sites.typed.length === 1 ? 'feeds' : 'feed'} this member — proven, never read`;
+      // The proof is the worklist: a fix that retires this member retires
+      // these writes with it, or refuses and says which one stopped it.
+      finding.writeSites = sites.typed;
       continue;
     }
     if (sites.unverified.length > 0) {

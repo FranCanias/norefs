@@ -304,8 +304,9 @@ class ReferenceIndex {
    *   declares this very member. The write is proven; only a read is missing.
    * - `accounted` — the site writes some other type: its contextual type was
    *   known and lacks the member, its own literal property is read as itself,
-   *   or every use of its value lands on concrete types unrelated to this
-   *   member. No evidence against `dead`.
+   *   every use of its value lands on concrete types unrelated to this
+   *   member, or the literal's shape could never be the member's owner in the
+   *   first place. No evidence against `dead`.
    * - `unverified` — a bare name match the analysis could not type either way.
    * A spread that copied the value of this very member is dropped outright:
    * reads through the copy resolve back to the member, so the copy hides
@@ -318,11 +319,14 @@ class ReferenceIndex {
     if (entries.length === 0) return { typed: [], accounted: [], unverified: [] };
     const sites = { typed: [] as ts.Node[], accounted: [] as ts.Node[], unverified: [] as ts.Node[] };
     const memberSymbol = member && this.checker.getSymbolAtLocation(member.compilerNode);
-    const own = memberSymbol ? new Set(this.relatedSymbols(memberSymbol)) : undefined;
+    const own = memberSymbol && {
+      symbols: new Set(this.relatedSymbols(memberSymbol)),
+      type: this.ownerTypeOf(memberSymbol),
+    };
     for (const entry of entries) {
       // The member's own declaration site is the finding, not evidence for it.
       if (member && entry.site === member.compilerNode) continue;
-      if (entry.source && own && this.relatedSymbols(entry.source).some(s => own.has(s))) continue;
+      if (entry.source && own && this.relatedSymbols(entry.source).some(s => own.symbols.has(s))) continue;
       sites[this.classifyWrite(entry, name, own)].push(entry.site);
     }
     const wrapSorted = (nodes: ts.Node[]): Node[] =>
@@ -339,13 +343,14 @@ class ReferenceIndex {
   /**
    * The rule that keeps a name match from becoming a claim: every site is
    * validated against the type its value feeds. Known and same — the member's
-   * owner — proves the write. Known and different discards the site. Only a
-   * site the checker cannot type either way stays a heuristic, and it says so.
+   * owner — proves the write. Known and different discards the site, and so
+   * does a shape the owner could never take. Only a site the checker cannot
+   * type either way stays a heuristic, and it says so.
    */
   private classifyWrite(
     entry: UnattributedWrite,
     name: string,
-    own: Set<ts.Symbol> | undefined
+    own: Owner | undefined
   ): 'typed' | 'accounted' | 'unverified' {
     // The contextual type was known when the write was indexed, and it does
     // not declare the name: the write feeds that type, not this member.
@@ -361,7 +366,9 @@ class ReferenceIndex {
     const destinations = own ? this.destinationsOfLiteral(literal, name, ownProperty) : NO_DESTINATIONS;
     if (own) {
       for (const type of destinations.types) {
-        if (this.propertiesOf(type, name).some(p => this.relatedSymbols(p).some(s => own.has(s)))) return 'typed';
+        if (this.propertiesOf(type, name).some(p => this.relatedSymbols(p).some(s => own.symbols.has(s)))) {
+          return 'typed';
+        }
       }
     }
 
@@ -373,7 +380,41 @@ class ReferenceIndex {
     // Every use of the value has a concrete type and none declares the
     // member: the write cannot reach it.
     if (destinations.conclusive) return 'accounted';
+
+    // The value never left the shapes the walk could see, and the last of
+    // them is a callee that types the position from the value itself. What
+    // that callee holds is this literal's own shape — and the checker would
+    // reject that shape where the member's owner is expected, so no read
+    // through the owner can ever see this write.
+    if (destinations.bounded && own?.type && this.cannotBeShapeOf(literal, own.type)) return 'accounted';
     return 'unverified';
+  }
+
+  /**
+   * The type a member belongs to: the instance type of its class or
+   * interface, or the type of the literal it sits in. Unknown for anything
+   * else — a constructor parameter property, an enum — and the shape rule
+   * stays out of those.
+   */
+  private ownerTypeOf(symbol: ts.Symbol): ts.Type | undefined {
+    const owner = symbol.declarations?.[0]?.parent;
+    if (!owner) return undefined;
+    if (ts.isClassLike(owner) || ts.isInterfaceDeclaration(owner)) {
+      const name = owner.name;
+      const ownerSymbol = name && safely(() => this.checker.getSymbolAtLocation(name));
+      return ownerSymbol && safely(() => this.checker.getDeclaredTypeOfSymbol(ownerSymbol));
+    }
+    if (ts.isTypeLiteralNode(owner) || ts.isObjectLiteralExpression(owner)) {
+      return safely(() => this.checker.getTypeAtLocation(owner));
+    }
+    return undefined;
+  }
+
+  /** True when the checker would reject this literal where the owner is expected. */
+  private cannotBeShapeOf(literal: ts.ObjectLiteralExpression, ownerType: ts.Type): boolean {
+    const literalType = safely(() => this.checker.getTypeAtLocation(literal));
+    if (!literalType) return false;
+    return safely(() => !this.checker.isTypeAssignableTo(literalType, ownerType)) ?? false;
   }
 
   /**
@@ -397,13 +438,14 @@ class ReferenceIndex {
    * inline (`useMemo(() => ({ … }))`) or named (`function build() { return
    * { … } }`, followed to every direct call site) — into the variable that
    * holds the result, across `const b = a` aliases, and finally to the
-   * contextual type at each use. Every hop is verified by symbol identity:
-   * the carrier's type must hold the literal's own property, so a wrapper
-   * that returns something else cannot smuggle a wrong type in. The walk is
-   * bounded by MAX_FLOW_HOPS so equivalent shapes converge without risking a
-   * runaway. `conclusive` means every use was typed and concrete; one
-   * untyped or `any`/`unknown` use, and the value escapes where the analysis
-   * cannot follow.
+   * contextual type at each use. A factory's declared return type ends the
+   * walk on the spot: every caller reads the result as exactly that type.
+   * Every other hop is verified by symbol identity: the carrier's type must
+   * hold the literal's own property, so a wrapper that returns something else
+   * cannot smuggle a wrong type in. The walk is bounded by MAX_FLOW_HOPS so
+   * equivalent shapes converge without risking a runaway. `conclusive` means
+   * every use was typed and concrete; one untyped or `any`/`unknown` use, and
+   * the value escapes where the analysis cannot follow.
    */
   private destinationsOfLiteral(
     literal: ts.ObjectLiteralExpression,
@@ -429,11 +471,23 @@ class ReferenceIndex {
           ? parent
           : undefined;
       if (factory) {
-        // An inline factory: the call it is passed to returns the value.
+        // A declared return type answers the whole question: whatever the
+        // call sites do, they read the result as that type and nothing else.
+        const annotated = this.annotatedReturn(factory);
+        if (annotated) return annotated;
+
         const holder = factory.parent;
         if (ts.isCallExpression(holder) && holder.arguments.includes(factory as ts.Expression)) {
-          expression = holder;
-          continue;
+          // An inline factory whose call hands the value back — `useMemo`,
+          // `wrap` — carries the walk on to the call's own destinations.
+          if (this.carriesProperty(holder, name, ownProperty)) {
+            expression = holder;
+            continue;
+          }
+          // The call consumes the factory instead: `useImperativeHandle(ref,
+          // () => ({ … }))`. Nothing comes back, so the argument position is
+          // the last stop.
+          return this.argumentDestination(factory);
         }
         // A named factory: every direct call of it returns the value.
         const factoryName =
@@ -445,12 +499,50 @@ class ReferenceIndex {
         if (!factoryName) return NO_DESTINATIONS;
         return this.destinationsOfFactoryCalls(factoryName, name, ownProperty, hops - 1);
       }
+      if (ts.isCallExpression(parent) || ts.isNewExpression(parent)) {
+        const args: readonly ts.Expression[] = parent.arguments ?? [];
+        if (args.includes(expression as ts.Expression)) return this.argumentDestination(expression);
+      }
       if (ts.isVariableDeclaration(parent) && parent.initializer === expression && ts.isIdentifier(parent.name)) {
         if (!this.carriesProperty(parent.name, name, ownProperty)) return NO_DESTINATIONS;
         return this.destinationsOfVariable(parent.name, name, ownProperty, hops - 1);
       }
       return NO_DESTINATIONS;
     }
+  }
+
+  /**
+   * The factory's declared return type, when it has one. An annotation is a
+   * complete answer — no call site can read the result as anything else — so
+   * the walk stops there. An `any` or `unknown` annotation is no answer at
+   * all: the value escapes into it.
+   */
+  private annotatedReturn(factory: ts.Node): Destinations | undefined {
+    const typeNode = (factory as ts.SignatureDeclaration).type;
+    if (!typeNode) return undefined;
+    const type = safely(() => this.checker.getTypeAtLocation(typeNode));
+    if (!type) return undefined;
+    return isConcreteKnowledge([type]) ? { types: [type], conclusive: true, bounded: true } : NO_DESTINATIONS;
+  }
+
+  /**
+   * What an argument position tells us about a value the call consumes. When
+   * the checker types that position from the argument itself — a generic
+   * parameter inferred from the value, the shape `useImperativeHandle` gives
+   * its factory — the answer is circular and adds no type. It does say
+   * something, though: the callee sees this value's own shape and nothing
+   * wider, so nothing escaped the walk. Any other position the checker could
+   * not resolve is a real escape.
+   */
+  private argumentDestination(argument: ts.Node): Destinations {
+    const contextual = safely(() => this.checker.getContextualType(argument as ts.Expression));
+    if (!contextual) return NO_DESTINATIONS;
+    const types = ts.isFunctionLike(argument)
+      ? contextual.getCallSignatures().map(signature => this.checker.getReturnTypeOfSignature(signature))
+      : [contextual];
+    const fromValue =
+      types.length > 0 && types.every(type => (type.symbol?.declarations ?? []).some(decl => isInside(decl, argument)));
+    return fromValue ? OWN_SHAPE_ONLY : NO_DESTINATIONS;
   }
 
   /** True when this node's type holds the very property symbol in question. */
@@ -471,8 +563,7 @@ class ReferenceIndex {
   ): Destinations {
     const symbol = safely(() => this.checker.getSymbolAtLocation(factoryName));
     if (!symbol) return NO_DESTINATIONS;
-    const types: ts.Type[] = [];
-    let conclusive = true;
+    let destinations = NOTHING_SEEN;
     const seen = new Set<ts.Node>([factoryName]);
     for (const related of this.relatedSymbols(symbol)) {
       for (const ref of this.buckets.get(related) ?? []) {
@@ -484,15 +575,13 @@ class ReferenceIndex {
         if (!ts.isCallExpression(call) || call.expression !== ref || !this.carriesProperty(call, name, ownProperty)) {
           // The factory itself escapes — passed around, aliased — and the
           // value can surface anywhere; not followable.
-          conclusive = false;
+          destinations = merge(destinations, NO_DESTINATIONS);
           continue;
         }
-        const fromCall = this.destinationsOfExpression(call, name, ownProperty, hops);
-        conclusive = conclusive && fromCall.conclusive;
-        types.push(...fromCall.types);
+        destinations = merge(destinations, this.destinationsOfExpression(call, name, ownProperty, hops));
       }
     }
-    return { types, conclusive };
+    return destinations;
   }
 
   /** The contextual type at every indexed use of the variable, following `const b = a` aliases. */
@@ -504,8 +593,7 @@ class ReferenceIndex {
   ): Destinations {
     const symbol = safely(() => this.checker.getSymbolAtLocation(nameNode));
     if (!symbol) return NO_DESTINATIONS;
-    const types: ts.Type[] = [];
-    let conclusive = true;
+    let destinations = NOTHING_SEEN;
     const seen = new Set<ts.Node>([nameNode]);
     for (const related of this.relatedSymbols(symbol)) {
       for (const ref of this.buckets.get(related) ?? []) {
@@ -521,20 +609,21 @@ class ReferenceIndex {
           ts.isIdentifier(ref.parent.name) &&
           this.carriesProperty(ref.parent.name, name, ownProperty)
         ) {
-          const fromAlias = this.destinationsOfVariable(ref.parent.name, name, ownProperty, hops - 1);
-          conclusive = conclusive && fromAlias.conclusive;
-          types.push(...fromAlias.types);
+          destinations = merge(destinations, this.destinationsOfVariable(ref.parent.name, name, ownProperty, hops - 1));
           continue;
         }
         const contextual = safely(() => this.checker.getContextualType(ref as ts.Expression));
         if (!contextual || !isConcreteKnowledge([contextual])) {
-          conclusive = false;
+          // The use is untyped — but a call that types the position from the
+          // value itself still holds nothing wider than this value's shape.
+          const consumed = ts.isCallExpression(ref.parent) && ref.parent.arguments.includes(ref as ts.Expression);
+          destinations = merge(destinations, consumed ? this.argumentDestination(ref) : NO_DESTINATIONS);
           continue;
         }
-        types.push(contextual);
+        destinations = merge(destinations, { types: [contextual], conclusive: true, bounded: true });
       }
     }
-    return { types, conclusive };
+    return destinations;
   }
 
   /**
@@ -911,13 +1000,40 @@ interface WriteSites {
   unverified: Node[];
 }
 
-/** Where a value ends up. `conclusive`: every use was typed and concrete. */
-interface Destinations {
-  types: ts.Type[];
-  conclusive: boolean;
+/** The member under question: every symbol it can be reached through, and the shape it belongs to. */
+interface Owner {
+  symbols: Set<ts.Symbol>;
+  /** The owner's type, where there is one to have. Undefined turns the shape rule off. */
+  type?: ts.Type;
 }
 
-const NO_DESTINATIONS: Destinations = { types: [], conclusive: false };
+/** Where a value ends up. */
+interface Destinations {
+  types: ts.Type[];
+  /** Every use was typed and concrete. */
+  conclusive: boolean;
+  /**
+   * Nothing escaped: every use was typed and concrete, or handed the value to
+   * a callee that types the position from the value itself and so holds
+   * nothing wider than the value's own shape.
+   */
+  bounded: boolean;
+}
+
+/** The value went somewhere the analysis cannot follow. */
+const NO_DESTINATIONS: Destinations = { types: [], conclusive: false, bounded: false };
+/** The value was consumed as its own shape: no type learned, nothing lost. */
+const OWN_SHAPE_ONLY: Destinations = { types: [], conclusive: false, bounded: true };
+/** The empty start of a fold over uses: a value with no uses lost nothing. */
+const NOTHING_SEEN: Destinations = { types: [], conclusive: true, bounded: true };
+
+function merge(a: Destinations, b: Destinations): Destinations {
+  return {
+    types: [...a.types, ...b.types],
+    conclusive: a.conclusive && b.conclusive,
+    bounded: a.bounded && b.bounded,
+  };
+}
 
 /** How many value hops the flow proof follows before giving up. */
 const MAX_FLOW_HOPS = 4;
