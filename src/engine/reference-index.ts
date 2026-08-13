@@ -22,7 +22,7 @@ import { ts } from 'ts-morph';
  * Filing a node too widely costs a finding; filing it too narrowly would call
  * used code unused, so every uncertain case files wider.
  */
-export interface IndexOptions {
+interface IndexOptions {
   /**
    * Index what only member findings need: the contextual link from an
    * object-literal property or a JSX attribute to the member it writes.
@@ -36,7 +36,7 @@ export interface IndexOptions {
   members: boolean;
 }
 
-export class ReferenceIndex {
+class ReferenceIndex {
   private readonly buckets = new Map<ts.Symbol, ts.Node[]>();
   private readonly related = new Map<ts.Symbol, ts.Symbol[]>();
   private readonly wrappers = new Map<ts.SourceFile, SourceFile>();
@@ -732,9 +732,4 @@ export function referenceIndex(project: Project): ReferenceIndex {
   const existing = indexes.get(project);
   if (existing) return existing;
   return buildReferenceIndex(project, { members: true });
-}
-
-/** Drop the index: the project has changed and every node in it is stale. */
-export function resetReferenceIndex(project: Project): void {
-  indexes.delete(project);
 }

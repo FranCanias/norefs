@@ -10,6 +10,7 @@ import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './r
 import { SourceIndex, projectFilePaths } from './sources';
 
 /** The findings the syntax alone decides — no type checker is involved. */
+// norefs-ignore: the test suite imports it, outside this tsconfig
 export const SYNTAX_KINDS: FindingKind[] = ['file', 'dependency', 'unlisted'];
 
 /** True when every requested kind can be answered without a type checker. */
@@ -17,7 +18,7 @@ export function isSyntaxOnly(kinds: FindingKind[] | undefined): boolean {
   return kinds !== undefined && kinds.length > 0 && kinds.every(kind => SYNTAX_KINDS.includes(kind));
 }
 
-export interface SyntaxOptions {
+interface SyntaxOptions {
   scopeDir?: string;
   entries?: string[];
   rootDirs?: string[];

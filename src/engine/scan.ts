@@ -385,6 +385,7 @@ function opensWithComment(line: string): boolean {
 }
 
 /** Scan text already in memory, for a file the caller has read or edited. */
+// norefs-ignore: the test suite imports it, outside this tsconfig
 export function scanText(text: string): FileScan {
   const lineStarts = [0];
   for (let i = 0; i < text.length; i++) {

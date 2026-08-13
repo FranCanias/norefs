@@ -7,7 +7,7 @@ import type { PackageConfig } from './project';
 import { optionsForDir } from './project';
 
 /** An import as written, and where it resolves to. */
-export interface Import {
+interface Import {
   specifier: Specifier;
   /** The project file it names, when it names one the project holds. */
   target?: string;
