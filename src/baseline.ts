@@ -22,6 +22,8 @@ interface BaselineResult {
   /** Findings not in the baseline — the ones that should fail the run. */
   fresh: Finding[];
   matched: number;
+  /** The findings the baseline covered, for --ratchet to rewrite it without the stale rest. */
+  matchedFindings: Finding[];
   /** Baseline entries nothing matched anymore; the file deserves a refresh. */
   stale: number;
 }
@@ -66,13 +68,13 @@ export function applyBaseline(findings: Finding[], cwd: string): BaselineResult 
   }
 
   const fresh: Finding[] = [];
-  let matched = 0;
+  const matchedFindings: Finding[] = [];
   for (const finding of findings) {
     const key = entryKey(finding.kind, path.relative(cwd, finding.filePath), finding.name, finding.context);
     const left = remaining.get(key) ?? 0;
     if (left > 0) {
       remaining.set(key, left - 1);
-      matched++;
+      matchedFindings.push(finding);
     } else {
       fresh.push(finding);
     }
@@ -80,7 +82,7 @@ export function applyBaseline(findings: Finding[], cwd: string): BaselineResult 
 
   let stale = 0;
   for (const left of remaining.values()) stale += left;
-  return { fresh, matched, stale };
+  return { fresh, matched: matchedFindings.length, matchedFindings, stale };
 }
 
 function entryKey(kind: string, filePath: string, name: string, context: string): string {

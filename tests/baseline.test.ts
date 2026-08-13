@@ -55,6 +55,23 @@ describe('baseline', () => {
     expect(result?.stale).toBe(1);
   });
 
+  it('hands back the matched findings so a ratchet can rewrite without the stale rest', () => {
+    const cwd = tempDir();
+    const kept = make(cwd, 'export', 'src/a.ts', 'x');
+    const gone = make(cwd, 'export', 'src/gone.ts', 'y');
+    writeBaseline([kept, gone], cwd);
+
+    const result = applyBaseline([kept], cwd);
+    expect(result?.stale).toBe(1);
+    expect(result?.matchedFindings).toEqual([kept]);
+
+    // The ratchet: rewrite with the matched findings only, and the stale entry is gone.
+    writeBaseline(result?.matchedFindings ?? [], cwd);
+    const after = applyBaseline([kept], cwd);
+    expect(after?.stale).toBe(0);
+    expect(after?.matched).toBe(1);
+  });
+
   it('throws on an invalid baseline file', () => {
     const cwd = tempDir();
     fs.writeFileSync(path.join(cwd, 'norefs-baseline.json'), '{ nope');

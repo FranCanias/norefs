@@ -8,7 +8,8 @@ import { applyBaseline, writeBaseline } from './baseline';
 import { initConfig, loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
-import { applyFixes } from './engine/fix';
+import { applyFixes, isFixable } from './engine/fix';
+import { errorInventory, newErrors, snapshotTexts } from './engine/verify';
 import { loadPackages, loadProject, optionsForDir } from './engine/project';
 import { analyzeSyntax, isSyntaxOnly } from './engine/syntax-analyze';
 import { formatGitHub, formatJson, formatMarkdown, formatPatch, formatSarif, formatText } from './engine/report';
@@ -52,6 +53,11 @@ Options:
   --fix-unsafe           Also apply write-only, contract, and shadowed findings
                          (implies --fix). These are claims the analysis cannot
                          prove — review the diff
+  --no-verify            Skip the check after --fix. By default norefs
+                         type-checks the fixed project and reverts everything
+                         if the fixes introduced new errors
+  --ratchet              With a baseline: drop entries whose finding vanished,
+                         so the baseline count can only go down
   --dry-run              With --fix: print the would-be changes as a unified
                          diff without writing any file
   --watch                Re-run on save: keep the loaded project in memory,
@@ -84,6 +90,8 @@ function main(): void {
       export: { type: 'string' },
       fix: { type: 'boolean', default: false },
       'fix-unsafe': { type: 'boolean', default: false },
+      verify: { type: 'boolean', default: true },
+      ratchet: { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
       watch: { type: 'boolean', default: false },
       anonymous: { type: 'boolean', default: true },
@@ -222,7 +230,9 @@ function main(): void {
       process.stderr.write(`Baseline: ${baseline.matched} finding(s) matched and were not reported\n`);
       if (baseline.stale > 0) {
         process.stderr.write(
-          `${baseline.stale} baseline finding(s) no longer occur — run norefs --baseline to refresh the file\n`
+          values.ratchet
+            ? `Ratchet: dropped ${baseline.stale} stale entr${baseline.stale === 1 ? 'y' : 'ies'} from the baseline\n`
+            : `${baseline.stale} baseline finding(s) no longer occur — run norefs --baseline to refresh the file\n`
         );
       }
     }
@@ -279,6 +289,13 @@ function main(): void {
   }
   if (baseline) findings = baseline.fresh;
 
+  // The ratchet only tightens: entries whose finding vanished are dropped
+  // from the baseline automatically, so the count can only go down.
+  // printReport announces the drop.
+  if (values.ratchet && baseline && baseline.stale > 0) {
+    writeBaseline(baseline.matchedFindings, cwd);
+  }
+
   printReport(findings, baseline);
 
   if (findings.length === 0) return;
@@ -289,6 +306,13 @@ function main(): void {
     // in-memory project only and prints the diff against the files on disk.
     const save = !values['dry-run'];
     const unsafe = values['fix-unsafe'];
+
+    // The receipts: an error inventory before the first edit, and the file
+    // texts to put back when verification fails.
+    const verify = save && values.verify && findings.some(f => isFixable(f, unsafe));
+    const errorsBefore = verify ? errorInventory(project()) : undefined;
+    const textsBefore = verify ? snapshotTexts(project()) : undefined;
+
     let result = applyFixes(findings, { save, unsafe });
     let totalFixed = result.fixed;
     const touched = new Set(result.filePaths);
@@ -311,6 +335,22 @@ function main(): void {
       process.stderr.write(`Dry run: would fix ${totalFixed} finding(s) in ${touched.size} file(s)\n`);
       process.exitCode = 1;
       return;
+    }
+
+    if (errorsBefore && textsBefore) {
+      const broke = newErrors(errorsBefore, project(), cwd);
+      if (broke.length > 0) {
+        for (const filePath of touched) {
+          const text = textsBefore.get(filePath);
+          if (text !== undefined) fs.writeFileSync(filePath, text);
+        }
+        process.stderr.write('Verification failed: the fixes would introduce new type errors.\n');
+        for (const line of broke) process.stderr.write(`  ${line}\n`);
+        process.stderr.write(`Reverted ${touched.size} file(s). Nothing on disk changed.\n`);
+        process.exitCode = 1;
+        return;
+      }
+      process.stderr.write('Verified: tsc reports no new errors after the fixes.\n');
     }
 
     process.stderr.write(`Fixed ${totalFixed} finding(s) in ${touched.size} file(s)\n`);

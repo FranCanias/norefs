@@ -26,12 +26,14 @@ interface FixResult {
  * removed code used) are cleaned up before saving. Unused files, namespace
  * findings, and emptied types are never touched.
  */
+/** True when --fix may act on this finding, given the unsafe opt-in. */
+export function isFixable(finding: Finding, unsafe: boolean): boolean {
+  if (finding.kind !== 'export' && finding.kind !== 'type' && finding.kind !== 'member') return false;
+  return finding.verdict === 'dead' || finding.verdict === 'over-exported' || unsafe;
+}
+
 export function applyFixes(findings: Finding[], options: { save?: boolean; unsafe?: boolean } = {}): FixResult {
-  const safeVerdict = (f: Finding): boolean =>
-    f.verdict === 'dead' || f.verdict === 'over-exported' || (options.unsafe ?? false);
-  const fixable = findings.filter(
-    f => (f.kind === 'export' || f.kind === 'type' || f.kind === 'member') && safeVerdict(f)
-  );
+  const fixable = findings.filter(f => isFixable(f, options.unsafe ?? false));
   let skipped = findings.length - fixable.length;
 
   // Fix inner nodes before outer ones, so a member nested inside another

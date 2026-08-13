@@ -74,6 +74,8 @@ norefs init      # write a norefs.config.json with every option at its default
 | `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members`, `empty-types`, `dependencies`, `unlisted` |
 | `--reporter <name>` | Output format: `text` (default), `json`, `github`, `sarif` |
 | `--baseline` | Write the findings to `norefs-baseline.json` and exit; later runs fail on new findings only |
+| `--ratchet` | With a baseline: drop entries whose finding vanished, so the count can only go down |
+| `--no-verify` | Skip the check after `--fix`; by default norefs type-checks the fixed project and reverts everything if new errors appeared |
 | `--export <md\|json>` | Also write findings to `norefs-findings.md` or `norefs-findings.json` in the current directory |
 | `--fix` | Apply the fixes the verdicts prove safe: `dead` code is removed, `over-exported` declarations lose the `export` keyword |
 | `--fix-unsafe` | Also apply `write-only`, `contract`, and `shadowed` findings (implies `--fix`); these are claims the analysis cannot prove |
@@ -140,7 +142,7 @@ norefs --baseline        # writes norefs-baseline.json; commit it
 norefs                   # from now on: exit 1 only for findings not in the baseline
 ```
 
-The baseline matches findings by kind, file, and name — not by line — so ordinary edits do not break it. When findings are actually removed, norefs tells you the baseline has stale entries; run `--baseline` again to refresh it. `--fix` also skips baselined findings, so it only removes new dead code.
+The baseline matches findings by kind, file, and name — not by line — so ordinary edits do not break it. When findings are actually removed, norefs tells you the baseline has stale entries; run `--baseline` again to refresh it, or run with `--ratchet` and norefs drops the stale entries itself — the baseline becomes a one-way ratchet whose count only decreases. `--fix` also skips baselined findings, so it only removes new dead code.
 
 Two reporters are made for CI:
 
@@ -216,6 +218,7 @@ Loading the project is the expensive part of a run, so watch mode does it once. 
 - After the removals, norefs cleans each touched file: imports and unexported top-level declarations that only the removed code used are removed too. Then it re-analyzes and fixes again until nothing fixable is left, so cascades converge in one command.
 - Unused files, namespace findings, and emptied types are never touched. Deleting a file is your call, a namespace finding is a lower-confidence guess, and an emptied type needs your judgment about its consumers.
 - `--fix` only touches what is reported, so `--only`, `ignore` globs, and suppression comments limit the fixes the same way they limit the findings.
+- After the last pass, norefs verifies its own work: it type-checks the fixed project and compares against the errors that existed before. If the fixes introduced a single new error, every touched file is reverted, the new errors are printed, and the run fails — the tool ships receipts, not hope. `--no-verify` skips the check when the double type-check costs more than you want to pay.
 
 Review the diff before you commit. The emptied-type findings point at the leftovers that need human judgment.
 
