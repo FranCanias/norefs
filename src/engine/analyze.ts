@@ -10,7 +10,7 @@ import { findReferencesAsNodes } from './references';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 import { assignVerdicts } from './verdicts';
 
-export interface AnalyzeOptions extends ModuleOptions {
+interface AnalyzeOptions extends ModuleOptions {
   /**
    * The kinds this run will report. Member analysis is the expensive half of
    * norefs — it has to know which member every object literal and every JSX
@@ -40,6 +40,10 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     // as a whole; listing every member inside it would only add noise.
     if (modules.deadFiles.has(member.getSourceFile())) continue;
     if (member.getAncestors().some(ancestor => modules.deadDecls.has(ancestor))) continue;
+    // A member of a public-API type is read by consumers outside this program.
+    if (member.getAncestors().some(ancestor => modules.publicDecls.has(ancestor))) continue;
+    // Fixture types in tests and configs are noise, not dead code worth a report.
+    if (modules.harnessFiles.has(member.getSourceFile())) continue;
     if (isFileSuppressed(member.getSourceFile())) continue;
     const nameNode = member.getNameNode();
     if (isNodeSuppressed(nameNode)) continue;

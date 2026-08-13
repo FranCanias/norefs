@@ -12,7 +12,7 @@ describe('suppression comments', () => {
   it('suppresses a member with a comment on the line above or at the end of the line', () => {
     const findings = findingsOf({
       '/main.ts': [
-        'export interface User {',
+        'interface User {',
         '  name: string;',
         '  // norefs-ignore: kept for API symmetry',
         '  legacyId: number;',
@@ -62,7 +62,7 @@ describe('suppression comments', () => {
   it('does not let norefs-ignore-file act as a line suppression', () => {
     const findings = findingsOf({
       '/main.ts': [
-        'export interface User {',
+        'interface User {',
         '  name: string;',
         '  // norefs-ignore-file',
         '  dead: number;',

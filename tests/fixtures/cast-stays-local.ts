@@ -7,3 +7,5 @@ export function readIds(raw: unknown): string[] {
   }
   return [];
 }
+// Referenced in-file, so the export is not dead and its members stay reported.
+void readIds;

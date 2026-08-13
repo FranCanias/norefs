@@ -14,7 +14,7 @@ describe('applyFixes', () => {
   it('removes an unused interface property', () => {
     const text = fix(
       [
-        'export interface User {',
+        'interface User {',
         '  name: string;',
         '  legacyId: number;',
         '}',
@@ -31,7 +31,7 @@ describe('applyFixes', () => {
   it('removes an unused enum member', () => {
     const text = fix(
       [
-        'export enum Status {',
+        'enum Status {',
         "  Active = 'active',",
         "  Dead = 'dead-value',",
         '}',
@@ -48,7 +48,7 @@ describe('applyFixes', () => {
   it('removes unused class members', () => {
     const text = fix(
       [
-        'export class Greeter {',
+        'class Greeter {',
         "  greeting = 'hi';",
         '  deadProp = 0;',
         '',
@@ -70,7 +70,7 @@ describe('applyFixes', () => {
   it('demotes an unused parameter property to a plain parameter', () => {
     const text = fix(
       [
-        'export class Service {',
+        'class Service {',
         '  constructor(',
         '    private readonly db: string,',
         '    private readonly deadDep: number',
@@ -93,7 +93,7 @@ describe('applyFixes', () => {
 
   it('saves the touched files and returns their paths', () => {
     const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile('/main.ts', 'export interface A { dead: number }\n');
+    project.createSourceFile('/main.ts', 'interface A { dead: number }\n');
     const result = applyFixes(analyze(project));
     expect(result.filePaths).toEqual(['/main.ts']);
     expect(project.getFileSystem().readFileSync('/main.ts')).not.toContain('dead');
@@ -185,7 +185,7 @@ describe('applyFixes', () => {
 
   it('mutates only the in-memory project when save is false', () => {
     const project = new Project({ useInMemoryFileSystem: true });
-    const file = project.createSourceFile('/main.ts', 'export interface A { dead: number }\n');
+    const file = project.createSourceFile('/main.ts', 'interface A { dead: number }\n');
     file.saveSync();
     const result = applyFixes(analyze(project), { save: false });
     expect(result.fixed).toBe(1);
@@ -198,7 +198,7 @@ describe('applyFixes', () => {
     const file = project.createSourceFile(
       '/main.ts',
       [
-        'export interface Config {',
+        'interface Config {',
         '  retries: number;',
         '  timeout: number;',
         '}',

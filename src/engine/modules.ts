@@ -16,6 +16,14 @@ interface ModuleAnalysis {
   deadFiles: Set<SourceFile>;
   /** Declarations with zero references anywhere; member analysis skips their insides. */
   deadDecls: Set<Node>;
+  /**
+   * The public API: every declaration an entry file exports, star re-export
+   * chains included. Their consumers live outside this program, so neither
+   * they nor their members can be called unused.
+   */
+  publicDecls: Set<Node>;
+  /** Test, spec, stories, bench, and config files: never worth member findings. */
+  harnessFiles: Set<SourceFile>;
 }
 
 export interface ModuleOptions {
@@ -61,6 +69,8 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   const findings: Finding[] = [];
   const deadFiles = new Set<SourceFile>();
   const deadDecls = new Set<Node>();
+  const publicDecls = publicApiDeclarations(sourceFiles, rootDirs, entries);
+  const harnessFiles = new Set(sourceFiles.filter(sf => isHarnessFile(sf.getFilePath(), rootDirs)));
 
   for (const sourceFile of sourceFiles) {
     const filePath = sourceFile.getFilePath();
@@ -83,8 +93,13 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       continue;
     }
 
-    collectExportFindings(sourceFile, namespaceConsumers.get(sourceFile), findings, deadDecls);
+    // A file an entry re-exports whole (`export * as ns from`) is public API
+    // down to its last member.
+    if (publicDecls.has(sourceFile)) continue;
+
+    collectExportFindings(sourceFile, namespaceConsumers.get(sourceFile), findings, deadDecls, publicDecls);
     for (const ns of sourceFile.getModules()) {
+      if (publicDecls.has(ns)) continue;
       collectNamespaceFindings(ns, findings, deadDecls);
     }
   }
@@ -109,7 +124,23 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       }
     )
   );
-  return { findings, deadFiles, deadDecls };
+  return { findings, deadFiles, deadDecls, publicDecls, harnessFiles };
+}
+
+/**
+ * Every declaration an entry file exports, resolved through re-export chains
+ * — `export *` included, which leaves no name references and would otherwise
+ * hide the fact that a declaration is public API.
+ */
+function publicApiDeclarations(sourceFiles: SourceFile[], rootDirs: string[], entries: string[]): Set<Node> {
+  const publicDecls = new Set<Node>();
+  for (const sourceFile of sourceFiles) {
+    if (!isEntryFile(sourceFile.getFilePath(), rootDirs, entries)) continue;
+    for (const declarations of sourceFile.getExportedDeclarations().values()) {
+      for (const decl of declarations) publicDecls.add(decl);
+    }
+  }
+  return publicDecls;
 }
 
 /**
@@ -121,13 +152,15 @@ function collectExportFindings(
   sourceFile: SourceFile,
   namespaceAlias: string | undefined,
   findings: Finding[],
-  deadDecls: Set<Node>
+  deadDecls: Set<Node>,
+  publicDecls: Set<Node>
 ): void {
   const seen = new Set<Node>();
   for (const declarations of sourceFile.getExportedDeclarations().values()) {
     for (const decl of declarations) {
       if (decl.getSourceFile() !== sourceFile || seen.has(decl)) continue;
       seen.add(decl);
+      if (publicDecls.has(decl)) continue;
       if (isAmbient(decl)) continue;
       const nameNode = declarationNameNode(decl);
       if (!nameNode) continue;

@@ -13,11 +13,11 @@ describe('verdicts', () => {
     project.createSourceFile(
       '/main.ts',
       [
-        'export interface DeviceIO {',
+        'interface DeviceIO {',
         '  id: string;',
         '  count: number;',
         '}',
-        'export interface LibraryFile {',
+        'interface LibraryFile {',
         '  devices: DeviceIO[];',
         '  version: number;',
         '}',
@@ -82,7 +82,7 @@ describe('verdicts', () => {
     project.createSourceFile(
       '/main.ts',
       [
-        'export interface User {',
+        'interface User {',
         '  name: string;',
         '  legacyId: number;',
         '}',
