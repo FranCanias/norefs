@@ -52,7 +52,7 @@
     },
     "explorer.fileNesting.enabled": true,
     "explorer.fileNesting.patterns": {
-      "norefs.code-workspace": "pnpm-lock.yaml, pnpm-workspace.yaml, .npmrc, biome.json, .gitignore, .gitattributes, README.md, tsconfig.json, *.tsbuildinfo, package.json"
+      "norefs.code-workspace": "pnpm-lock.yaml, pnpm-workspace.yaml, .npmrc, biome.json, .gitignore, .gitattributes, vitest.config.ts, README.md, tsconfig.json, *.tsbuildinfo, package.json"
     },
 
     // pnpm is the package manager for this repo (pnpm-lock.yaml / pnpm-workspace.yaml).
