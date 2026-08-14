@@ -1,3 +1,4 @@
+import './array-filter';
 import './array-spread-union';
 import './callback-type-params';
 import './cast-stays-local';
@@ -19,6 +20,13 @@ import './class-structural';
 import './class-structural-var';
 import './class-value-escape';
 import './conditional-filter';
+import './const-object-basic';
+import './const-object-escapes';
+import './const-object-keyof';
+import './const-object-plain';
+import './const-object-probe';
+import './const-object-shorthand';
+import './const-object-typed';
 import './constraint-argument';
 import './cross-file-def';
 import './cross-file-use';

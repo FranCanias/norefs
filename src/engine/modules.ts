@@ -18,7 +18,7 @@ import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
 import { findReferencesAsNodes } from './references';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
-import { configStrings } from './tool-configs';
+import { configReader } from './tool-configs';
 
 interface ModuleAnalysis {
   findings: Finding[];
@@ -91,7 +91,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
   const byPath = new Map(sourceFiles.map(sf => [sf.getFilePath(), sf]));
   const known = new Set(byPath.keys());
-  const entryFileSystem = hostFileSystem(project.getFileSystem());
+  const reader = configReader(hostFileSystem(project.getFileSystem()));
   const entries = [
     ...(options.entries ?? []),
     ...rootDirs.flatMap(dir =>
@@ -100,7 +100,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
         fallbackRoot,
         optionsForDir(options.packages ?? [], dir) ?? project.getCompilerOptions(),
         known,
-        entryFileSystem
+        reader
       ).map(entry => entry.filePath)
     ),
   ];
@@ -187,7 +187,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
           return node !== undefined && isNodeSuppressed(node);
         },
         positionAt: (filePath, offset) => project.getSourceFileOrThrow(filePath).getLineAndColumnAtPos(offset),
-        configStrings: dir => configStrings(dir, entryFileSystem),
+        configStrings: dir => reader.strings(dir),
       }
     )
   );

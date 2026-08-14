@@ -155,6 +155,14 @@ describe('type-level reads (the type system reads it, the runtime never does)', 
     expect(reportedIn('nested-filter.ts')).toEqual(['deadNote', 'deadReason']);
   });
 
+  it('a filter and the property it names shed their array together', () => {
+    // `{ steps: { done: true }[] }` against `Step[]` reads `done` on `Step`.
+    // Written without the array it matches nothing, so it reads nothing —
+    // shedding one side alone credited `ready` from a filter that can never
+    // select, and `Batch` kept a member nobody reads.
+    expect(reportedIn('array-filter.ts')).toEqual(['deadCount', 'deadNote', 'ready']);
+  });
+
   it("a predicate's asserted literal reads the name it narrows", () => {
     expect(reportedIn('predicate-literal.ts')).toEqual(['deadWeight']);
   });
@@ -179,6 +187,46 @@ describe('enum members', () => {
 
   it('enums element-accessed with a dynamic key (reverse mapping) are skipped', () => {
     expect(reportedIn('enum-reverse-map.ts')).toEqual([]);
+  });
+});
+
+describe('const object members', () => {
+  it('reports a member of an `as const` object that nothing reads', () => {
+    // The enum modern TypeScript writes, and the same question asked of it.
+    expect(reportedIn('const-object-basic.ts')).toEqual(['DIAGRAM_UPDATE_DELAY']);
+  });
+
+  it('asks it of a plain const object too', () => {
+    expect(reportedIn('const-object-plain.ts')).toEqual(['unusedLabel']);
+  });
+
+  it('asks it of a property written the short way too', () => {
+    // `{ spareJar }` names a member. That the variable behind it is read
+    // elsewhere is a fact about the variable, not about the object's member.
+    expect(reportedIn('const-object-shorthand.ts')).toEqual(['spareJar']);
+  });
+
+  it('says nothing about an object that hands out every member at once', () => {
+    // Object.values, a spread, a computed index, the binding passed on whole.
+    expect(reportedIn('const-object-escapes.ts')).toEqual([]);
+  });
+
+  it("keeps the rest reportable when `'name' in obj` probes one key", () => {
+    // The one dynamic use that names a key instead of reaching them all: `jam`
+    // is used because the probe reads it, `pickles` because something reads it,
+    // and `chutney` is left with nothing.
+    expect(reportedIn('const-object-probe.ts')).toEqual(['chutney']);
+  });
+
+  it('says nothing about an object targeted by keyof typeof', () => {
+    expect(reportedIn('const-object-keyof.ts')).toEqual([]);
+  });
+
+  it('leaves a declared shape to the collector that reads declared shapes', () => {
+    // An annotation or a `satisfies` hands the shape to a named type, and the
+    // hand-off has to land: each dead member is reported once, on the type that
+    // declares it, and never a second time by this collector.
+    expect(reportedIn('const-object-typed.ts')).toEqual(['spareJars', 'spareShelves']);
   });
 });
 

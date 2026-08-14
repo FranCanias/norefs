@@ -16,6 +16,8 @@ export function toCandidate(
   if (!member.isKind(SyntaxKind.PropertySignature) && !member.isKind(SyntaxKind.MethodSignature)) {
     if (
       !member.isKind(SyntaxKind.PropertyAssignment) &&
+      // `{ outside }` is a property named `outside`, written the short way.
+      !member.isKind(SyntaxKind.ShorthandPropertyAssignment) &&
       !member.isKind(SyntaxKind.MethodDeclaration) &&
       !member.isKind(SyntaxKind.GetAccessor) &&
       !member.isKind(SyntaxKind.SetAccessor) &&

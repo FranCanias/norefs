@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { ReadOnlyFileSystem } from './file-system';
+import { configLiterals } from './scan';
 
 /**
  * The files that configure a build, and the strings written in them.
@@ -12,7 +13,13 @@ import type { ReadOnlyFileSystem } from './file-system';
  * both drop every string they cannot place — which is what makes reading them
  * this loosely safe.
  *
- * One walk answers both, so the walk lives here.
+ * Loosely is not carelessly: the strings come off the same token stream the
+ * scanner reads source with, so a commented-out line is not a string. That
+ * distinction is the whole difference between a config that says something and
+ * one where somebody wrote a line down and turned it off.
+ *
+ * One walk answers both, so the walk lives here — and each package is walked
+ * once, because both readers ask for the same package in the same run.
  */
 
 /** A config file's name: something, then `.config`, then an extension. */
@@ -44,14 +51,6 @@ const SKIP_DIRS = new Set([
 ]);
 
 const SCRIPT_SRC = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
-const QUOTED = /(['"`])((?:\\.|(?!\1)[^\\\r\n])*)\1/g;
-
-/** The three ways a config names a module it loads itself. */
-const SPECIFIERS = [
-  /\b(?:import|export)\b[^'"`;]*?\bfrom\s*(['"`])([^'"`]*)\1/g,
-  /\bimport\s*(['"`])([^'"`]*)\1/g,
-  /\b(?:require|import)\s*\(\s*(['"`])([^'"`]*)\1/g,
-];
 
 /** True when this file is a tool's configuration rather than product code. */
 export function isToolConfig(filePath: string, packageDirs: readonly string[]): boolean {
@@ -86,15 +85,44 @@ interface ToolConfig {
 }
 
 /**
- * Every string a package's tool configs write, imports included: what the
- * dependency check matches against the names in package.json.
+ * One run's view of the build files, holding what it has already walked.
+ *
+ * Both readers ask about the same packages in the same run, and a walk that
+ * reads and tokenizes every config in a monorepo is not worth doing twice. The
+ * memory lives on the reader rather than in this module, so it lasts exactly as
+ * long as the run that made it — a watch rebuild gets a new one and sees the
+ * files as they now are.
  */
-export function configStrings(packageDir: string, fileSystem: ReadOnlyFileSystem): string[] {
-  return toolConfigs(packageDir, fileSystem).flatMap(config => config.strings);
+export interface ConfigReader {
+  /** The manifest and the like, for a caller that reads more than configs. */
+  readFile(filePath: string): string | undefined;
+  /** Every `*.config.*` and `*.html` under a package, build output skipped. */
+  configs(packageDir: string): ToolConfig[];
+  /**
+   * Every string those configs write, imports included: what the dependency
+   * check matches against the names in package.json.
+   */
+  strings(packageDir: string): string[];
 }
 
-/** Every `*.config.*` and `*.html` under a package, build output skipped. */
-export function toolConfigs(packageDir: string, fileSystem: ReadOnlyFileSystem): ToolConfig[] {
+export function configReader(fileSystem: ReadOnlyFileSystem): ConfigReader {
+  const walked = new Map<string, ToolConfig[]>();
+  const configs = (packageDir: string): ToolConfig[] => {
+    let found = walked.get(packageDir);
+    if (!found) {
+      found = toolConfigs(packageDir, fileSystem);
+      walked.set(packageDir, found);
+    }
+    return found;
+  };
+  return {
+    readFile: filePath => fileSystem.readFile(filePath),
+    configs,
+    strings: packageDir => configs(packageDir).flatMap(config => config.strings),
+  };
+}
+
+function toolConfigs(packageDir: string, fileSystem: ReadOnlyFileSystem): ToolConfig[] {
   const found: string[] = [];
   const walk = (dir: string): void => {
     for (const child of fileSystem.readDir(dir)) {
@@ -113,20 +141,18 @@ export function toolConfigs(packageDir: string, fileSystem: ReadOnlyFileSystem):
     const text = fileSystem.readFile(filePath);
     if (text === undefined) continue;
     const html = filePath.endsWith('.html');
-    const matches = text.matchAll(html ? SCRIPT_SRC : QUOTED);
-    const imported = new Set<string>();
-    if (!html) {
-      for (const pattern of SPECIFIERS) {
-        for (const [, , specifier] of text.matchAll(pattern)) imported.add(specifier);
-      }
-    }
+    // HTML has no token stream to read; its strings are the `<script src>`
+    // values and nothing else, and it imports nothing of its own.
+    const { strings, specifiers } = html
+      ? { strings: [...text.matchAll(SCRIPT_SRC)].map(match => match[1]), specifiers: [] as string[] }
+      : configLiterals(text);
     configs.push({
       filePath,
       dir: path.dirname(filePath),
       label: path.relative(packageDir, filePath) || path.basename(filePath),
       html,
-      strings: [...matches].map(match => (html ? match[1] : match[2])),
-      imported,
+      strings,
+      imported: new Set(specifiers),
     });
   }
   return configs;

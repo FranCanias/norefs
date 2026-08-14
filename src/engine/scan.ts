@@ -486,6 +486,23 @@ export function scanText(text: string): FileScan {
   };
 }
 
+/**
+ * Every string a file writes, and the module specifiers among them.
+ *
+ * A tool config is read for the strings in it, and reading them off the token
+ * stream is what keeps a comment out of the answer. A path or a package name
+ * inside a commented-out line is a line somebody turned off: counting it
+ * cancels a real entry point, or keeps a dead dependency looking alive.
+ */
+export function configLiterals(text: string): { strings: string[]; specifiers: string[] } {
+  const { tokens } = tokenize(text);
+  const strings: string[] = [];
+  for (const token of tokens) {
+    if (token.kind === 'str') strings.push(text.slice(token.innerStart, token.innerEnd));
+  }
+  return { strings, specifiers: specifiersOf(text, tokens).map(specifier => specifier.text) };
+}
+
 /** Read and scan these files. */
 export function scanFiles(filePaths: string[]): FileScan[] {
   return filePaths.map(filePath => {

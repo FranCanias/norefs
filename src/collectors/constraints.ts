@@ -251,10 +251,13 @@ function creditNested(member: Node, name: string, against: Type, index: Constrai
   if (!written) return;
   for (const type of propertyTypes(against, name, 0)) {
     // `{ steps: { done: boolean }[] }` against `Step[]`: the literal describes
-    // one element, so both sides shed their array together.
+    // one element, so both sides shed their array together. One side alone
+    // would match a bare literal against an element type — a filter that can
+    // never select anything, crediting a name to a type nothing read it on.
     const element = type.getArrayElementType();
-    const node = element && written.isKind(SyntaxKind.ArrayType) ? written.getElementTypeNode() : written;
-    if (node) creditLiterals(node, element ?? type, index, depth + 1);
+    const shed = element !== undefined && written.isKind(SyntaxKind.ArrayType);
+    const node = shed ? written.getElementTypeNode() : written;
+    if (node) creditLiterals(node, shed ? element : type, index, depth + 1);
   }
 }
 

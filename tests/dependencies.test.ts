@@ -252,6 +252,19 @@ describe('what a config says a package is for', () => {
     expect(findings).toEqual([]);
   });
 
+  it('a package named only inside a comment is not a package in use', () => {
+    // A commented-out plugin import is exactly the case where the package is
+    // dead. Reading the config's raw text put the name in the used set and the
+    // finding vanished; the strings come off the token stream instead.
+    const findings = withConfigs(
+      { devDependencies: { 'gone-plugin': '1.0.0' } },
+      { '/vitest.config.ts': "// import gone from 'gone-plugin';\nexport default {};\n" },
+      { '/main.ts': 'export const x = 1;\n' },
+      { 'gone-plugin': { name: 'gone-plugin' } }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', 'gone-plugin']]);
+  });
+
   it('a plugin its host declares as a peer is loaded through that host', () => {
     // `--coverage` names no package, and the coverage plugin is in use. The host
     // lists it as a peer dependency, which is how a plugin says who loads it.

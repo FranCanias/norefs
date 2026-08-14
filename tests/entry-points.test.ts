@@ -169,6 +169,24 @@ describe('entry points the build declares', () => {
     ]);
   });
 
+  it('a specifier inside a comment is not something the config imports', () => {
+    // The comment is a line somebody turned off. Reading the config's raw text
+    // filed it as an import, which cancelled the setup file named right below
+    // it — and a live file came back dead.
+    const project = new Project({ useInMemoryFileSystem: true });
+    const fileSystem = project.getFileSystem();
+    fileSystem.writeFileSync('/package.json', '{}');
+    fileSystem.writeFileSync(
+      '/vitest.config.ts',
+      "// vitest loads it the way import './probe' would\nexport default { test: { setupFiles: ['./probe'] } };\n"
+    );
+    // On disk and in the program, which is what makes the config a root: only
+    // then does an import of its own count as an edge already in the graph.
+    project.addSourceFileAtPath('/vitest.config.ts');
+    project.createSourceFile('/probe.ts', 'export const probe = 1;\n');
+    expect(names(analyze(project, { rootDirs: ['/'] }))).toEqual([]);
+  });
+
   it('a config the program never holds is no root, so what it imports is an entry point', () => {
     // `eslint.config.js` is not a file the TypeScript program holds, so it is
     // not a root of the graph either. Skipping its imports as "already an edge"

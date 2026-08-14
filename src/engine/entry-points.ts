@@ -1,8 +1,7 @@
 import path from 'node:path';
 import type { ts } from 'ts-morph';
-import type { ReadOnlyFileSystem } from './file-system';
 import { commandTokens, scriptsOf } from './scripts';
-import { toolConfigs } from './tool-configs';
+import type { ConfigReader } from './tool-configs';
 
 /** An entry point and the thing that named it, so a run can be audited. */
 export interface EntryPoint {
@@ -33,7 +32,7 @@ export function packageEntryPoints(
   fallbackSourceRoot: string,
   compilerOptions: ts.CompilerOptions,
   known: Set<string>,
-  fileSystem: ReadOnlyFileSystem
+  reader: ConfigReader
 ): EntryPoint[] {
   const outDir = compilerOptions.outDir ? path.resolve(packageDir, compilerOptions.outDir) : undefined;
   const sourceRoot = compilerOptions.rootDir ? path.resolve(packageDir, compilerOptions.rootDir) : fallbackSourceRoot;
@@ -44,8 +43,8 @@ export function packageEntryPoints(
     if (resolved && !found.has(resolved)) found.set(resolved, source);
   };
 
-  collectManifest(packageDir, fileSystem, add);
-  for (const config of toolConfigs(packageDir, fileSystem)) {
+  collectManifest(packageDir, reader, add);
+  for (const config of reader.configs(packageDir)) {
     const source = config.html ? `<script src> in ${config.label}` : `a path named in ${config.label}`;
     // What the config imports is already an edge in the graph, and the config is
     // already a root of it — but only when the program holds the config itself.
@@ -65,10 +64,10 @@ export function packageEntryPoints(
 /** `main`, `bin`, `exports`, and any script that runs a source file by path. */
 function collectManifest(
   packageDir: string,
-  fileSystem: ReadOnlyFileSystem,
+  reader: ConfigReader,
   add: (candidate: string, fromDir: string, source: string, directoryIndex?: boolean) => void
 ): void {
-  const text = fileSystem.readFile(path.join(packageDir, 'package.json'));
+  const text = reader.readFile(path.join(packageDir, 'package.json'));
   if (text === undefined) return;
   let manifest: unknown;
   try {

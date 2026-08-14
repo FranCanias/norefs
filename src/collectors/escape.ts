@@ -48,10 +48,22 @@ export function valueUsesStayLocal(name: Identifier): boolean {
     const use = climbWrappers(ref);
     const parent = use.getParent();
     if (!parent) continue;
+    // An import or export specifier is not a use, it is the same binding under
+    // another name — and the index resolves past it, so the uses it leads to
+    // are in this list already. Reading it as an escape would make every
+    // exported binding untrackable.
+    if (isAliasDeclarationParent(parent)) continue;
     if (parent.isKind(SyntaxKind.PropertyAccessExpression) && parent.getExpression() === use) continue;
     if (isStringKeyedElementAccess(parent, use)) continue;
     if (parent.isKind(SyntaxKind.VariableDeclaration) && !parent.getNameNode().isKind(SyntaxKind.Identifier)) {
       continue;
+    }
+    // `'a' in value` reads one named key and says nothing about the rest, which
+    // is what the dynamic index files as a probe. A computed key reads a key
+    // nobody wrote down, and that index has already suppressed the whole type.
+    if (parent.isKind(SyntaxKind.BinaryExpression) && parent.getOperatorToken().getKind() === SyntaxKind.InKeyword) {
+      if (parent.getRight() === use && parent.getLeft().isKind(SyntaxKind.StringLiteral)) continue;
+      return false;
     }
     if (parent.isKind(SyntaxKind.IfStatement) && parent.getExpression() === use) continue;
     if (parent.isKind(SyntaxKind.ConditionalExpression) && parent.getCondition() === use) continue;

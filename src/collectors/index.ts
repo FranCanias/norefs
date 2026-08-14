@@ -1,6 +1,7 @@
 import type { Node, Project, SourceFile } from 'ts-morph';
 import type { Candidate } from './candidate';
 import { collectClassCandidates } from './classes';
+import { collectConstObjectCandidates } from './const-objects';
 import type { ConstraintIndex } from './constraints';
 import { buildConstraintIndex } from './constraints';
 import type { DynamicConsumptionIndex } from './dynamic-index';
@@ -27,6 +28,7 @@ const collectors: Array<(sourceFile: SourceFile, ctx: CollectContext) => Candida
   collectTypeLiteralCandidates,
   collectReturnedObjectCandidates,
   collectEnumCandidates,
+  collectConstObjectCandidates,
   collectClassCandidates,
 ];
 

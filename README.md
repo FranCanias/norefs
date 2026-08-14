@@ -33,12 +33,13 @@ Each soft verdict prints its evidence — the twin that reads the member, the bo
 
 ### Member-level checks
 
-The member pass looks for five kinds of member owners:
+The member pass looks for six kinds of member owners:
 
 - `interface` declarations
 - `type` aliases, and any inline object type (parameter types, return types, variable annotations — this covers React props like `function Foo({a}: {a: string})`)
 - object literals returned from functions whose return type is inferred (not explicitly annotated) — exported or not, so a local producer whose output nobody reads is one finding: the computation is dead weight
 - `enum` declarations
+- **const object literals** — `const Timeouts = { … } as const`, the enum modern TypeScript writes. `Timeouts.SAVE_DEBOUNCE` reads a member the way an enum member is read, so a member nothing reads is dead the same way. Plain `const x = { … }` counts too, and a property written the short way (`{ spareJar }`) is a property like any other; a declared shape does not, because the type that declares it is what gets reported (see below)
 - `class` declarations (properties, methods, accessors, static members, and constructor parameter properties)
 
 For each property it finds, it asks TypeScript's own "find all references" (via `findReferencesAsNodes`) whether anything reads it. No references beyond the declaration itself means the property is unused.
@@ -192,7 +193,7 @@ export interface RecipePayload {
 }
 ```
 
-It covers that declaration and every finding inside it: the members, the nested type literals under them, and the declaration itself. Put it on the declaration's line or in the comments above it — before or after a doc comment, either reads the same. Anything that holds findings takes it: an interface, a type alias, a class, a namespace, an enum, a producer whose returned object is flagged, an import.
+It covers that declaration and every finding inside it: the members, the nested type literals under them, and the declaration itself. Put it on the declaration's line or in the comments above it — before or after a doc comment, either reads the same. Anything that holds findings takes it: an interface, a type alias, a class, a namespace, an enum, a const object, a producer whose returned object is flagged, an import.
 
 Three marks, three reaches: `norefs-ignore` for one finding, `norefs-ignore-block` for a declaration and its contents, and `norefs-ignore-file` before a file's first statement for the whole file — generated code, for instance — which also covers the unused-file finding.
 
@@ -467,11 +468,14 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - **Structural class implementations**: when an instance escapes into a type that is not the class or its declared heritage — `return new StoreImpl()` from a function typed as interface `Store`, with no `implements` clause — every call goes through the interface and the class members collect zero references while being used at runtime. The whole class is skipped, along with its base classes and any class whose instances only leave through methods of such a class. Declaring `implements` restores tracking.
 - **Decorated classes**: a decorator hands the class to a framework that reads members through reflection or metadata. The whole class is skipped.
 - **Dynamically consumed enums**: `keyof typeof E`, `Object.values(E)`, `for...in`, and reverse mapping or computed lookup (`E[x]`) all reach members without per-member references. The whole enum is skipped.
+- **Const objects that hand out every member at once**: an object is a value, so its properties can be reached without naming one. `Object.values(Timeouts)`, a spread, an index with a computed key, or the binding passed on whole all read every member in one go, and each silences that declaration. A `'name' in Timeouts` probe is the exception: it names one key, so it marks that key used and leaves the rest reportable. A const object with a declared type — an annotation or a `satisfies` — is skipped here as well, because the type that declares the shape is what the type collectors already report.
 
 ## Remaining blind spots
 
 - Dynamic access laundered through a generic helper (`function dump<T>(o: T) { return Object.keys(o) }`) hides the concrete type from the sink detection.
 - An exported function with several `return` statements returning different object literals is skipped entirely, rather than guessed at.
+- Only the top level of an object literal is read, in both the const-object and returned-object checks. `const cfg = { outer: { inner: 1, deadInner: 2 } }` reports nothing about `deadInner`: reaching it safely means proving that every read of `cfg.outer` keeps the value local, and that check is not written yet.
+- A member the code writes but never reads is a reference like any other, so an annotated literal that fills in `spareJars` keeps that member off the report. The `write-only` verdict covers the case the reference check cannot see — a literal typed by inference — and not this one, where the reference is right there.
 - Anonymous default-export classes (`export default class { … }`) are skipped: without a name there are no class references to run the escape checks on.
 - Declaration files (`.d.ts`) are not scanned.
 - Anonymous default exports (`export default { … }`) have no name to search references for, so the export check skips them.
@@ -490,7 +494,7 @@ src/
                 the project-wide reference index, what the build writes down (entry points,
                 tool configs, workspaces), the syntax-only pipeline and its scanner,
                 suppression comments, human-readable labels, orchestration, output formatting
-  collectors/   one file per source of candidate members (interfaces, type literals, returned objects, enums, classes)
+  collectors/   one file per source of candidate members (interfaces, type literals, returned objects, enums, const objects, classes)
   filters/      post-collection filters (e.g. the anonymous-findings gate)
   types/        shared types
 ```

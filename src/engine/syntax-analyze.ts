@@ -11,7 +11,7 @@ import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
 import { projectFilePaths, SourceIndex } from './sources';
-import { configStrings } from './tool-configs';
+import { configReader } from './tool-configs';
 
 /** The findings the syntax alone decides — no type checker is involved. */
 // norefs-ignore: the test suite imports it, outside this tsconfig
@@ -53,10 +53,11 @@ export function analyzeSyntax(
   const fallbackRoot = commonDirectory(filePaths);
   const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
   const known = new Set(filePaths);
+  const reader = configReader(diskFileSystem);
   const entries = [
     ...(options.entries ?? []),
     ...rootDirs.flatMap(dir =>
-      packageEntryPoints(dir, fallbackRoot, optionsForDir(packages, dir) ?? fallbackOptions, known, diskFileSystem).map(
+      packageEntryPoints(dir, fallbackRoot, optionsForDir(packages, dir) ?? fallbackOptions, known, reader).map(
         entry => entry.filePath
       )
     ),
@@ -117,7 +118,7 @@ export function analyzeSyntax(
         readFile: filePath => readFile(filePath),
         isSuppressedAt: (filePath, offset) => sources.isSuppressedAt(filePath, offset),
         positionAt: (filePath, offset) => sources.positionAt(filePath, offset),
-        configStrings: dir => configStrings(dir, diskFileSystem),
+        configStrings: dir => reader.strings(dir),
       }
     )
   );
@@ -144,6 +145,7 @@ export function listEntryPoints(
   const fallbackRoot = commonDirectory(filePaths);
   const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
   const known = new Set(filePaths);
+  const reader = configReader(diskFileSystem);
 
   const discovered = new Map<string, string>();
   for (const dir of rootDirs) {
@@ -152,7 +154,7 @@ export function listEntryPoints(
       fallbackRoot,
       optionsForDir(packages, dir) ?? fallbackOptions,
       known,
-      diskFileSystem
+      reader
     )) {
       if (!discovered.has(entry.filePath)) discovered.set(entry.filePath, entry.source);
     }

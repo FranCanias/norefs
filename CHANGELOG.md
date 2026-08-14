@@ -19,6 +19,10 @@ loaded by a host, and only imports and scripts counted. And a module the
 environment hands you was told to move sections, as if an install were what put
 it there.
 
+One change answers the opposite kind of wrong. A const object's members were
+never checked at all — no false positive to hit, just a question nobody asked,
+about the shape that has replaced the enum.
+
 That repository shape is now part of the release probe, built and run through the
 binary a user installs. On it, 0.6.0 reported `10 findings: 9 dead, 1 misplaced
 dependency`, and eight of the ten were false. 0.7.0 reports the two that are
@@ -41,8 +45,17 @@ loosely invented no entry point, which was the risk worth checking. See
   A literal written inside a member now descends with that member: it is matched
   against the type the property holds, which is the type its own names are doing
   work on. Arrays shed together, so `{ steps: { done: boolean }[] }` against
-  `Step[]` reads `done` on `Step`. The credit stops at four levels down, and the
-  members beside the named ones are reported exactly as before.
+  `Step[]` reads `done` on `Step` — and only together: a bare literal written
+  against an array type selects nothing, so it reads nothing either, and a name
+  in it credits no member. The credit stops at four levels down, and the members
+  beside the named ones are reported exactly as before.
+
+- **An import specifier is not a value escaping.** The escape check that decides
+  whether a binding's members can be counted read `import { Timeouts }` as the
+  value leaving local view, so every exported binding was untrackable. It is the
+  same binding under another name, and the reference index resolves past it — the
+  uses it leads to were in the list all along. The check for callables already
+  knew this; the one for values now does too.
 
 - **A second target's config is a config.** A build with two outputs writes the
   second one down the same way as the first: `vite.config.server.ts` beside
@@ -72,6 +85,13 @@ loosely invented no entry point, which was the risk worth checking. See
   for a `jsdom.ts` beside the config would silence every finding in a file that
   happens to share a name with a tool.
 
+  A string in a comment is left alone too. The strings come off the same token
+  stream the scanner reads source with, so a commented-out line is not a config
+  saying something — which matters in both directions. `// import './setup'`
+  above a live `setupFiles: ['./setup']` would have cancelled that entry point
+  and called the file dead, and `// import gone from 'gone-plugin'` would have
+  kept a dead dependency looking alive.
+
   A script's argument is read one step tighter than a config's: extensions yes,
   `index` files no. A command takes a directory for a different reason — `eslint
   src` and `linter src/lib` name a tree to walk — and reading that as
@@ -90,6 +110,38 @@ loosely invented no entry point, which was the risk worth checking. See
   is what keeps `tools/rules.ts` off the dead list.
 
 ### Added
+
+- **Members of a const object are checked, like an enum's.** `const Timeouts = {
+  … } as const` is the enum modern TypeScript writes, and
+  `Timeouts.DIAGRAM_UPDATE_DELAY` was provably dead while norefs said nothing —
+  not with `--anon`, not scoped to the file. The member pass read type
+  declarations, and this is a value; the export pass saw `Timeouts` imported and
+  stopped at the binding. Nobody asked about the members.
+
+  Now a sixth collector does, beside the one that already answers it for enums.
+  A plain `const x = { … }` counts too, exported or not, and a property written
+  the short way — `{ spareJar }` — is a property like any other. A declared shape
+  is not: an annotation or a `satisfies` hands the shape to a named type, and the
+  collectors that read types report that type — a second finding here would say
+  the same thing in a different voice. The fixture proves the hand-off lands
+  rather than assuming it: each dead member is reported once, on the type that
+  declares it.
+
+  Only the top level of the object is read. A member of a literal nested inside
+  it is nobody's finding yet — the same boundary the returned-object collector
+  has always had, and the blind-spot list now says so.
+
+  A value hands out all of its properties at once, which an enum never does, so
+  four uses silence the whole declaration rather than softening the verdict on
+  it: `Object.values`, a spread, an index with a computed key, and the binding
+  passed on whole. `keyof typeof` and the serializing sinks already silenced it.
+  A `'name' in Timeouts` probe is the one use that reads a single key, so it
+  marks that key used and leaves the rest reportable — a reference count that
+  missed a read is not a weaker claim, it is the wrong one.
+
+  Found by an adversarial review after 0.6.0, on the same repository the rest of
+  this release answers. On the corpus it changes nothing: hono and inshellisense
+  report exactly what they reported before it.
 
 - **Two more ways a dependency earns its place.** An import and a script were the
   only usage norefs could see, so a package used by neither was reported dead —
