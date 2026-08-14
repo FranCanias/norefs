@@ -374,7 +374,11 @@ The two modes answer different questions, so run both: the default one to find w
 
 A `package.json` says two things about every entry: that the project needs it, and when. norefs checks both.
 
-**Nothing uses it.** An entry no source file imports *and* no script runs is reported dead. The script half matters: `"build": "tsc -p tsconfig.json"` is TypeScript being used, and no import will ever say so. norefs reads each script's tokens and matches them against the packages you listed — by name, and by the binaries each installed package declares in its own `bin` field. Nothing here guesses which tool owns which command; `tsc` maps to `typescript` because TypeScript's own manifest says it does.
+**Nothing uses it.** An entry is reported dead when nothing in the project uses it, and four things count as using it.
+
+An import, first. Then a script: `"build": "tsc -p tsconfig.json"` is TypeScript being used, and no import will ever say so — norefs reads each script's tokens and matches them against the packages you listed, by name and by the binaries each installed package declares in its own `bin` field. Then a tool config: an ESLint config imports its plugins from a file the TypeScript program never holds, and `environment: 'jsdom'` loads jsdom without naming a file at all, so a listed package written anywhere in a `*.config.*` counts as used. And last, a host: `@vitest/coverage-v8` runs behind `--coverage` and `bufferutil` behind `ws`, and each of them is a peer dependency of a package this project does use — which is how the ecosystem writes down "that one loads me".
+
+Nothing here guesses which tool owns which command, or which plugin. `tsc` maps to `typescript`, and `bufferutil` to `ws`, because those packages' own manifests say so.
 
 That is also the limit. A package that is not installed has no binaries to read, so norefs will not call a devDependency unused — it cannot see what a script might be running. Install first, or the claim goes unmade.
 
@@ -382,17 +386,23 @@ That is also the limit. A package that is not installed has no binaries to read,
 
 ```
 package.json
-  9:5   `only-in-tests` is in dependencies: only test, spec, story, bench, and config files import it, so it ships for nothing
-  15:5  `vitest` is in devDependencies: production code imports it, so an install without dev dependencies is missing it
+  9:5   `only-in-tests` is in dependencies: only test, spec, story, bench, and config files use it, so it ships for nothing
+  15:5  `zod` is in devDependencies: production code imports it, so an install without dev dependencies is missing it
 ```
 
 The second one is the expensive one — `npm install --omit=dev` and the package is gone at runtime.
 
 Only an import that survives compilation counts here. `import type { Recipe } from 'shapes'` is erased before anything runs, so a devDependency the shipping code reads for types alone is already in the right section — moving it would ship a package the output never loads. The import still counts as the package being used, so nothing calls it dead.
 
+One package shape is read differently: a module the environment provides. `import { app } from 'electron'` reads a `declare module 'electron'` block in electron's own types. That is what an API the host supplies looks like — the binary that loads the code brings the module with it, and no file in `node_modules` is what the import lands on at run time. Which section such a package belongs in is decided by whatever packages the app; electron-builder wants `electron` in `devDependencies` and reads it from there to pick the runtime it bundles. So an install without dev dependencies is not what would be missing it, and norefs does not make a claim it cannot ground.
+
+Nor does it ask the other direction. `declare module` is also how a library older than ES modules ships its types — `@xterm/headless`, `node-pty` and `toml` all write it, and all three are ordinary packages a product installs and ships. The signal is strong enough to hold a claim back and far too weak to make one, so it is read in the direction that reports nothing.
+
+A config file is a build's file, not the product's, so what it imports is never production usage. That holds for a second target's config: `vite.config.server.ts` beside `vite.config.ts` is read as a config too. Only at the package root, though — the extra segment is also how ordinary code gets named, and `src/form.config.schema.ts` is a schema, not a build.
+
 **Fixing them.** `--fix-unsafe` removes an unused entry and moves a misplaced one, editing `package.json` as text so the key order and the indentation survive. It needs `--fix-unsafe` rather than `--fix` for an honest reason: the type checker does not read a dependency list, so the probe that guards every other fix has nothing to say here. `--verify-command` is the one that can judge these, and when it fails the manifest edits are held back on their own — the source fixes it did verify still land.
 
-Use the `ignoreDependencies` config key for a dependency norefs cannot see at all: a plugin a config file loads by name, a binary invoked from somewhere other than a script.
+Use the `ignoreDependencies` config key for a dependency norefs still cannot see: a binary invoked from somewhere other than a script, a package a runtime injects by a name nothing writes down.
 
 ## Entry points
 
@@ -403,12 +413,18 @@ So norefs does not ask you to keep the list. Your build already has it, written 
 | Declared in | What is read |
 | --- | --- |
 | `package.json` | `main`, `bin`, and `exports`; paths into the compiled output map back to source through the tsconfig `outDir` and `rootDir` |
-| `package.json` scripts | any argument that names a project file — `tsx src/server.ts`, `--config=playwright.config.ts` |
+| `package.json` scripts | any argument that names a project file — `tsx src/server.ts`, `--config=playwright.config.ts`. A directory is a place to look, not a module: `eslint src` names no entry point |
 | `*.html` | the `src` of every `<script>`; a leading `/` is the package root, as bundlers read it |
-| `*.config.*` | every quoted path that lands on a project file — Vite's `input`, Vitest's `setupFiles`, Playwright's `globalSetup`, and the same in tools nobody has written a plugin for |
+| `*.config.*` | every quoted path that lands on a project file — Vite's `input`, Vitest's `setupFiles`, Playwright's `globalSetup`, an alias target, and the same in tools nobody has written a plugin for. A build with two targets writes the second one down the same way, so `vite.config.server.ts` beside the manifest is read too |
 | convention | `index`/`main`/`cli` beside a tsconfig or in its `src/` |
 
 Nothing is executed. A config is read as text, and a path string that names a file this project holds is taken at its word — one rule, no per-tool plugins. Build output (`dist`, `build`, `out`, `coverage`, …) and `node_modules` are never walked, so a stale config in `dist/` cannot silence anything.
+
+A path in a config is read the way an import is written: with its extension, without one, or as the directory whose `index` is the module. A script's argument is read one step tighter, because a command takes directories for a different reason — `eslint src` scans a tree, and calling `src/index.ts` an entry point on the strength of that would publish every export in it.
+
+A bare word is left alone either way. `environment: 'jsdom'` names a package, not a file, and guessing an extension for it would silence every finding in a file that happened to share the name.
+
+What a config *imports* is not an entry point, as long as the program holds the config itself: the import is already an edge in the graph, the config is already a root of it, and naming the target an entry point on top of that would publish that file's exports as API on the strength of one config line. A config the program never holds — `eslint.config.js`, or one the tsconfig does not include — is no root of anything, so what it imports is read as an entry point after all.
 
 Test, spec, stories, bench, and config files are reachability roots too, on their own rule, and so is anything under `test`, `tests`, `__tests__`, or `__mocks__`. They are not entry points: nothing outside imports them, so their exports stay open to report.
 
@@ -446,7 +462,7 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - **Key-enumerating and serializing sinks**: a value passed to `Object.keys`/`values`/`entries`/`assign`, `JSON.stringify`, `structuredClone`, or `Reflect.ownKeys`, iterated with `for...in`, or probed with a dynamic `key in v` marks its whole type as dynamically consumed.
 - **Escaping values**: when an object leaves local view as a whole — a returned literal passed on as a bare argument, a whole-binding parameter or variable forwarded via shorthand into a differently-declared type, a property whose value flows onward wholesale, an `as`/`satisfies` cast whose value is spread into a combined array or passed bare — its properties may be consumed without any per-property reference. The affected type literal is skipped.
 - **Assignability-required members**: a declared relation can make a member load-bearing with zero references. An `extends`/`implements` override (`interface Derived extends Base { items: DerivedItem[] }`) or a type predicate (`v is Derived`) forces one type to stay assignable to another, so the required members of the base shape are kept even when nothing reads them.
-- **Type-level reads**: a name written in a type literal that the type system matches against another type is read on every compile, whatever the runtime does. Three positions count, and each credits the name to the literal *and* to the type it is matched against: a conditional type's `extends` clause, including through an alias like `Extract<Schedule, { type: 'DAILY' }>`; a predicate's asserted type (`r is Recipe & { id: string }`); and a written type argument against a literal constraint (`pickFirst<Row>(…)` where `T extends { id: string }`). An inferred type argument needs no rule — the value goes into the call whole, and the escape check already stops there.
+- **Type-level reads**: a name written in a type literal that the type system matches against another type is read on every compile, whatever the runtime does. Three positions count, and each credits the name to the literal *and* to the type it is matched against: a conditional type's `extends` clause, including through an alias like `Extract<Schedule, { type: 'DAILY' }>`; a predicate's asserted type (`r is Recipe & { id: string }`); and a written type argument against a literal constraint (`pickFirst<Row>(…)` where `T extends { id: string }`). A filter can also name a property one level in — `Extract<Event, { payload: { kind: 'RENAME' } }>` — and the nested name is read on whatever type the property holds, not on the type around it. An inferred type argument needs no rule — the value goes into the call whole, and the escape check already stops there.
 - **Parameters of function types**: callback signatures declare parameter types, but implementations bind their own parameters; when callbacks are invoked with variables rather than literals, the signature's members can't be tracked.
 - **Structural class implementations**: when an instance escapes into a type that is not the class or its declared heritage — `return new StoreImpl()` from a function typed as interface `Store`, with no `implements` clause — every call goes through the interface and the class members collect zero references while being used at runtime. The whole class is skipped, along with its base classes and any class whose instances only leave through methods of such a class. Declaring `implements` restores tracking.
 - **Decorated classes**: a decorator hands the class to a framework that reads members through reflection or metadata. The whole class is skipped.
@@ -461,7 +477,7 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - Anonymous default exports (`export default { … }`) have no name to search references for, so the export check skips them.
 - A file consumed only through a bare `import './x'` for its side effects counts as used when its importer is reachable, even if nothing else touches it. That is the safe reading.
 - An entry point nothing declares in writing — a file loaded by a name the code computes at runtime — is a false positive until you pass it with `--entry`. Run `norefs entries` to see what was found before reaching for the flag.
-- A dependency consumed without an import *and* without a script — a plugin a config file loads by name, a binary called from a Makefile — shows up as unused until you add it to `ignoreDependencies`. A binary named in a `package.json` script is read; anywhere else is not.
+- A dependency consumed without an import, without a script, without a config naming it, and without a host that lists it as a peer — a binary called from a Makefile, say — shows up as unused until you add it to `ignoreDependencies`. A binary named in a `package.json` script is read; anywhere else is not.
 - A devDependency is never called unused when the package is not installed, because its binaries live in its own manifest and there is nothing there to read.
 
 ## Project layout
@@ -471,7 +487,8 @@ src/
   index.ts      CLI entry point
   config.ts     norefs.config.json loading and `norefs init`
   engine/       project loading, the module-level checks (files, exports, namespaces, dependencies),
-                the project-wide reference index, the syntax-only pipeline and its scanner,
+                the project-wide reference index, what the build writes down (entry points,
+                tool configs, workspaces), the syntax-only pipeline and its scanner,
                 suppression comments, human-readable labels, orchestration, output formatting
   collectors/   one file per source of candidate members (interfaces, type literals, returned objects, enums, classes)
   filters/      post-collection filters (e.g. the anonymous-findings gate)

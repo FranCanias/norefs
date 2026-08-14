@@ -81,6 +81,40 @@ scoped to the program by definition, so this is precisely the gap
 Both exports now carry a `norefs-ignore` with the reason, which is the
 designed answer for consumers beyond the program's horizon.
 
+## The 0.7.0 re-run (2026-08-14)
+
+0.7.0 changed what counts as a dependency in use and what counts as an entry
+point, so both are claims a real repository has to check. The two repos below
+were cloned fresh and run twice, once per version, against the same clone —
+upstream has moved since August 13, and a same-clone comparison is the only one
+that isolates the release.
+
+**inshellisense: 55 findings before, 53 after.** The two that went away were
+`jest` and `ts-jest`, both reported dead by 0.6.0 and both in use. `jest.config.cjs`
+writes `"ts-jest"` as the transform for TypeScript files, which is that package
+being used; `ts-jest` in turn lists `jest` as a peer dependency, which is that
+package loading it. Neither is imported anywhere in the source, and no script
+names either one. This is the exact false-positive class the 0.6.0 review
+reported, found in the wild.
+
+**hono: 158 findings before, 158 after — byte-identical reports.** The point of
+running it was the risk in the other direction: reading paths in configs more
+loosely could invent an entry point, and an invented entry silences real findings
+without a trace. On a library with 76 published subpath entries and a config per
+runtime, nothing moved.
+
+The re-run also killed a feature. A draft of this release read `declare module`
+in a package's own types as "the environment provides this" in both directions,
+and reported a host runtime sitting in `dependencies` as misplaced. On
+inshellisense that fired four times — `@xterm/addon-unicode11`, `@xterm/headless`,
+`node-pty`, `toml` — and all four are ordinary packages that belong exactly where
+they sit. `declare module` is simply how a library older than ES modules ships
+its types. The signal survives in the direction that reports nothing, which is
+the only direction it can carry.
+
+zod was not re-run; nothing in this release touches the workspace handling that
+run exercises.
+
 ## The exhibit repository (since 0.5.0)
 
 The five reviews of this tool are themselves a corpus. Every exhibit they

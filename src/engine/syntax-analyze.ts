@@ -11,6 +11,7 @@ import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
 import { projectFilePaths, SourceIndex } from './sources';
+import { configStrings } from './tool-configs';
 
 /** The findings the syntax alone decides — no type checker is involved. */
 // norefs-ignore: the test suite imports it, outside this tsconfig
@@ -116,6 +117,7 @@ export function analyzeSyntax(
         readFile: filePath => readFile(filePath),
         isSuppressedAt: (filePath, offset) => sources.isSuppressedAt(filePath, offset),
         positionAt: (filePath, offset) => sources.positionAt(filePath, offset),
+        configStrings: dir => configStrings(dir, diskFileSystem),
       }
     )
   );

@@ -43,6 +43,7 @@ import './keyof-generic';
 import './local-property';
 import './mapped-types';
 import './nested-command-map';
+import './nested-filter';
 import './nested-serialized';
 import './object-keys-plain';
 import './param-stays-local';

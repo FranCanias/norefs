@@ -149,6 +149,12 @@ describe('type-level reads (the type system reads it, the runtime never does)', 
     expect(reportedIn('conditional-filter.ts')).toEqual(['deadDay', 'deadTimestamp']);
   });
 
+  it('a filter reads a name it nests, on the type that holds it', () => {
+    // `kind` sits inside `payload`, so it is read on the payload types — and on
+    // both of them, because either branch is what the filter has to tell apart.
+    expect(reportedIn('nested-filter.ts')).toEqual(['deadNote', 'deadReason']);
+  });
+
   it("a predicate's asserted literal reads the name it narrows", () => {
     expect(reportedIn('predicate-literal.ts')).toEqual(['deadWeight']);
   });

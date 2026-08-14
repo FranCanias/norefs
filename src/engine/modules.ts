@@ -18,6 +18,7 @@ import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
 import { findReferencesAsNodes } from './references';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
+import { configStrings } from './tool-configs';
 
 interface ModuleAnalysis {
   findings: Finding[];
@@ -186,6 +187,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
           return node !== undefined && isNodeSuppressed(node);
         },
         positionAt: (filePath, offset) => project.getSourceFileOrThrow(filePath).getLineAndColumnAtPos(offset),
+        configStrings: dir => configStrings(dir, entryFileSystem),
       }
     )
   );

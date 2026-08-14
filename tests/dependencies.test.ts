@@ -202,6 +202,90 @@ describe('what a script says a package is for', () => {
   });
 });
 
+/** A project whose tool configs the compiler never reads, plus what is installed. */
+function withConfigs(
+  manifest: object,
+  plainFiles: Record<string, string>,
+  sourceFiles: Record<string, string>,
+  packages: Record<string, object> = {}
+): Finding[] {
+  const project = new Project({ useInMemoryFileSystem: true });
+  const fileSystem = project.getFileSystem();
+  fileSystem.writeFileSync('/package.json', JSON.stringify(manifest, null, 2));
+  for (const [name, data] of Object.entries(packages)) {
+    fileSystem.writeFileSync(`/node_modules/${name}/package.json`, JSON.stringify(data));
+  }
+  for (const [filePath, text] of Object.entries(plainFiles)) fileSystem.writeFileSync(filePath, text);
+  for (const [filePath, text] of Object.entries(sourceFiles)) project.createSourceFile(filePath, text);
+  return analyze(project, { rootDirs: ['/'] }).filter(f => f.kind === 'dependency' || f.kind === 'misplaced');
+}
+
+describe('what a config says a package is for', () => {
+  it('a package a tool config imports is a package in use', () => {
+    // An ESLint config is a JavaScript file the TypeScript program never holds,
+    // so its plugins had no import anywhere and looked dead. The config is right
+    // there next to the manifest, saying otherwise.
+    const findings = withConfigs(
+      {
+        scripts: { lint: 'eslint .' },
+        devDependencies: { eslint: '9.0.0', 'eslint-plugin-pantry': '1.0.0', unused: '1.0.0' },
+      },
+      { '/eslint.config.js': "import pantry from 'eslint-plugin-pantry';\nexport default [pantry.configs.strict];\n" },
+      { '/main.ts': 'export const x = 1;\n' },
+      {
+        eslint: { name: 'eslint', bin: { eslint: './bin/eslint.js' } },
+        'eslint-plugin-pantry': { name: 'eslint-plugin-pantry' },
+        unused: { name: 'unused' },
+      }
+    );
+    expect(findings.map(f => f.name)).toEqual(['unused']);
+  });
+
+  it('a package named as a plain string in a config counts too', () => {
+    // `environment: 'jsdom'` is how a test runner is told to load jsdom.
+    const findings = withConfigs(
+      { devDependencies: { jsdom: '1.0.0' } },
+      { '/vitest.config.ts': "export default { test: { environment: 'jsdom' } };" },
+      { '/main.ts': 'export const x = 1;\n' },
+      { jsdom: { name: 'jsdom' } }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('a plugin its host declares as a peer is loaded through that host', () => {
+    // `--coverage` names no package, and the coverage plugin is in use. The host
+    // lists it as a peer dependency, which is how a plugin says who loads it.
+    const findings = withConfigs(
+      {
+        scripts: { test: 'harness --coverage' },
+        devDependencies: { harness: '1.0.0', 'harness-coverage': '1.0.0', orphan: '1.0.0' },
+      },
+      {},
+      { '/main.ts': 'export const x = 1;\n' },
+      {
+        harness: { name: 'harness', bin: { harness: './cli.js' }, peerDependencies: { 'harness-coverage': '1.0.0' } },
+        'harness-coverage': { name: 'harness-coverage' },
+        orphan: { name: 'orphan' },
+      }
+    );
+    expect(findings.map(f => f.name)).toEqual(['orphan']);
+  });
+
+  it('a peer of a package nothing uses is not spared', () => {
+    // The host has to be in use for "the host loads it" to mean anything.
+    const findings = withConfigs(
+      { devDependencies: { harness: '1.0.0', 'harness-coverage': '1.0.0' } },
+      {},
+      { '/main.ts': 'export const x = 1;\n' },
+      {
+        harness: { name: 'harness', peerDependencies: { 'harness-coverage': '1.0.0' } },
+        'harness-coverage': { name: 'harness-coverage' },
+      }
+    );
+    expect(findings.map(f => f.name)).toEqual(['harness', 'harness-coverage']);
+  });
+});
+
 describe('a dependency in the wrong section', () => {
   it('names a devDependency that production code imports', () => {
     // The one that ships broken: `npm install --omit=dev` and it is gone.
@@ -214,6 +298,22 @@ describe('a dependency in the wrong section', () => {
     expect(findings[0].evidence).toContain('production code imports it');
   });
 
+  it("a second target's config is still a config, not production code", () => {
+    // `vite.config.server.ts` imports the bundler. Recognizing only
+    // `*.config.ts` made that import look like something the product loads at
+    // run time, and every build tool in devDependencies came back misplaced.
+    const findings = withConfigs(
+      { devDependencies: { bundler: '1.0.0' } },
+      {},
+      {
+        '/vite.config.server.ts': "import { defineConfig } from 'bundler';\nexport default defineConfig({});\n",
+        '/main.ts': 'export const x = 1;\n',
+      },
+      { bundler: { name: 'bundler' } }
+    );
+    expect(findings).toEqual([]);
+  });
+
   it('names a dependency that only the harness imports', () => {
     const findings = installed(
       { dependencies: { fixtures: '1.0.0' } },
@@ -221,6 +321,21 @@ describe('a dependency in the wrong section', () => {
       { fixtures: { name: 'fixtures' } }
     );
     expect(findings.map(f => [f.kind, f.name, f.context])).toEqual([['misplaced', 'fixtures', 'dependencies']]);
+    expect(findings[0].evidence).toContain('ships for nothing');
+  });
+
+  it('names a dependency only a config uses', () => {
+    // `environment: 'dom-shim'` is the test runner loading it, which is why it
+    // is not dead. It is still weight the product ships for nothing, and until
+    // now no check asked: the config use silenced the dead verdict, and the
+    // section check only ever looked at imports.
+    const findings = withConfigs(
+      { dependencies: { 'dom-shim': '1.0.0' } },
+      { '/vitest.config.ts': "export default { test: { environment: 'dom-shim' } };" },
+      { '/main.ts': 'export const x = 1;\n' },
+      { 'dom-shim': { name: 'dom-shim' } }
+    );
+    expect(findings.map(f => [f.kind, f.name, f.context])).toEqual([['misplaced', 'dom-shim', 'dependencies']]);
     expect(findings[0].evidence).toContain('ships for nothing');
   });
 
@@ -271,6 +386,46 @@ describe('a dependency in the wrong section', () => {
         '/main.test.ts': "import 'harness';\nexport const t = 1;\n",
       },
       { runtime: { name: 'runtime' }, harness: { name: 'harness' } }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('says nothing about the section of a module the environment provides', () => {
+    // `declare module 'host-shell'` in the package's own types: the binary that
+    // loads the code brings the module with it. Which section it sits in is the
+    // packager's call — electron-builder wants `electron` in devDependencies and
+    // reads it from there — and no install is what puts the module in place.
+    const findings = withConfigs(
+      { devDependencies: { 'host-shell': '1.0.0' } },
+      { '/node_modules/host-shell/shell.d.ts': "declare module 'host-shell' {\n  export const app: unknown;\n}\n" },
+      { '/main.ts': "import { app } from 'host-shell';\nexport const x = app;\n" },
+      { 'host-shell': { name: 'host-shell', main: 'index.js', types: 'shell.d.ts' } }
+    );
+    expect(findings).toEqual([]);
+
+    // Shipping types is not the claim. A package whose types are a plain module
+    // is resolved out of node_modules like anything else, and the install that
+    // skips dev dependencies really is missing it.
+    const plain = withConfigs(
+      { devDependencies: { 'plain-lib': '1.0.0' } },
+      { '/node_modules/plain-lib/index.d.ts': 'export declare const helper: unknown;\n' },
+      { '/main.ts': "import { helper } from 'plain-lib';\nexport const x = helper;\n" },
+      { 'plain-lib': { name: 'plain-lib', types: 'index.d.ts' } }
+    );
+    expect(plain.map(f => [f.kind, f.name])).toEqual([['misplaced', 'plain-lib']]);
+  });
+
+  it('reads an ambient declaration in one direction only', () => {
+    // `declare module` is also how a library older than ES modules ships its
+    // types — @xterm/headless, node-pty and toml all write it, and all three are
+    // ordinary packages a product installs and ships. Reading it as "the host
+    // provides this" would call every one of them misplaced. It withholds a
+    // claim; it never makes one.
+    const findings = withConfigs(
+      { dependencies: { 'plain-lib': '1.0.0' } },
+      { '/node_modules/plain-lib/index.d.ts': "declare module 'plain-lib' {\n  export const helper: unknown;\n}\n" },
+      { '/main.ts': "import { helper } from 'plain-lib';\nexport const x = helper;\n" },
+      { 'plain-lib': { name: 'plain-lib', main: 'index.js', types: 'index.d.ts' } }
     );
     expect(findings).toEqual([]);
   });

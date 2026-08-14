@@ -4,6 +4,146 @@ norefs follows [semver](https://semver.org). Before 1.0.0, minor versions
 (0.x.0) may change output formats, flag semantics, and verdicts; patch
 versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 
+## 0.7.0 — 2026-08-14
+
+A release about being wrong. Every change here answers a false positive somebody
+hit on a real repository — an Electron app with a headless server build — and
+each one had the same shape: norefs knew a rule and applied it one step short of
+where the rule reaches.
+
+A filter that names a property one level in was read only at the top level. A
+config file was recognized as `vite.config.ts` and not as `vite.config.server.ts`,
+so a second target's entry points looked dead and its bundler imports looked like
+something the product loads at run time. A package could be used by a config or
+loaded by a host, and only imports and scripts counted. And a module the
+environment hands you was told to move sections, as if an install were what put
+it there.
+
+That repository shape is now part of the release probe, built and run through the
+binary a user installs. On it, 0.6.0 reported `10 findings: 9 dead, 1 misplaced
+dependency`, and eight of the ten were false. 0.7.0 reports the two that are
+real.
+
+The corpus was re-run too, each repo cloned fresh and analyzed by both versions
+so the release is the only difference. On Microsoft's inshellisense, two dead
+dependencies went away — `jest` and `ts-jest`, both in use, neither imported
+anywhere. On hono the two reports are byte-identical: reading config paths more
+loosely invented no entry point, which was the risk worth checking. See
+[docs/corpus.md](docs/corpus.md).
+
+### Fixed
+
+- **A type-level read counts one level in.** `Extract<Event, { payload: { kind:
+  'RENAME' } }>` matches on `kind`, and `kind` was reported dead — on the filter
+  and on both payload types the filter has to tell apart. Only the names at the
+  top level of a filter were credited; a nested literal was read by nobody.
+
+  A literal written inside a member now descends with that member: it is matched
+  against the type the property holds, which is the type its own names are doing
+  work on. Arrays shed together, so `{ steps: { done: boolean }[] }` against
+  `Step[]` reads `done` on `Step`. The credit stops at four levels down, and the
+  members beside the named ones are reported exactly as before.
+
+- **A second target's config is a config.** A build with two outputs writes the
+  second one down the same way as the first: `vite.config.server.ts` beside
+  `vite.config.ts`. norefs matched only the single-segment name, and the file
+  that follows the convention one step further was read as ordinary product
+  code. Two false positives came out of that, and neither was small.
+
+  The entry points named in it went unread, so `server/main.ts` and everything
+  only it reaches came back as dead files — the highest-confidence verdict there
+  is. And the bundler it imports counted as a runtime dependency of the product,
+  which reported every build tool in `devDependencies` as misplaced.
+
+  One rule now answers both, shared by the entry-point reader and the
+  harness-file check: `<tool>.config.<ext>` anywhere, and the segments a build
+  adds for a second target at the package root, beside the manifest they belong
+  to. Where the file sits is the whole difference, because the name is not:
+  `src/form.config.schema.ts` is a schema, and reading it as a build file would
+  take it and everything it imports out of the product.
+
+- **A path in a config is read the way an import is written.** An alias target is
+  written `'./src/Routes.web'` or `'./src/api'`, without an extension or as the
+  directory whose `index` is the module. Only an exact match landed, so those
+  entry points went unfound. Extensions and `index` files are now tried for any
+  string shaped like a path.
+
+  A bare word is left alone. `environment: 'jsdom'` names a package, and hunting
+  for a `jsdom.ts` beside the config would silence every finding in a file that
+  happens to share a name with a tool.
+
+  A script's argument is read one step tighter than a config's: extensions yes,
+  `index` files no. A command takes a directory for a different reason — `eslint
+  src` and `linter src/lib` name a tree to walk — and reading that as
+  `src/lib/index.ts` would publish every export in the file.
+
+- **What a config imports is not an entry point.** This one arrived while fixing
+  the one above: a config that imports `'./helpers'` would have made that file an
+  entry point, and an entry point's exports are public API — so one line in a
+  Vitest config would have hidden every unused export in the file it points at.
+  The import is already an edge in the graph, and the config is already a root of
+  it, so the file was never at risk of being called dead.
+
+  That holds while the program holds the config. `eslint.config.js` is not a file
+  TypeScript compiles, so it is a root of nothing, and the module it imports has
+  no importer at all — what such a config names is read as an entry point, which
+  is what keeps `tools/rules.ts` off the dead list.
+
+### Added
+
+- **Two more ways a dependency earns its place.** An import and a script were the
+  only usage norefs could see, so a package used by neither was reported dead —
+  and packages used by neither are ordinary.
+
+  A **tool config** counts now. An ESLint config imports its plugins from a file
+  the TypeScript program never holds, so those plugins had no import anywhere;
+  `environment: 'jsdom'` loads jsdom while naming no file at all. A listed
+  package written as a string in a `*.config.*` is that package being used.
+
+  A **host** counts too. `@vitest/coverage-v8` runs behind `--coverage`,
+  `bufferutil` behind `ws`: nothing imports them, no script names them, and all
+  of them are in use. Each is a peer dependency of a package this project does
+  use, which is how the ecosystem writes down "that one loads me". The evidence
+  is the same evidence the binaries came from — an installed package's own
+  `package.json` — and the host has to be in use itself for it to count, so a
+  peer of a package nothing touches is still reported.
+
+  Neither rule needs a plugin per tool, and neither guesses. `bufferutil` maps to
+  `ws` because `ws`'s own manifest says so.
+
+  Both new uses answer the section question too, not just the dead one. A
+  `dependencies` entry that only a test config names — `environment: 'dom-shim'`
+  — is not dead, and it is not something the product loads either: it comes back
+  `misplaced`, where before it fell between the two checks and was reported by
+  nothing. The evidence for a dead entry names all four checks now: `no source
+  file imports it, no script runs it, and no config or host names it`.
+
+- **A module the environment provides is left out of the section question.**
+  `import { app } from 'electron'` reads a `declare module 'electron'` block in
+  electron's own types. That is the shape of an API the host supplies: the binary
+  that loads the code brings the module with it, and no file in `node_modules` is
+  what the import lands on at run time.
+
+  Which section such a package belongs in is decided by whatever packages the
+  app — electron-builder wants `electron` in `devDependencies`, and reads it from
+  there to pick the runtime it bundles. An install without dev dependencies is
+  not what would be missing it, so `misplaced` has nothing to stand on and norefs
+  no longer says it.
+
+  The other direction is not asked either, and the corpus is why. `declare
+  module` is also how a library older than ES modules ships its types: on
+  inshellisense, `@xterm/headless`, `node-pty` and `toml` all write it, and all
+  three are ordinary packages that belong exactly where they sit. A signal that
+  cannot tell them from `electron` can hold a claim back, and cannot make one.
+
+### Changed
+
+- **`--help` lists every config key.** `boundaries` and `production` were missing
+  from it. `boundaries` is the only setting with no flag of its own, which made
+  the help text the only place a reader could learn it exists — and it did not
+  say. A reader who went looking concluded the feature had never shipped. It
+  shipped in 0.6.0; now the help says so.
+
 ## 0.6.0 — 2026-08-14
 
 A property can be read by the type system and never touched at runtime. Every

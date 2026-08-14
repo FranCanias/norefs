@@ -347,6 +347,152 @@ describe('the package.json a run can fix', () => {
   });
 });
 
+describe('an app whose build has two targets', () => {
+  /**
+   * The repository shape that produced 0.6.0's false positives: a desktop app
+   * with a headless server build. Its second bundler config, its aliases, an
+   * ESLint config the compiler never reads, a coverage plugin behind a flag, a
+   * socket extra behind its host, and a module the runtime provides. 0.6.0
+   * reported ten findings here and eight of them were false: four dead files,
+   * four dead dependencies, and a misplaced entry. Two are real — `orphan.ts`,
+   * which nothing reaches, and the one dependency nothing anywhere uses.
+   */
+  const APP: Record<string, string> = {
+    'tsconfig.json': JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'ESNext',
+        moduleResolution: 'bundler',
+        strict: true,
+        noEmit: true,
+        outDir: 'dist',
+        rootDir: '.',
+      },
+      include: ['src/**/*', 'server/**/*', '*.config.ts'],
+    }),
+    'package.json': `${JSON.stringify(
+      {
+        name: 'recipe-box-app',
+        private: true,
+        main: 'dist/src/main.js',
+        scripts: {
+          dev: 'bundler',
+          build: 'bundler build --config vite.config.server.ts',
+          test: 'harness --coverage',
+          lint: 'linter .',
+        },
+        dependencies: { sockets: '1.0.0' },
+        devDependencies: {
+          abandoned: '1.0.0',
+          bundler: '1.0.0',
+          'dom-shim': '1.0.0',
+          harness: '1.0.0',
+          'harness-coverage': '1.0.0',
+          'host-shell': '1.0.0',
+          linter: '1.0.0',
+          'linter-plugin-pantry': '1.0.0',
+          'socket-extra': '1.0.0',
+        },
+      },
+      null,
+      2
+    )}\n`,
+    'index.html': '<script type="module" src="/src/boot.tsx"></script>\n',
+    // The alias targets are written the way imports are: no extension, and a
+    // directory whose index is the module.
+    'vite.config.ts': [
+      "import { defineConfig } from 'bundler';",
+      '',
+      'export default defineConfig({',
+      "  resolve: { alias: { '@/routes': './src/Routes.web', '@/api': './src/api' } },",
+      '});',
+      '',
+    ].join('\n'),
+    'vite.config.server.ts': [
+      "import { defineConfig } from 'bundler';",
+      '',
+      "export default defineConfig({ build: { rollupOptions: { input: 'server/main.ts' } } });",
+      '',
+    ].join('\n'),
+    'vitest.config.ts': "export default { test: { environment: 'dom-shim' } };\n",
+    'eslint.config.js': "import pantry from 'linter-plugin-pantry';\n\nexport default [pantry.configs.strict];\n",
+    'src/main.ts': "import { app } from 'host-shell';\n\nexport const start = (): unknown => app;\n",
+    'src/boot.tsx': "export const boot = (): string => 'ready';\n",
+    'src/Routes.web.tsx': "export const routes = ['/recipes'];\n",
+    'src/api/index.ts': 'export const load = (): number => 1;\n',
+    'server/main.ts': "import { serve } from 'sockets';\n\nexport const server = (): unknown => serve();\n",
+    'src/orphan.ts': 'export const orphan = 1;\n',
+    'node_modules/abandoned/package.json': '{"name":"abandoned"}',
+    'node_modules/bundler/package.json': '{"name":"bundler","types":"index.d.ts","bin":{"bundler":"./cli.js"}}',
+    'node_modules/bundler/index.d.ts': 'export declare function defineConfig(config: unknown): unknown;\n',
+    'node_modules/dom-shim/package.json': '{"name":"dom-shim"}',
+    'node_modules/harness/package.json':
+      '{"name":"harness","bin":{"harness":"./cli.js"},"peerDependencies":{"harness-coverage":"1.0.0"},"peerDependenciesMeta":{"harness-coverage":{"optional":true}}}',
+    'node_modules/harness-coverage/package.json': '{"name":"harness-coverage"}',
+    'node_modules/host-shell/package.json': '{"name":"host-shell","main":"index.js","types":"shell.d.ts"}',
+    'node_modules/host-shell/shell.d.ts': "declare module 'host-shell' {\n  export const app: unknown;\n}\n",
+    'node_modules/linter/package.json': '{"name":"linter","bin":{"linter":"./cli.js"}}',
+    'node_modules/linter-plugin-pantry/package.json': '{"name":"linter-plugin-pantry"}',
+    'node_modules/sockets/package.json':
+      '{"name":"sockets","types":"index.d.ts","peerDependencies":{"socket-extra":"1.0.0"},"peerDependenciesMeta":{"socket-extra":{"optional":true}}}',
+    'node_modules/sockets/index.d.ts': 'export declare function serve(): unknown;\n',
+    'node_modules/socket-extra/package.json': '{"name":"socket-extra"}',
+  };
+
+  function app(...args: string[]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-app-'));
+    for (const [name, text] of Object.entries(APP)) {
+      fs.mkdirSync(path.join(dir, path.dirname(name)), { recursive: true });
+      fs.writeFileSync(path.join(dir, name), text);
+    }
+    const run = spawnSync(process.execPath, [cli, ...args], { cwd: dir, encoding: 'utf8' });
+    return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr, dir };
+  }
+
+  /** How many times a report says something. "And nothing else" is a count. */
+  function count(text: string, pattern: RegExp): number {
+    return text.match(pattern)?.length ?? 0;
+  }
+
+  it('finds every entry point its build declares, and says which file said so', () => {
+    const run = app('entries');
+    expect(run.stdout.trim().split('\n')).toEqual([
+      'server/main.ts  —  a path named in vite.config.server.ts',
+      'src/api/index.ts  —  a path named in vite.config.ts',
+      'src/boot.tsx  —  <script src> in index.html',
+      'src/main.ts  —  package.json main',
+      'src/Routes.web.tsx  —  a path named in vite.config.ts',
+    ]);
+    fs.rmSync(run.dir, { recursive: true, force: true });
+  });
+
+  it('reports the one dead file and the one dead dependency, and nothing else', () => {
+    // The syntax-only pipeline: what a CI gate runs.
+    const run = app('--only', 'files,dependencies,unlisted,misplaced');
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain('dead dependency `abandoned`');
+    expect(run.stdout).toContain('src/orphan.ts');
+    expect(run.stdout).toContain('dead file');
+    // 0.6.0: "10 findings: 9 dead, 1 misplaced dependency", eight of them false.
+    expect(run.stdout).toContain('2 findings: 2 dead');
+    fs.rmSync(run.dir, { recursive: true, force: true });
+  });
+
+  it('agrees with itself when the type checker is loaded', () => {
+    // The same repository, the other pipeline. It reads the same configs through
+    // the project's own filesystem, so the two must not disagree about a
+    // manifest — and every import has to resolve, or a reference is invisible.
+    const run = app();
+    expect(count(run.stdout, /dead dependency/g)).toBe(1);
+    expect(run.stdout).toContain('dead dependency `abandoned`');
+    expect(count(run.stdout, /is in dev|is in dependencies/g)).toBe(0);
+    expect(count(run.stdout, /dead file/g)).toBe(1);
+    expect(run.stdout).toContain('src/orphan.ts');
+    expect(run.stderr).not.toContain('do not resolve');
+    fs.rmSync(run.dir, { recursive: true, force: true });
+  });
+});
+
 describe('a monorepo that declares its own packages', () => {
   const workspace = path.join(root, 'tests', 'workspace-fixtures');
 

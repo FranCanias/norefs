@@ -24,6 +24,8 @@ interface DependencyContext {
   readFile(filePath: string): string | undefined;
   isSuppressedAt(filePath: string, offset: number): boolean;
   positionAt(filePath: string, offset: number): { line: number; column: number };
+  /** Every string written in this package's tool configs, imports included. */
+  configStrings(dir: string): string[];
 }
 
 interface Manifest {
@@ -47,6 +49,10 @@ interface Manifest {
   neededAtRuntime: Set<string>;
   /** Names a script runs, matched against what each package declares as its binary. */
   usedByScript: Set<string>;
+  /** Names a tool config writes: `environment: 'jsdom'` is jsdom being loaded. */
+  usedByConfig: Set<string>;
+  /** Plugins a used package's peer list says that package loads. */
+  pluggedInto: Set<string>;
 }
 
 /**
@@ -88,11 +94,13 @@ export function analyzeDependencies(
   const listedAnywhere = new Set(manifests.flatMap(m => [...m.listed]));
   // In a monorepo, the workspace root lists the hoisted tooling. Ancestor
   // manifests satisfy the unlisted check, but their own dependencies are
-  // consumed by packages this scan cannot see, so they are never reported.
+  // consumed by packages this scan cannot see, so they are never reported —
+  // which is why the names are all that gets read here. Working out what uses
+  // them would mean reading a tree this run was never pointed at.
   for (const dir of rootDirs) {
     for (let parent = path.dirname(dir); parent !== path.dirname(parent); parent = path.dirname(parent)) {
-      const manifest = readManifest(context, parent);
-      if (manifest) for (const name of manifest.listed) listedAnywhere.add(name);
+      const found = readSections(context, parent);
+      if (found) for (const name of listedNames(found.sections)) listedAnywhere.add(name);
     }
   }
   const findings: Finding[] = [];
@@ -131,6 +139,10 @@ export function analyzeDependencies(
     });
   }
 
+  // Which hosts load which plugins depends on which hosts are used, so it is
+  // answered once the uses are all in.
+  for (const manifest of manifests) collectPluginPeers(manifest, context);
+
   for (const manifest of manifests) {
     const sections = production ? (['dependencies'] as const) : (['dependencies', 'devDependencies'] as const);
     for (const section of sections) {
@@ -142,7 +154,15 @@ export function analyzeDependencies(
           findings.push({ ...finding, filePath: manifest.filePath, ...at, name, context: section, anonymous: false });
 
         const imported = manifest.used.has(name);
-        if (!imported && !manifest.usedByScript.has(name)) {
+        // Four things count as using a package, and only one is an import: a
+        // script that runs its command, a tool config that names it, or a host
+        // this project uses whose peer list says it loads it.
+        const invisible =
+          !imported &&
+          !manifest.usedByScript.has(name) &&
+          !manifest.usedByConfig.has(name) &&
+          !manifest.pluggedInto.has(name);
+        if (invisible) {
           if (!unusedIsProvable(manifest, name, section, context)) continue;
           place({
             kind: 'dependency',
@@ -150,8 +170,8 @@ export function analyzeDependencies(
             // A production run never looked at the harness, so it cannot say
             // the whole source tree is silent — only the half it read.
             evidence: production
-              ? 'no file on the shipping path imports it and no script runs it'
-              : 'no source file imports it and no script runs it',
+              ? 'no file on the shipping path imports it, no script runs it, and no config or host names it'
+              : 'no source file imports it, no script runs it, and no config or host names it',
           });
           continue;
         }
@@ -161,18 +181,31 @@ export function analyzeDependencies(
         // weight nobody uses. A production run cannot say: it never looked at
         // the half of the code that would decide it.
         if (production) continue;
-        // Only a runtime import breaks the install. `import type` is erased, so
-        // a devDependency the shipped code reads for types alone is where it
-        // belongs — and moving it would ship weight the output never loads.
-        if (section === 'devDependencies' && manifest.neededAtRuntime.has(name)) {
+
+        if (section === 'devDependencies') {
+          // Only a runtime import breaks the install. `import type` is erased,
+          // so a devDependency the shipped code reads for types alone is where
+          // it belongs — and moving it would ship weight the output never loads.
+          if (!manifest.neededAtRuntime.has(name)) continue;
+          // Unless no install is what provides it in the first place.
+          if (providedByEnvironment(manifest.dir, name, context)) continue;
           place({
             kind: 'misplaced',
             evidence: 'production code imports it, so an install without dev dependencies is missing it',
           });
-        } else if (section === 'dependencies' && imported && !manifest.usedInProduction.has(name)) {
+          continue;
+        }
+
+        // Shipped and used by the shipping path: the section is right.
+        if (manifest.usedInProduction.has(name)) continue;
+
+        // Nothing on the shipping path uses it. A script can be the consumer's
+        // own — `start`, `postinstall` — and a host that loads a plugin may be
+        // shipped itself, so neither of those settles the section.
+        if (!manifest.usedByScript.has(name) && !manifest.pluggedInto.has(name)) {
           place({
             kind: 'misplaced',
-            evidence: 'only test, spec, story, bench, and config files import it, so it ships for nothing',
+            evidence: 'only test, spec, story, bench, and config files use it, so it ships for nothing',
           });
         }
       }
@@ -197,10 +230,50 @@ function unusedIsProvable(
   section: 'dependencies' | 'devDependencies',
   context: DependencyContext
 ): boolean {
-  return section === 'dependencies' || installedManifest(manifest.dir, name, context) !== undefined;
+  return section === 'dependencies' || installedPackage(manifest.dir, name, context) !== undefined;
 }
 
-function readManifest(context: DependencyContext, dir: string): Manifest | undefined {
+/**
+ * True when the package declares itself as an ambient module.
+ *
+ * `import { app } from 'electron'` reads a `declare module 'electron'` block in
+ * electron's own types. That is the shape of an API the host supplies: the
+ * binary that loads the code brings the module with it, and no file in
+ * node_modules is what the import lands on at run time. An editor's extension
+ * API says it the same way.
+ *
+ * Which section such a package belongs in is decided by whatever packages the
+ * app — electron-builder wants `electron` in `devDependencies`, and reads it
+ * from there to pick the runtime it bundles. An install that omits dev
+ * dependencies is not what puts the module in place, so the claim that such an
+ * install would be missing it has nothing behind it, and norefs does not make
+ * it.
+ *
+ * That is all this decides, and deliberately so. An ordinary package writes
+ * `declare module` too — it is how a library that predates ES modules ships its
+ * types, and `@xterm/headless`, `node-pty` and `toml` all do it while being
+ * exactly what they look like. The signal is strong enough to withhold a claim
+ * and far too weak to make one, so it is only ever read in the direction that
+ * reports nothing.
+ */
+function providedByEnvironment(dir: string, name: string, context: DependencyContext): boolean {
+  const found = installedPackage(dir, name, context);
+  if (!found) return false;
+  const data = found.data as { types?: unknown; typings?: unknown };
+  const types = [data.types, data.typings].find(entry => typeof entry === 'string');
+  if (types === undefined) return false;
+  const typesPath = path.resolve(found.dir, types);
+  const text = context.fileExists(typesPath) ? context.readFile(typesPath) : undefined;
+  if (text === undefined) return false;
+  const quoted = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`declare\\s+module\\s+['"]${quoted}['"]`).test(text);
+}
+
+/** A package.json at this directory, parsed, or nothing when there is none to read. */
+function readSections(
+  context: DependencyContext,
+  dir: string
+): { filePath: string; text: string; sections: Record<string, unknown> } | undefined {
   const filePath = path.join(dir, 'package.json');
   if (!context.fileExists(filePath)) return undefined;
   const text = context.readFile(filePath);
@@ -212,31 +285,84 @@ function readManifest(context: DependencyContext, dir: string): Manifest | undef
     return undefined;
   }
   if (typeof data !== 'object' || data === null) return undefined;
-  const sections = data as Record<string, unknown>;
+  return { filePath, text, sections: data as Record<string, unknown> };
+}
+
+/** Every name in every dependency section: what a manifest satisfies. */
+function listedNames(sections: Record<string, unknown>): Set<string> {
+  const names = new Set<string>();
+  for (const key of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+    const section = sections[key];
+    if (typeof section === 'object' && section !== null) for (const name of Object.keys(section)) names.add(name);
+  }
+  return names;
+}
+
+function readManifest(context: DependencyContext, dir: string): Manifest | undefined {
+  const found = readSections(context, dir);
+  if (!found) return undefined;
+  const { filePath, text, sections } = found;
   const names = (key: string): string[] => {
     const section = sections[key];
     return typeof section === 'object' && section !== null ? Object.keys(section) : [];
   };
-  const listed = new Set([
-    ...names('dependencies'),
-    ...names('devDependencies'),
-    ...names('peerDependencies'),
-    ...names('optionalDependencies'),
-  ]);
   const manifest: Manifest = {
     filePath,
     dir,
     text,
     dependencies: names('dependencies'),
     devDependencies: names('devDependencies'),
-    listed,
+    listed: listedNames(sections),
     used: new Set(),
     usedInProduction: new Set(),
     neededAtRuntime: new Set(),
     usedByScript: new Set(),
+    usedByConfig: new Set(),
+    pluggedInto: new Set(),
   };
   collectScriptUse(manifest, sections, context);
+  collectConfigUse(manifest, context);
   return manifest;
+}
+
+/**
+ * The packages this manifest's own tool configs name.
+ *
+ * `environment: 'jsdom'` loads jsdom. An ESLint config imports its plugins, and
+ * the compiler never sees that file. Neither package is imported by anything on
+ * the import graph, and both are in use — the config says so, in the same
+ * plain string a bundler input is written in. A string that matches no listed
+ * package is dropped, which is every other string in the file.
+ */
+function collectConfigUse(manifest: Manifest, context: DependencyContext): void {
+  for (const written of context.configStrings(manifest.dir)) {
+    const name = packageName(stripQuerySuffix(written));
+    if (name && manifest.listed.has(name)) manifest.usedByConfig.add(name);
+  }
+}
+
+/**
+ * The plugins a host loads on its own.
+ *
+ * `@vitest/coverage-v8` runs behind `--coverage`, `bufferutil` behind `ws`,
+ * `jsdom` behind a test environment: nothing imports them, no script names them,
+ * and all three are in use. What they have in common is written in the host's
+ * own manifest — a package that lists them as peer dependencies, which is how
+ * the ecosystem says "that one loads me". So this reads the same evidence the
+ * binaries came from, an installed package's own package.json, and only for a
+ * host this project actually uses.
+ */
+function collectPluginPeers(manifest: Manifest, context: DependencyContext): void {
+  for (const host of manifest.listed) {
+    const used = manifest.used.has(host) || manifest.usedByScript.has(host) || manifest.usedByConfig.has(host);
+    if (!used) continue;
+    const peers = (installedPackage(manifest.dir, host, context)?.data as { peerDependencies?: unknown })
+      ?.peerDependencies;
+    if (typeof peers !== 'object' || peers === null) continue;
+    for (const name of Object.keys(peers)) {
+      if (name !== host && manifest.listed.has(name)) manifest.pluggedInto.add(name);
+    }
+  }
 }
 
 /**
@@ -276,25 +402,34 @@ function collectScriptUse(manifest: Manifest, data: Record<string, unknown>, con
  * `bin` field. Node hoists, so the search climbs the way a require would.
  */
 function declaredBinaries(fromDir: string, name: string, context: DependencyContext): string[] {
-  const data = installedManifest(fromDir, name, context);
-  if (data === undefined) return [];
-  const bin = (data as { bin?: unknown }).bin;
+  const found = installedPackage(fromDir, name, context);
+  if (found === undefined) return [];
+  const bin = (found.data as { bin?: unknown }).bin;
   // A string `bin` is published under the package's own unscoped name.
   if (typeof bin === 'string') return [name.startsWith('@') ? name.slice(name.indexOf('/') + 1) : name];
   if (typeof bin === 'object' && bin !== null) return Object.keys(bin);
   return [];
 }
 
-/** An installed package's own manifest, or nothing when it is not installed. */
-function installedManifest(fromDir: string, name: string, context: DependencyContext): unknown {
+/**
+ * An installed package's own manifest and the directory holding it, or nothing
+ * when it is not installed. The directory comes back because a path inside that
+ * manifest — the types entry — is relative to it.
+ */
+function installedPackage(
+  fromDir: string,
+  name: string,
+  context: DependencyContext
+): { dir: string; data: unknown } | undefined {
   for (let dir = fromDir; ; dir = path.dirname(dir)) {
-    const filePath = path.join(dir, 'node_modules', name, 'package.json');
+    const packageDir = path.join(dir, 'node_modules', name);
+    const filePath = path.join(packageDir, 'package.json');
     // readFile throws on a path that is not there; fileExists is the guard
     // every other reader in this file uses.
     const text = context.fileExists(filePath) ? context.readFile(filePath) : undefined;
     if (text !== undefined) {
       try {
-        return JSON.parse(text);
+        return { dir: packageDir, data: JSON.parse(text) };
       } catch {
         return undefined;
       }

@@ -102,9 +102,14 @@ Configuration:
     { "project": "…"|[…], "entry": […], "ignore": ["globs"],
       "only": […], "ignoreDependencies": ["names or globs"],
       "scope": "path", "reporter": "text|json|github|sarif",
-      "anon": false, "explain": false }
+      "boundaries": [{ "send": ["fetch"], "handle": ["app.get"] }],
+      "anon": false, "explain": false, "production": false }
   A flag passed on the run wins over the file; entries merge. --no-anon and
   --no-explain are how a run says no to a project that said yes.
+  "boundaries" is the one setting with no flag of its own: it names the callees
+  that send on a channel and the ones that register a handler for it, which
+  extends the stranded-handler check past the Electron-shaped bridge norefs
+  finds unaided. "norefs init" writes the whole list out with its defaults.
 
 Suppressing findings:
   // norefs-ignore [reason]        on the reported line or the line above

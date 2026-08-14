@@ -110,6 +110,104 @@ describe('entry points the build declares', () => {
     expect(names(findings)).toEqual(['orphan.ts']);
   });
 
+  it('a second target writes its config the same way, and is read the same way', () => {
+    // `vite.config.server.ts` beside `vite.config.ts` is how a build says it has
+    // two targets. Reading only the first one left the second target's entry
+    // point looking like a dead file.
+    const findings = findingsWith(
+      {},
+      { '/vite.config.server.ts': "export default { build: { rollupOptions: { input: 'server/main.ts' } } };" },
+      { '/server/main.ts': 'export const serve = 1;\n', '/src/orphan.ts': 'export const orphan = 1;\n' }
+    );
+    expect(names(findings)).toEqual(['orphan.ts']);
+  });
+
+  it('a path with no extension resolves the way an import would, directories included', () => {
+    // An alias target is written like an import: no extension, or the directory
+    // whose index is the module.
+    const findings = findingsWith(
+      {},
+      {
+        '/vite.config.ts':
+          "export default { resolve: { alias: { '@/routes': './src/Routes.web', '@/api': './src/api' } } };",
+      },
+      {
+        '/src/Routes.web.tsx': 'export const routes = 1;\n',
+        '/src/api/index.ts': 'export const api = 1;\n',
+        '/src/orphan.ts': 'export const orphan = 1;\n',
+      }
+    );
+    expect(names(findings)).toEqual(['orphan.ts']);
+  });
+
+  it('a bare word is a word, not a path missing its extension', () => {
+    // `environment: 'jsdom'` names a package, and guessing extensions for it
+    // would silence every finding in a file that happens to share the name.
+    const findings = findingsWith(
+      {},
+      { '/vitest.config.ts': "export default { test: { environment: 'jsdom' } };" },
+      { '/jsdom.ts': 'export const shim = 1;\n' }
+    );
+    expect(names(findings)).toEqual(['jsdom.ts']);
+  });
+
+  it('a module the config imports is not an entry point, so its exports stay private', () => {
+    // The import is already an edge in the graph, which keeps the file alive.
+    // Calling it an entry point on top of that would publish its exports as API.
+    const findings = findingsWith(
+      {},
+      {},
+      {
+        '/vitest.config.ts': "import { probe } from './helpers';\nexport default { setupFiles: [probe] };\n",
+        '/helpers.ts': 'export const probe = 1;\nexport const unusedProbe = 2;\n',
+      }
+    );
+    // Both exports stay reportable — an entry point would have published them.
+    expect(findings.map(f => [f.kind, f.name, f.verdict])).toEqual([
+      ['export', 'probe', 'test-only'],
+      ['export', 'unusedProbe', 'dead'],
+    ]);
+  });
+
+  it('a config the program never holds is no root, so what it imports is an entry point', () => {
+    // `eslint.config.js` is not a file the TypeScript program holds, so it is
+    // not a root of the graph either. Skipping its imports as "already an edge"
+    // left the file it names with no importer at all, and it came back dead.
+    const findings = findingsWith(
+      {},
+      { '/eslint.config.js': "import rules from './tools/rules.js';\nexport default [rules];\n" },
+      { '/tools/rules.ts': 'export const rules = 1;\n', '/src/orphan.ts': 'export const orphan = 1;\n' }
+    );
+    expect(names(findings)).toEqual(['orphan.ts']);
+  });
+
+  it('a directory a script scans is not an entry point', () => {
+    // `linter src/lib` names a tree to look at, not a module to load. Reading
+    // it as `src/lib/index.ts` would publish that file's exports as API.
+    const findings = findingsOf(
+      { scripts: { lint: 'linter src/lib' } },
+      {
+        '/src/main.ts': "import { used } from './lib';\nexport const main = used;\n",
+        '/src/lib/index.ts': 'export const used = 1;\nexport const neverUsed = 2;\n',
+      }
+    );
+    expect(findings.map(f => [f.kind, f.name, f.verdict])).toEqual([['export', 'neverUsed', 'dead']]);
+  });
+
+  it('a product file shaped like a second target config is still product code', () => {
+    // `form.config.schema.ts` is a schema, and nothing in the name says
+    // otherwise. Reading it as a build file made it absent from the product,
+    // which lost the dead-file verdict on it and on everything it imports.
+    const findings = findingsOf(
+      {},
+      {
+        '/src/form.config.schema.ts': "import { deep } from './deep';\nexport const schema = deep;\n",
+        '/src/deep.ts': 'export const deep = 1;\n',
+      }
+    );
+    expect(names(findings)).toEqual(['deep.ts', 'form.config.schema.ts']);
+  });
+
   it('a string that names no project file changes nothing', () => {
     // The loose split is only safe because the resolver throws away what it
     // cannot land on a file. A config full of prose must not silence anything.

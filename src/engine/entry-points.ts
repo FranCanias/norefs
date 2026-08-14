@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { ts } from 'ts-morph';
 import type { ReadOnlyFileSystem } from './file-system';
 import { commandTokens, scriptsOf } from './scripts';
+import { toolConfigs } from './tool-configs';
 
 /** An entry point and the thing that named it, so a run can be audited. */
 export interface EntryPoint {
@@ -10,25 +11,8 @@ export interface EntryPoint {
   source: string;
 }
 
-/** Directories no tool reads its inputs from. Walking them is wasted work. */
-const SKIP_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  'out',
-  'coverage',
-  '.next',
-  '.turbo',
-  '.cache',
-  '.output',
-]);
-
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'];
 const OUTPUT_EXTENSION = /\.(?:d\.ts|d\.mts|d\.cts|js|jsx|mjs|cjs)$/;
-const CONFIG_NAME = /\.config\.[cm]?[jt]sx?$/;
-const SCRIPT_SRC = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
-const QUOTED = /(['"`])((?:\\.|(?!\1)[^\\\r\n])*)\1/g;
 
 /**
  * The entry points a package declares outside its own import graph.
@@ -55,21 +39,24 @@ export function packageEntryPoints(
   const sourceRoot = compilerOptions.rootDir ? path.resolve(packageDir, compilerOptions.rootDir) : fallbackSourceRoot;
 
   const found = new Map<string, string>();
-  const add = (candidate: string, fromDir: string, source: string): void => {
-    const resolved = resolveToKnown(candidate, fromDir, packageDir, outDir, sourceRoot, known);
+  const add = (candidate: string, fromDir: string, source: string, directoryIndex = false): void => {
+    const resolved = resolveToKnown(candidate, fromDir, packageDir, outDir, sourceRoot, known, directoryIndex);
     if (resolved && !found.has(resolved)) found.set(resolved, source);
   };
 
   collectManifest(packageDir, fileSystem, add);
-  for (const filePath of toolFiles(packageDir, fileSystem)) {
-    const text = fileSystem.readFile(filePath);
-    if (text === undefined) continue;
-    const dir = path.dirname(filePath);
-    const label = path.relative(packageDir, filePath) || path.basename(filePath);
-    if (filePath.endsWith('.html')) {
-      for (const [, src] of text.matchAll(SCRIPT_SRC)) add(src, dir, `<script src> in ${label}`);
-    } else {
-      for (const [, , quoted] of text.matchAll(QUOTED)) add(quoted, dir, `a path named in ${label}`);
+  for (const config of toolConfigs(packageDir, fileSystem)) {
+    const source = config.html ? `<script src> in ${config.label}` : `a path named in ${config.label}`;
+    // What the config imports is already an edge in the graph, and the config is
+    // already a root of it — but only when the program holds the config itself.
+    // A `.js` config, or one the tsconfig never includes, is no root of
+    // anything, so the file it imports has no importer at all.
+    const isRoot = known.has(config.filePath);
+    for (const written of config.strings) {
+      if (isRoot && config.imported.has(written)) continue;
+      // A config writes a module path the way an import writes it, so the
+      // directory whose `index` is the module counts here.
+      add(written, config.dir, source, true);
     }
   }
   return [...found].map(([filePath, source]) => ({ filePath, source }));
@@ -79,7 +66,7 @@ export function packageEntryPoints(
 function collectManifest(
   packageDir: string,
   fileSystem: ReadOnlyFileSystem,
-  add: (candidate: string, fromDir: string, source: string) => void
+  add: (candidate: string, fromDir: string, source: string, directoryIndex?: boolean) => void
 ): void {
   const text = fileSystem.readFile(path.join(packageDir, 'package.json'));
   if (text === undefined) return;
@@ -101,23 +88,6 @@ function collectManifest(
   for (const { name, command } of scriptsOf(data)) {
     for (const token of commandTokens(command)) add(token, packageDir, `package.json scripts.${name}`);
   }
-}
-
-/** Every `*.config.*` and `*.html` under the package, build output skipped. */
-function toolFiles(packageDir: string, fileSystem: ReadOnlyFileSystem): string[] {
-  const found: string[] = [];
-  const walk = (dir: string): void => {
-    for (const child of fileSystem.readDir(dir)) {
-      const name = path.basename(child.path);
-      if (child.isDirectory) {
-        if (!SKIP_DIRS.has(name) && !name.startsWith('.')) walk(child.path);
-        continue;
-      }
-      if (name.endsWith('.html') || CONFIG_NAME.test(name)) found.push(child.path);
-    }
-  };
-  walk(packageDir);
-  return found.sort((a, b) => a.localeCompare(b));
 }
 
 /** Strings in main ("dist/index.js"), bin ({name: path}), and exports (nested conditions). */
@@ -143,7 +113,8 @@ function resolveToKnown(
   packageDir: string,
   outDir: string | undefined,
   sourceRoot: string,
-  known: Set<string>
+  known: Set<string>,
+  directoryIndex: boolean
 ): string | undefined {
   if (candidate.length === 0 || candidate.includes('*') || /^[a-z][a-z0-9+.-]*:/i.test(candidate)) return undefined;
 
@@ -151,25 +122,46 @@ function resolveToKnown(
     ? [path.join(packageDir, candidate), candidate]
     : [path.resolve(fromDir, candidate), path.resolve(packageDir, candidate)];
 
+  // A config writes a target the way an import writes it, extension and all —
+  // or without one. Guessing the rest only makes sense for a string shaped like
+  // a path: a bare word is a word, and `environment: 'jsdom'` must not find a
+  // jsdom.ts next door.
+  const shapedLikeAPath = /[\\/]/.test(candidate);
   for (const base of bases) {
-    for (const sourcePath of sourceCandidates(base, outDir, sourceRoot)) {
+    for (const sourcePath of sourceCandidates(base, outDir, sourceRoot, shapedLikeAPath, directoryIndex)) {
       if (known.has(sourcePath)) return sourcePath;
     }
   }
   return undefined;
 }
 
-/** The source files a published path can correspond to, including the path itself. */
-function sourceCandidates(filePath: string, outDir: string | undefined, sourceRoot: string): string[] {
+/** The source files a written path can correspond to, including the path itself. */
+function sourceCandidates(
+  filePath: string,
+  outDir: string | undefined,
+  sourceRoot: string,
+  shapedLikeAPath: boolean,
+  directoryIndex: boolean
+): string[] {
   const bases = new Set<string>([filePath]);
   if (outDir && (filePath === outDir || filePath.startsWith(`${outDir}${path.sep}`))) {
     bases.add(path.join(sourceRoot, path.relative(outDir, filePath)));
   }
   const candidates = new Set<string>(bases);
   for (const base of bases) {
-    if (!OUTPUT_EXTENSION.test(base)) continue;
-    const stem = base.replace(OUTPUT_EXTENSION, '');
-    for (const extension of SOURCE_EXTENSIONS) candidates.add(stem + extension);
+    if (OUTPUT_EXTENSION.test(base)) {
+      const stem = base.replace(OUTPUT_EXTENSION, '');
+      for (const extension of SOURCE_EXTENSIONS) candidates.add(stem + extension);
+      continue;
+    }
+    if (!shapedLikeAPath) continue;
+    for (const extension of SOURCE_EXTENSIONS) {
+      candidates.add(base + extension);
+      // A directory is a module only where a module is what gets written. In a
+      // script it is a place to look: `eslint src` scans a tree, and reading it
+      // as `src/index.ts` would publish that file's exports as API.
+      if (directoryIndex) candidates.add(path.join(base, `index${extension}`));
+    }
   }
   return [...candidates];
 }

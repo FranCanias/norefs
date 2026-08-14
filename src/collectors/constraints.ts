@@ -215,11 +215,13 @@ function matchStructurally(left: Node, right: Node, index: ConstraintIndex): voi
 
 /**
  * Credit every name written in `source`'s type literals to those literals and to
- * the declarations behind `against`. Only literals at the top level of the type
- * expression count: a literal nested inside a member matches that member's type,
- * not the type being compared here.
+ * the declarations behind `against`. Literals at the top level of the type
+ * expression are matched against `against` itself; one nested inside a member is
+ * matched against that member's type, one level down, which is where its own
+ * names are doing their work.
  */
-function creditLiterals(source: Node, against: Type, index: ConstraintIndex): void {
+function creditLiterals(source: Node, against: Type, index: ConstraintIndex, depth = 0): void {
+  if (depth > MAX_DEPTH) return;
   const literals = topLevelLiterals(source);
   if (literals.length === 0) return;
 
@@ -232,8 +234,40 @@ function creditLiterals(source: Node, against: Type, index: ConstraintIndex): vo
       if (!name) continue;
       record(literal, name, index);
       for (const owner of owners) record(owner, name, index);
+      creditNested(member, name, against, index, depth);
     }
   }
+}
+
+/**
+ * A filter can name a property one level in: `Extract<Event, { payload: { kind:
+ * 'RENAME' } }>` matches on `kind`, and the type it matches `kind` against is
+ * whatever `payload` holds. So the nested literal descends with the property it
+ * was written under — the same read as a top-level one, one step deeper.
+ */
+function creditNested(member: Node, name: string, against: Type, index: ConstraintIndex, depth: number): void {
+  if (!member.isKind(SyntaxKind.PropertySignature)) return;
+  const written = member.getTypeNode();
+  if (!written) return;
+  for (const type of propertyTypes(against, name, 0)) {
+    // `{ steps: { done: boolean }[] }` against `Step[]`: the literal describes
+    // one element, so both sides shed their array together.
+    const element = type.getArrayElementType();
+    const node = element && written.isKind(SyntaxKind.ArrayType) ? written.getElementTypeNode() : written;
+    if (node) creditLiterals(node, element ?? type, index, depth + 1);
+  }
+}
+
+/** The types a property of this name can hold, across every part of a union or intersection. */
+function propertyTypes(type: Type, name: string, depth: number): Type[] {
+  if (depth > MAX_DEPTH) return [];
+  if (type.isUnion()) return type.getUnionTypes().flatMap(part => propertyTypes(part, name, depth + 1));
+  if (type.isIntersection()) {
+    return type.getIntersectionTypes().flatMap(part => propertyTypes(part, name, depth + 1));
+  }
+  const property = type.getProperty(name);
+  const declaration = property?.getDeclarations()[0];
+  return property && declaration ? [property.getTypeAtLocation(declaration)] : [];
 }
 
 function topLevelLiterals(node: Node, out: TypeLiteralNode[] = []): TypeLiteralNode[] {

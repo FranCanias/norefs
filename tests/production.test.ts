@@ -116,9 +116,9 @@ describe('--production and package.json', () => {
     // The test file imports `only-in-tests`. "No source file imports it" would
     // be false; the shipping path is the half this run actually looked at.
     const evidence = deps(true).find(f => f.name === 'only-in-tests')?.evidence;
-    expect(evidence).toBe('no file on the shipping path imports it and no script runs it');
+    expect(evidence).toBe('no file on the shipping path imports it, no script runs it, and no config or host names it');
     expect(deps(false).find(f => f.name === 'unused')?.evidence).toBe(
-      'no source file imports it and no script runs it'
+      'no source file imports it, no script runs it, and no config or host names it'
     );
   });
 
