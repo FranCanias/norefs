@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import type { Project } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { applyBaseline, writeBaseline } from './baseline';
-import { initConfig, loadConfig } from './config';
+import { CONFIG_FILE, initConfig, loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { isFixable, unremovableWrites } from './engine/fix';
@@ -83,14 +83,22 @@ Options:
   -h, --help             Show this help message
 
 Configuration:
-  norefs reads norefs.config.json from the current directory when it exists:
+  norefs reads norefs.config.json from the current directory when it exists.
+  It holds the settings — what shapes the analysis and the report, true of the
+  project every run. It never holds an action: --fix, --baseline, --dry-run,
+  --export and --watch each write something, and you ask for those per run.
     { "project": "…"|[…], "entry": […], "ignore": ["globs"],
-      "only": […], "ignoreDependencies": ["names or globs"] }
-  Command-line flags win over the config file; entries merge.
+      "only": […], "ignoreDependencies": ["names or globs"],
+      "scope": "path", "reporter": "text|json|github|sarif",
+      "anon": false, "explain": false }
+  A flag passed on the run wins over the file; entries merge. --no-anon and
+  --no-explain are how a run says no to a project that said yes.
 
 Suppressing findings:
-  // norefs-ignore [reason]   on the reported line or the line above
-  // norefs-ignore-file       before the first statement of a file
+  // norefs-ignore [reason]        on the reported line or the line above
+  // norefs-ignore-block [reason]  on a declaration, or above it: covers that
+                                   declaration and every finding inside it
+  // norefs-ignore-file            before the first statement of a file
 `;
 
 function main(): void {
@@ -101,7 +109,10 @@ function main(): void {
       scope: { type: 'string' },
       entry: { type: 'string', multiple: true },
       only: { type: 'string', multiple: true },
-      reporter: { type: 'string', default: 'text' },
+      // The settings the config file can also carry take no default here: an
+      // unset flag has to stay distinguishable from one passed at its default,
+      // or the flag would silently outrank the config on every run.
+      reporter: { type: 'string' },
       baseline: { type: 'boolean', default: false },
       export: { type: 'string' },
       fix: { type: 'boolean', default: false },
@@ -109,11 +120,11 @@ function main(): void {
       verify: { type: 'boolean', default: true },
       'verify-command': { type: 'string' },
       'allow-dirty': { type: 'boolean', default: false },
-      explain: { type: 'boolean', default: false },
+      explain: { type: 'boolean' },
       ratchet: { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
       watch: { type: 'boolean', default: false },
-      anon: { type: 'boolean', default: false },
+      anon: { type: 'boolean' },
       help: { type: 'boolean', short: 'h', default: false },
     },
     allowNegative: true,
@@ -172,21 +183,6 @@ function main(): void {
     return;
   }
 
-  const reporters = {
-    text: (f: Finding[], c: string) => formatText(f, c, values.explain),
-    json: formatJson,
-    github: formatGitHub,
-    sarif: formatSarif,
-  };
-  const reporter = reporters[values.reporter as keyof typeof reporters];
-  if (!reporter) {
-    process.stderr.write(
-      `error: --reporter must be one of ${Object.keys(reporters).join(', ')}, got "${values.reporter}"\n`
-    );
-    process.exitCode = 2;
-    return;
-  }
-
   const cwd = process.cwd();
   let config: ReturnType<typeof loadConfig>;
   let filterOptions: FilterOptions;
@@ -194,13 +190,34 @@ function main(): void {
     config = loadConfig(cwd);
     const kindNames = values.only && values.only.length > 0 ? values.only : (config.only ?? []);
     filterOptions = {
-      anonymous: values.anon,
+      anonymous: values.anon ?? config.anon,
       only: kindNames.length > 0 ? parseKinds(kindNames) : undefined,
       ignore: config.ignore,
       cwd,
     };
   } catch (error) {
     process.stderr.write(`error: ${(error as Error).message}\n`);
+    process.exitCode = 2;
+    return;
+  }
+
+  // A flag that was passed wins; otherwise the project's own answer stands.
+  // `--no-anon` and `--no-explain` are how a run overrides a config that says
+  // yes, which is why neither flag carries a default.
+  const explain = values.explain ?? config.explain;
+  const reporterName = values.reporter ?? config.reporter ?? 'text';
+  const reporters = {
+    text: (f: Finding[], c: string) => formatText(f, c, explain),
+    json: formatJson,
+    github: formatGitHub,
+    sarif: formatSarif,
+  };
+  const reporter = reporters[reporterName as keyof typeof reporters];
+  if (!reporter) {
+    const source = values.reporter === undefined ? `"reporter" in ${CONFIG_FILE}` : '--reporter';
+    process.stderr.write(
+      `error: ${source} must be one of ${Object.keys(reporters).join(', ')}, got "${reporterName}"\n`
+    );
     process.exitCode = 2;
     return;
   }
@@ -236,7 +253,8 @@ function main(): void {
     );
   };
 
-  const scopeDir = values.scope ? path.resolve(cwd, values.scope) : undefined;
+  const scope = values.scope ?? config.scope;
+  const scopeDir = scope ? path.resolve(cwd, scope) : undefined;
   const entries = [...config.entry, ...(values.entry ?? [])].map(entry => path.resolve(cwd, entry));
   const rootDirs = [...new Set(tsConfigPaths.map(p => path.dirname(p)))];
   // The kinds go to the analysis, not only to the filter: knowing that no
@@ -273,8 +291,7 @@ function main(): void {
 
     if (values.export) {
       const fileName = values.export === 'md' ? 'norefs-findings.md' : 'norefs-findings.json';
-      const content =
-        values.export === 'md' ? formatMarkdown(findings, cwd, values.explain) : formatJson(findings, cwd);
+      const content = values.export === 'md' ? formatMarkdown(findings, cwd, explain) : formatJson(findings, cwd);
       fs.writeFileSync(path.join(cwd, fileName), `${content}\n`);
       process.stderr.write(`Wrote ${fileName}\n`);
     }
@@ -398,9 +415,10 @@ function main(): void {
       return;
     }
 
-    for (const { finding, errors } of result.heldBack) {
+    for (const { finding, errors, unapplied } of result.heldBack) {
       const where = `${path.relative(cwd, finding.filePath)}:${finding.line}`;
-      process.stderr.write(`Held back \`${finding.name}\` (${where}): fixing it would introduce ${errors[0]}\n`);
+      const why = unapplied ? `the edit could not be applied — ${errors[0]}` : `fixing it would introduce ${errors[0]}`;
+      process.stderr.write(`Held back \`${finding.name}\` (${where}): ${why}\n`);
     }
 
     // Two things no probe can verify, so a human gets pointed at them: prose

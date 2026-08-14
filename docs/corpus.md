@@ -81,6 +81,20 @@ scoped to the program by definition, so this is precisely the gap
 Both exports now carry a `norefs-ignore` with the reason, which is the
 designed answer for consumers beyond the program's horizon.
 
+## The exhibit repository (since 0.5.0)
+
+The five reviews of this tool are themselves a corpus. Every exhibit they
+raised — the provider literal, the colour chain, the imperative handle, the
+IPC bridge — now lives in `tests/exhibit-repo`, a small TypeScript project the
+test suite builds the binary against and runs, the way a user would. The test
+asserts the report, that `--fix-unsafe --dry-run` finishes, that its diff takes
+each comment out with the property it described, and that the fixture tree is
+byte-identical afterwards.
+
+It exists because 0.4.0 shipped a headline feature that had never completed a
+run against the example in its own release notes. A reviewer should not be the
+first to run a release's features.
+
 ## What the corpus says so far
 
 - **Speed**: two libraries and an application, each analyzed member-deep in

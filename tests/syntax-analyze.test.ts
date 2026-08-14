@@ -2,7 +2,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { loadPackages, loadProject, optionsForDir } from '../src/engine/project';
-import { SYNTAX_KINDS, analyzeSyntax, isSyntaxOnly } from '../src/engine/syntax-analyze';
+import { analyzeSyntax, isSyntaxOnly, SYNTAX_KINDS } from '../src/engine/syntax-analyze';
 import type { Finding } from '../src/types';
 
 /** A finding as a comparable line, without the ts-morph node hanging off it. */

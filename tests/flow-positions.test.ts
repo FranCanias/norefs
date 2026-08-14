@@ -12,32 +12,32 @@ describe('the two positions a factory literal leaves through', () => {
     // The imperative-handle shape: the literal flows out through an argument
     // position, and the callee infers that position from the literal. What it
     // holds is this literal's own shape — which the checker would reject
-    // where `DeviceLibraryService` is expected, so the write cannot reach the
+    // where `RecipeBoxService` is expected, so the write cannot reach the
     // service method that shares the name.
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(
       '/app.ts',
       [
-        'class DeviceLibraryService {',
-        '  deleteDevice(): void {}',
+        'class RecipeBoxService {',
+        '  deleteRecipe(): void {}',
         '  ping(): void {}',
         '}',
-        'interface DiagramHandle { deleteDevice(): void; focus(): void }',
+        'interface PlannerHandle { deleteRecipe(): void; focus(): void }',
         'declare function useImperativeHandle<T, R extends T>(ref: { current: T | null }, init: () => R): void;',
-        'declare const ref: { current: DiagramHandle | null };',
-        'const deleteDevice = () => {};',
+        'declare const ref: { current: PlannerHandle | null };',
+        'const deleteRecipe = () => {};',
         'export function mount(): void {',
-        '  useImperativeHandle(ref, () => ({ deleteDevice, focus() {} }));',
+        '  useImperativeHandle(ref, () => ({ deleteRecipe, focus() {} }));',
         '}',
-        'export const keep = () => new DeviceLibraryService().ping();',
-        'declare const handle: DiagramHandle;',
+        'export const keep = () => new RecipeBoxService().ping();',
+        'declare const handle: PlannerHandle;',
         'export const use = () => handle.focus();',
         '',
       ].join('\n')
     );
     project.createSourceFile('/index.ts', "import { mount, keep, use } from './app';\nmount();\nkeep();\nuse();\n");
     const findings = analyze(project);
-    const member = memberOf(findings, 'deleteDevice');
+    const member = memberOf(findings, 'deleteRecipe');
     expect(member?.verdict).toBe('dead');
     expect(member?.evidence).toContain('every write of the name feeds another type');
     expect(member?.evidence).toMatch(/app\.ts:10/);
@@ -48,28 +48,28 @@ describe('the two positions a factory literal leaves through', () => {
     project.createSourceFile(
       '/app.ts',
       [
-        'class DeviceLibraryService {',
-        '  loadDevice(): void {}',
-        '  listDevicesByCategory(): void {}',
-        '  deleteDevice(): void {}',
+        'class RecipeBoxService {',
+        '  loadRecipe(): void {}',
+        '  listRecipesByCategory(): void {}',
+        '  deleteRecipe(): void {}',
         '  ping(): void {}',
         '}',
-        'interface DiagramHandle { deleteDevice(): void; focus(): void }',
+        'interface PlannerHandle { deleteRecipe(): void; focus(): void }',
         'declare function useImperativeHandle<T, R extends T>(ref: { current: T | null }, init: () => R): void;',
-        'declare const ref: { current: DiagramHandle | null };',
-        'const deleteDevice = () => {};',
+        'declare const ref: { current: PlannerHandle | null };',
+        'const deleteRecipe = () => {};',
         'export function mount(): void {',
-        '  useImperativeHandle(ref, () => ({ deleteDevice, focus() {} }));',
+        '  useImperativeHandle(ref, () => ({ deleteRecipe, focus() {} }));',
         '}',
-        'export const keep = () => new DeviceLibraryService().ping();',
-        'declare const handle: DiagramHandle;',
+        'export const keep = () => new RecipeBoxService().ping();',
+        'declare const handle: PlannerHandle;',
         'export const use = () => handle.focus();',
         '',
       ].join('\n')
     );
     project.createSourceFile('/index.ts', "import { mount, keep, use } from './app';\nmount();\nkeep();\nuse();\n");
     const findings = analyze(project);
-    for (const name of ['loadDevice', 'listDevicesByCategory', 'deleteDevice']) {
+    for (const name of ['loadRecipe', 'listRecipesByCategory', 'deleteRecipe']) {
       expect(memberOf(findings, name)?.verdict).toBe('dead');
     }
   });
@@ -141,12 +141,12 @@ describe('the two positions a factory literal leaves through', () => {
       '/app.ts',
       [
         'class Api {',
-        '  deleteDevice(): void {}',
+        '  deleteRecipe(): void {}',
         '}',
         'declare function register<T>(init: () => T): void;',
-        'const deleteDevice = () => {};',
+        'const deleteRecipe = () => {};',
         'export function mount(): void {',
-        '  register(() => ({ deleteDevice }));',
+        '  register(() => ({ deleteRecipe }));',
         '}',
         'export const keep = () => new Api();',
         '',
@@ -154,7 +154,7 @@ describe('the two positions a factory literal leaves through', () => {
     );
     project.createSourceFile('/index.ts', "import { mount, keep } from './app';\nmount();\nkeep();\n");
     const findings = analyze(project);
-    const member = memberOf(findings, 'deleteDevice');
+    const member = memberOf(findings, 'deleteRecipe');
     expect(member?.verdict).toBe('write-only');
     expect(member?.evidence).toContain('unverified name match');
   });
@@ -166,14 +166,14 @@ describe('the two positions a factory literal leaves through', () => {
     project.createSourceFile(
       '/main.ts',
       [
-        'interface Device {',
+        'interface Peer {',
         '  ip: string;',
         '  port: number;',
         '}',
         'declare function wrap<T>(factory: () => T): T;',
-        'declare const device: Device;',
+        'declare const peer: Peer;',
         "const config = wrap(() => ({ ip: '10.0.0.1' }));",
-        'export const run = () => [config, device.port];',
+        'export const run = () => [config, peer.port];',
         '',
       ].join('\n')
     );

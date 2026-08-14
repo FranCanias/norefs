@@ -13,12 +13,12 @@ describe('verdicts', () => {
     project.createSourceFile(
       '/main.ts',
       [
-        'interface DeviceIO {',
+        'interface RecipeIO {',
         '  id: string;',
         '  count: number;',
         '}',
         'interface LibraryFile {',
-        '  devices: DeviceIO[];',
+        '  recipes: RecipeIO[];',
         '  version: number;',
         '}',
         'declare const text: string;',
@@ -29,11 +29,11 @@ describe('verdicts', () => {
     );
     const findings = analyze(project);
 
-    expect(verdictOf(findings, 'devices')?.verdict).toBe('contract');
-    expect(verdictOf(findings, 'devices')?.evidence).toContain('JSON.parse');
+    expect(verdictOf(findings, 'recipes')?.verdict).toBe('contract');
+    expect(verdictOf(findings, 'recipes')?.evidence).toContain('JSON.parse');
 
-    // DeviceIO loses every member, so the cascade folds into one finding.
-    const emptied = findings.find(f => f.kind === 'empty-type' && f.name === 'DeviceIO');
+    // RecipeIO loses every member, so the cascade folds into one finding.
+    const emptied = findings.find(f => f.kind === 'empty-type' && f.name === 'RecipeIO');
     expect(emptied?.verdict).toBe('contract');
     expect(emptied?.swallowed).toBe(2);
     expect(verdictOf(findings, 'id')).toBeUndefined();
@@ -55,22 +55,22 @@ describe('verdicts', () => {
     project.createSourceFile(
       '/main.ts',
       [
-        'interface LibraryDevice {',
+        'interface BoxRecipe {',
         '  ip: string;',
         '  label: string;',
         '}',
         'interface SavePayload {',
-        '  device: LibraryDevice;',
+        '  recipe: BoxRecipe;',
         '  revision: number;',
         '}',
-        'export async function load(): Promise<LibraryDevice[]> {',
-        "  return (await api.invoke('deviceLibrary:list')) as LibraryDevice[];",
+        'export async function load(): Promise<BoxRecipe[]> {',
+        "  return (await api.invoke('recipeBox:list')) as BoxRecipe[];",
         '}',
         'export function save(payload: SavePayload): Promise<unknown> {',
-        "  return api.invoke('deviceLibrary:save', payload);",
+        "  return api.invoke('recipeBox:save', payload);",
         '}',
-        'export const show = (d: LibraryDevice) => d.label;',
-        'export const device = (p: SavePayload) => p.device;',
+        'export const show = (d: BoxRecipe) => d.label;',
+        'export const recipe = (p: SavePayload) => p.recipe;',
         '',
       ].join('\n')
     );
@@ -204,13 +204,13 @@ describe('verdicts', () => {
     project.createSourceFile(
       '/electron.ts',
       [
-        'interface DeviceIO {',
+        'interface RecipeIO {',
         '  ip: string;',
         '  mask: string;',
         '  gateway: string;',
         '}',
-        'declare const io: DeviceIO;',
-        "export const persist = () => api.invoke('deviceLibrary:save', io);",
+        'declare const io: RecipeIO;',
+        "export const persist = () => api.invoke('recipeBox:save', io);",
         'export const gateway = () => io.gateway;',
         '',
       ].join('\n')
@@ -218,12 +218,12 @@ describe('verdicts', () => {
     project.createSourceFile(
       '/renderer.ts',
       [
-        'interface DeviceIO {',
+        'interface RecipeIO {',
         '  ip: string;',
         '  mask: string;',
         '  label: string;',
         '}',
-        'declare const local: DeviceIO;',
+        'declare const local: RecipeIO;',
         'export const render = () => local.label;',
         '',
       ].join('\n')

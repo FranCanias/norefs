@@ -4,6 +4,131 @@ norefs follows [semver](https://semver.org). Before 1.0.0, minor versions
 (0.x.0) may change output formats, flag semantics, and verdicts; patch
 versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 
+## 0.5.0 — 2026-08-14
+
+0.4.0 gave the fixer a rule: a fix finishes the finding it acts on, or says
+why it can't. Then it shipped a fixer that crashed on the example in these
+release notes, a new verdict that called live code stranded, and a
+documentation page that was in the repository and not in the package. The
+rule was right. Nothing had checked whether the code kept it. This release
+fixes all three and adds the check that was missing: **a claim about the
+release is tested against the artifact, not against the repository.**
+
+### Fixed
+
+- **`--fix-unsafe` no longer crashes on a comment.** ts-morph removes an
+  object literal property without the trivia behind it, so
+  ``canvas, // light: #F9F9FA`` left the comment where a property belongs.
+  The next removal in that literal was a syntax error the editor threw on,
+  and the removals that had gone through left their comments glued to a line
+  they never described. The comment beside a deleted property now goes with
+  it, on the same rule as the comment above it: same line, after any comma,
+  with nothing but the line break behind it. A comment with code after it on
+  the line introduces that code and stays. Object literal properties were the
+  only shape affected — statements, class members, interface members, and
+  enum members already took their trailing comment with them.
+- **A fix the editor refuses is held back, not fatal.** A fix that fails the
+  type check has always been rolled back, named, and skipped while the rest
+  of the run went on. A fix that threw inside the fixer took the whole
+  campaign down with it, every other fix included. It now gets the same
+  answer: ``Held back `curve` (src/hook.ts:12): the edit could not be applied
+  — …``, the campaign restores every file the abandoned fix could have
+  reached, and the loop runs again without it. A fix that cannot be applied
+  is one finding's problem. It was never the run's.
+- **A sender counts as dying only when its own declaration goes.** The
+  `stranded` verdict resolved a channel's senders to the enclosing *class*
+  and treated any reported verdict as a death sentence. Both are now fixed,
+  and they were two false findings out of five on a real codebase:
+  - *The method, not the class around it.* A class with five senders and
+    three fates is not one fate. The owner of a sender is the innermost
+    reported declaration around it, so a dead method strands its own handler
+    and its live siblings strand nothing.
+  - *Reported is not dying.* An `over-exported` finding's fix removes an
+    `export` keyword and deletes nothing — every sender inside it keeps
+    sending. It no longer counts toward stranding, and it no longer collects
+    a "deleting it strands …" note about a deletion that is not going to
+    happen. The `--fix` summary said that in prose too, about a class that
+    was still there; that line is gone with the claim behind it.
+
+  The evidence says what it now means: ``its only sender is `oldRecipe` at
+  src/service.ts:10, which this report says to delete``, in place of "is
+  reported unused".
+
+### Added
+
+- **The config file holds the settings, not just the inputs.** `scope`,
+  `reporter`, `anon` and `explain` join `project`, `entry`, `ignore`, `only`
+  and `ignoreDependencies` in `norefs.config.json`, so a team that always
+  wants `--reporter github --explain` on `src` says it once instead of in
+  every script:
+
+  ```json
+  { "scope": "src", "reporter": "github", "explain": true }
+  ```
+
+  The line the file draws is settings against actions. A setting shapes the
+  analysis and the report and is true of the project every run. An action —
+  `--fix`, `--fix-unsafe`, `--baseline`, `--ratchet`, `--export`, `--dry-run`,
+  `--watch` — writes something or keeps running, and that is a decision per
+  run. An action key in the config file is a usage error, not a silent
+  surprise. `--no-verify`, `--verify-command` and `--allow-dirty` shape what
+  `--fix` does rather than what a run finds, so they stay with the action.
+
+  A flag passed on the run still wins, and `--reporter`, `--anon` and
+  `--explain` no longer carry a parser default — an unset flag has to stay
+  distinguishable from one passed at its default, or the flag would silently
+  outrank the config every run. That is also what makes `--no-anon` and
+  `--no-explain` work: a run can say no to a project that said yes. When the
+  reporter name is wrong, the error names where it came from — the flag or
+  the file.
+- **`// norefs-ignore-block` suppresses a declaration and everything inside
+  it.** Five flagged members of one wire format were five decisions and five
+  comments, when they are one decision. The block mark is one comment:
+
+  ```ts
+  // norefs-ignore-block: the shape the desktop app sends, kept in sync by hand
+  export interface RecipePayload { … }
+  ```
+
+  It reaches the declaration it sits on, its members, and the nested type
+  literals under them — an interface, a type alias, a class, a namespace, an
+  enum, a producer whose returned object is flagged, an import. It counts on
+  the declaration's own line or anywhere in the comments attached above it, so
+  it reads the same before or after a doc comment. The two older marks are
+  unchanged and still mean what they meant: `norefs-ignore` suppresses one
+  finding and keeps looking inside the declaration, which is the right answer
+  for an export whose members you still want reported, and the wrong one for
+  an interface you have already decided about. `norefs-ignore-file` still
+  covers a whole file. The syntax-only pipeline (`--only files,dependencies,
+  unlisted`) reads the block mark too: nothing nests inside a file, a
+  dependency, or an import, so it reaches one line there and both pipelines
+  agree on every line.
+- **A release probe.** `tests/exhibit-repo` is a small TypeScript project
+  holding the exhibits five reviews have raised — the colour chain, the IPC
+  bridge, the imperative handle — and one test builds the binary and runs it
+  there, the way a user would. It asserts the report, that
+  `--fix-unsafe --dry-run` completes, that its diff carries each comment out
+  with the property it described, and that the fixture tree is byte-identical
+  afterwards. The reviews are a regression corpus now, not a reading list.
+- **A packaging test.** Every relative link in the README, the changelog, and
+  the pages under `docs/` must resolve *and* be in what `npm pack` would
+  publish. `docs/flags.md` was linked from 0.4.0's changelog and stripped from
+  the tarball by the `files` allowlist, so the page every installed copy
+  pointed at existed on no machine that installed the tool. `docs` is in
+  `files` now, and the test fails the build if a link ever outruns the
+  package again.
+
+### Unchanged, and checked
+
+- **Exit codes.** The 0.4.0 review reported that a findings-laden run exited 0
+  in 0.3.0 and 1 in 0.4.0. Both versions were rebuilt and run against the same
+  project — plain, `--explain`, `--reporter json`, `--fix --dry-run`,
+  `--fix-unsafe --dry-run`, with and without a baseline — and every pair
+  matched. No exit code changed. They are 1 for findings, 0 for a clean run or
+  a written baseline, 2 for a usage error; they are documented in
+  [docs/flags.md](docs/flags.md), which now ships, and a test pins all three so
+  the next change cannot be a silent one.
+
 ## 0.4.0 — 2026-08-14
 
 0.3.0 taught the evidence layer to say "proven", "discarded", "unverified".
@@ -64,8 +189,8 @@ follows: **a fix finishes the finding it acts on, or says why it can't.**
   deleting a bridge wrapper would strand its far side, then let that far side
   become permanently invisible. The handler now gets a finding of its own —
   its file, its line, its evidence — while it can still be seen: "stranded
-  handler for `'deviceLibrary:loadDevice'`: every sender is reported unused
-  — `loadDevice` at src/deviceLibrary.ts:2". It filters as `stranded`, rides
+  handler for `'recipeBox:loadRecipe'`: every sender is reported unused
+  — `loadRecipe` at src/recipeBox.ts:2". It filters as `stranded`, rides
   every reporter, and folds away when a dead file, a dead declaration, or a
   suppression comment already tells the story. It answers `--scope` too: a
   handler outside the path a run was asked about is not that run's finding,
@@ -139,7 +264,7 @@ becomes a claim.
   same string reappears in a registration in another file — the
   `ipcMain.handle` call in an entry file no reference-based analysis will
   ever flag — the finding says so: "deleting it strands the far side of
-  `'deviceLibrary:loadDevice'` at electron/main.ts:164". The claim stays
+  `'recipeBox:loadRecipe'` at electron/main.ts:164". The claim stays
   honest by shape: a channel is only the first argument of a bridge call,
   never a payload; a far side must be the same string first in a call that
   also takes a handler; and a bridge call never counts as a far side — a

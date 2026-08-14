@@ -2,13 +2,15 @@ import path from 'node:path';
 import type { Project } from 'ts-morph';
 import type { Finding } from '../types';
 import type { CommentLocation } from './fix';
-import { applyFixes, isFixable } from './fix';
+import { applyFixes, isFixable, UnappliedFix } from './fix';
 import { errorInventory, newErrors, snapshotTexts } from './verify';
 
 interface HeldBack {
   finding: Finding;
   /** The verification errors that appeared while this fix was applied. */
   errors: string[];
+  /** True when the editor refused the edit, rather than the probe rejecting it. */
+  unapplied?: boolean;
 }
 
 interface VerifiedFixOptions {
@@ -157,34 +159,55 @@ export function applyVerifiedFixes(options: VerifiedFixOptions): VerifiedFixResu
 
   const heldBack: HeldBack[] = [];
   for (;;) {
-    restore();
-    const attempt = campaign(undefined, true);
-    if (attempt.fixed === 0) return { fixed: 0, touched: [], heldBack, keptComments: [] };
-    if (!verifying) {
-      return { fixed: attempt.fixed, touched: [...dirty], heldBack, keptComments: attempt.keptComments };
-    }
-
-    const errors = probe();
-    if (errors.length === 0) {
-      return { fixed: attempt.fixed, touched: [...dirty], heldBack, keptComments: attempt.keptComments };
-    }
-
-    const single = failsWith(attempt.fixedKeys);
-    if (!single.fails) {
-      // Only a cascade pass breaks the probe: keep the verified single-pass state.
-      options.log('Cascade fixes held back: a later pass would introduce errors.');
-      return { fixed: attempt.fixedKeys.length, touched: [...dirty], heldBack, keptComments: single.keptComments };
-    }
-
-    const culprits = bisect(attempt.fixedKeys);
-    for (const key of culprits) {
-      excluded.add(key);
-      const finding = byKey.get(key);
-      if (finding) heldBack.push({ finding, errors });
-    }
-    if (excluded.size > MAX_HELD_BACK || culprits.length === 0) {
+    try {
       restore();
-      return { fixed: 0, touched: [], heldBack, keptComments: [], aborted: errors };
+      const attempt = campaign(undefined, true);
+      if (attempt.fixed === 0) return { fixed: 0, touched: [], heldBack, keptComments: [] };
+      if (!verifying) {
+        return { fixed: attempt.fixed, touched: [...dirty], heldBack, keptComments: attempt.keptComments };
+      }
+
+      const errors = probe();
+      if (errors.length === 0) {
+        return { fixed: attempt.fixed, touched: [...dirty], heldBack, keptComments: attempt.keptComments };
+      }
+
+      const single = failsWith(attempt.fixedKeys);
+      if (!single.fails) {
+        // Only a cascade pass breaks the probe: keep the verified single-pass state.
+        options.log('Cascade fixes held back: a later pass would introduce errors.');
+        return { fixed: attempt.fixedKeys.length, touched: [...dirty], heldBack, keptComments: single.keptComments };
+      }
+
+      const culprits = bisect(attempt.fixedKeys);
+      for (const key of culprits) {
+        excluded.add(key);
+        const finding = byKey.get(key);
+        if (finding) heldBack.push({ finding, errors });
+      }
+      if (excluded.size > MAX_HELD_BACK || culprits.length === 0) {
+        restore();
+        return { fixed: 0, touched: [], heldBack, keptComments: [], aborted: errors };
+      }
+    } catch (error) {
+      // A fix the editor could not carry out gets the answer a fix that fails
+      // the type check gets: rolled back, held back, named — and the rest of
+      // the run goes on without it. The tree it half-edited is thrown away
+      // with the rest of the campaign.
+      if (!(error instanceof UnappliedFix)) throw error;
+      // The throw skipped the bookkeeping the campaign does on a clean return,
+      // so the files it named join the dirty set before anything is restored.
+      for (const filePath of error.filePaths) dirty.add(filePath);
+      const key = findingKey(error.finding, cwd);
+      const looping = excluded.has(key);
+      if (!looping) {
+        excluded.add(key);
+        heldBack.push({ finding: error.finding, errors: [error.reason], unapplied: true });
+      }
+      if (looping || excluded.size > MAX_HELD_BACK) {
+        restore();
+        return { fixed: 0, touched: [], heldBack, keptComments: [], aborted: [error.reason] };
+      }
     }
   }
 }

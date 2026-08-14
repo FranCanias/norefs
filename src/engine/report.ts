@@ -43,7 +43,7 @@ function describeFinding(finding: Finding): string {
     case 'unlisted':
       return `dependency \`${finding.name}\` is not listed in package.json`;
     case 'stranded':
-      return `stranded handler for \`'${finding.name}'\`: ${finding.evidence ?? 'its only sender is reported unused'}`;
+      return `stranded handler for \`'${finding.name}'\`: ${finding.evidence ?? 'this report deletes its only sender'}`;
   }
 }
 

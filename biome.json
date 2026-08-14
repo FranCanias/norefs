@@ -65,7 +65,8 @@
         "tests/fixtures/**",
         "tests/broken-fixtures/**",
         "tests/module-fixtures/**",
-        "tests/monorepo-fixtures/**"
+        "tests/monorepo-fixtures/**",
+        "tests/exhibit-repo/**"
       ],
       "linter": {
         "enabled": false

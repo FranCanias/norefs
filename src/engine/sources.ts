@@ -1,10 +1,10 @@
 import path from 'node:path';
 import { ts } from 'ts-morph';
 import { stripQuerySuffix } from './dependencies';
-import type { FileScan, Specifier } from './scan';
-import { scanFiles } from './scan';
 import type { PackageConfig } from './project';
 import { optionsForDir } from './project';
+import type { FileScan, Specifier } from './scan';
+import { scanFiles } from './scan';
 
 /** An import as written, and where it resolves to. */
 interface Import {

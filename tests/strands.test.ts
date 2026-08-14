@@ -15,13 +15,13 @@ function scopedProject(header = ''): Project {
   project.createSourceFile(
     '/src/app.ts',
     [
-      'class DeviceLibrary {',
-      '  loadDevice(): Promise<unknown> {',
-      "    return api.invoke('deviceLibrary:loadDevice');",
+      'class RecipeBox {',
+      '  loadRecipe(): Promise<unknown> {',
+      "    return api.invoke('recipeBox:loadRecipe');",
       '  }',
       '  ping(): void {}',
       '}',
-      'export const keep = () => new DeviceLibrary().ping();',
+      'export const keep = () => new RecipeBox().ping();',
       '',
     ].join('\n')
   );
@@ -31,7 +31,7 @@ function scopedProject(header = ''): Project {
       `${header}import { keep } from './src/app';`,
       'keep();',
       'declare function handle(channel: string, listener: () => unknown): void;',
-      "handle('deviceLibrary:loadDevice', () => 0);",
+      "handle('recipeBox:loadRecipe', () => 0);",
       '',
     ].join('\n')
   );
@@ -54,13 +54,13 @@ describe('stranded far sides of dead bridge wrappers', () => {
     project.createSourceFile(
       '/app.ts',
       [
-        'class DeviceLibrary {',
-        '  loadDevice(): Promise<unknown> {',
-        "    return api.invoke('deviceLibrary:loadDevice');",
+        'class RecipeBox {',
+        '  loadRecipe(): Promise<unknown> {',
+        "    return api.invoke('recipeBox:loadRecipe');",
         '  }',
         '  ping(): void {}',
         '}',
-        'export const keep = () => new DeviceLibrary().ping();',
+        'export const keep = () => new RecipeBox().ping();',
         '',
       ].join('\n')
     );
@@ -70,14 +70,14 @@ describe('stranded far sides of dead bridge wrappers', () => {
         "import { keep } from './app';",
         'keep();',
         'declare function handle(channel: string, listener: () => unknown): void;',
-        "handle('deviceLibrary:loadDevice', () => 0);",
+        "handle('recipeBox:loadRecipe', () => 0);",
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadDevice');
+    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
     expect(wrapper?.verdict).toBe('dead');
-    expect(wrapper?.strands).toContain("'deviceLibrary:loadDevice'");
+    expect(wrapper?.strands).toContain("'recipeBox:loadRecipe'");
     expect(wrapper?.strands).toMatch(/index\.ts:4/);
     // The pair rides in the default report, not only behind --explain.
     expect(formatText(findings, '/')).toContain('strands the far side');
@@ -100,13 +100,13 @@ describe('stranded far sides of dead bridge wrappers', () => {
     project.createSourceFile(
       '/app.ts',
       [
-        'class DeviceLibrary {',
-        '  loadDevice(): Promise<unknown> {',
-        "    return api.invoke('deviceLibrary:loadDevice');",
+        'class RecipeBox {',
+        '  loadRecipe(): Promise<unknown> {',
+        "    return api.invoke('recipeBox:loadRecipe');",
         '  }',
         '  ping(): void {}',
         '}',
-        'export const keep = () => new DeviceLibrary().ping();',
+        'export const keep = () => new RecipeBox().ping();',
         '',
       ].join('\n')
     );
@@ -116,17 +116,17 @@ describe('stranded far sides of dead bridge wrappers', () => {
         "import { keep } from './app';",
         'keep();',
         'declare function handle(channel: string, listener: () => unknown): void;',
-        "handle('deviceLibrary:loadDevice', () => 0);",
+        "handle('recipeBox:loadRecipe', () => 0);",
         '',
       ].join('\n')
     );
     const findings = analyze(project);
     const stranded = findings.find(f => f.kind === 'stranded');
-    expect(stranded?.name).toBe('deviceLibrary:loadDevice');
+    expect(stranded?.name).toBe('recipeBox:loadRecipe');
     expect(stranded?.filePath).toBe('/index.ts');
     expect(stranded?.line).toBe(4);
     expect(stranded?.evidence).toContain('its only sender');
-    expect(stranded?.evidence).toMatch(/`loadDevice` at .*app\.ts:2/);
+    expect(stranded?.evidence).toMatch(/`loadRecipe` at .*app\.ts:2/);
     expect(formatText(findings, '/')).toContain('stranded handler');
   });
 
@@ -148,14 +148,14 @@ describe('stranded far sides of dead bridge wrappers', () => {
     project.createSourceFile(
       '/app.ts',
       [
-        'class DeviceLibrary {',
-        '  loadDevice(): Promise<unknown> {',
-        "    return api.invoke('deviceLibrary:loadDevice');",
+        'class RecipeBox {',
+        '  loadRecipe(): Promise<unknown> {',
+        "    return api.invoke('recipeBox:loadRecipe');",
         '  }',
         '  ping(): void {}',
         '}',
-        'export const keep = () => new DeviceLibrary().ping();',
-        "export const reload = () => api.invoke('deviceLibrary:loadDevice');",
+        'export const keep = () => new RecipeBox().ping();',
+        "export const reload = () => api.invoke('recipeBox:loadRecipe');",
         '',
       ].join('\n')
     );
@@ -166,12 +166,12 @@ describe('stranded far sides of dead bridge wrappers', () => {
         'keep();',
         'reload();',
         'declare function handle(channel: string, listener: () => unknown): void;',
-        "handle('deviceLibrary:loadDevice', () => 0);",
+        "handle('recipeBox:loadRecipe', () => 0);",
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadDevice');
+    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
     expect(wrapper?.verdict).toBe('dead');
     expect(wrapper?.strands).toBeUndefined();
     expect(findings.some(f => f.kind === 'stranded')).toBe(false);
@@ -194,16 +194,16 @@ describe('stranded far sides of dead bridge wrappers', () => {
     project.createSourceFile(
       '/app.ts',
       [
-        'class DeviceLibrary {',
-        '  deleteDevice(): Promise<unknown> {',
-        "    return api.invoke('deviceLibrary:deleteDevice');",
+        'class RecipeBox {',
+        '  deleteRecipe(): Promise<unknown> {',
+        "    return api.invoke('recipeBox:deleteRecipe');",
         '  }',
         '  ping(): void {}',
         '}',
         'declare function stash(payload: unknown): void;',
-        'const deleteDevice = () => {};',
-        'export const send = () => stash({ deleteDevice });',
-        'export const keep = () => new DeviceLibrary().ping();',
+        'const deleteRecipe = () => {};',
+        'export const send = () => stash({ deleteRecipe });',
+        'export const keep = () => new RecipeBox().ping();',
         '',
       ].join('\n')
     );
@@ -214,15 +214,111 @@ describe('stranded far sides of dead bridge wrappers', () => {
         'send();',
         'keep();',
         'declare function handle(channel: string, listener: () => unknown): void;',
-        "handle('deviceLibrary:deleteDevice', () => 0);",
+        "handle('recipeBox:deleteRecipe', () => 0);",
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'deleteDevice');
+    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'deleteRecipe');
     expect(wrapper?.verdict).toBe('write-only');
-    expect(wrapper?.strands).toContain("'deviceLibrary:deleteDevice'");
+    expect(wrapper?.strands).toContain("'recipeBox:deleteRecipe'");
     expect(findings.some(f => f.kind === 'stranded')).toBe(true);
+  });
+
+  it('says nothing when the sender only loses its export keyword', () => {
+    // The 0.4.0 review's exhibit. `RecipeBoxService` is over-exported: the
+    // fix removes a keyword and deletes nothing, so `saveRecipe` still sends
+    // on every channel and no handler is stranded. Reported is not dying.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/bridge.d.ts',
+      [
+        'interface Bridge {',
+        '  invoke(channel: string, payload?: unknown): Promise<unknown>;',
+        '}',
+        'declare const api: Bridge;',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/service.ts',
+      [
+        'export class RecipeBoxService {',
+        '  saveRecipe(recipe: unknown): Promise<unknown> {',
+        "    return api.invoke('recipeBox:saveRecipe', recipe);",
+        '  }',
+        '}',
+        'export const sidebar = () => new RecipeBoxService().saveRecipe(1);',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/index.ts',
+      [
+        "import { sidebar } from './service';",
+        'sidebar();',
+        'declare function handle(channel: string, listener: () => unknown): void;',
+        "handle('recipeBox:saveRecipe', () => 0);",
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project);
+    const service = findings.find(f => f.name === 'RecipeBoxService');
+    expect(service?.verdict).toBe('over-exported');
+    expect(service?.strands).toBeUndefined();
+    expect(findings.some(f => f.kind === 'stranded')).toBe(false);
+  });
+
+  it('answers for the method that holds the sender, not the class around it', () => {
+    // The other half of the same exhibit: one class, two channels, two fates.
+    // `oldRecipe` is dead and strands its handler; `saveRecipe` has a live
+    // caller and strands nothing. Flattening both into the class loses that.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/bridge.d.ts',
+      [
+        'interface Bridge {',
+        '  invoke(channel: string, payload?: unknown): Promise<unknown>;',
+        '}',
+        'declare const api: Bridge;',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/service.ts',
+      [
+        'export class RecipeBoxService {',
+        '  saveRecipe(recipe: unknown): Promise<unknown> {',
+        "    return api.invoke('recipeBox:saveRecipe', recipe);",
+        '  }',
+        '  oldRecipe(): Promise<unknown> {',
+        "    return api.invoke('recipeBox:oldRecipe');",
+        '  }',
+        '}',
+        'export const sidebar = () => new RecipeBoxService().saveRecipe(1);',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/index.ts',
+      [
+        "import { sidebar } from './service';",
+        'sidebar();',
+        'declare function handle(channel: string, listener: () => unknown): void;',
+        "handle('recipeBox:saveRecipe', () => 0);",
+        "handle('recipeBox:oldRecipe', () => 0);",
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project);
+    expect(findings.find(f => f.name === 'RecipeBoxService')?.verdict).toBe('over-exported');
+    expect(findings.find(f => f.name === 'oldRecipe')?.strands).toContain("'recipeBox:oldRecipe'");
+    const stranded = findings.filter(f => f.kind === 'stranded');
+    expect(stranded.map(f => f.name)).toEqual(['recipeBox:oldRecipe']);
+    // The method holding the sender, named — not the class holding both fates.
+    expect(stranded[0]?.evidence).toContain('`oldRecipe`');
+    expect(stranded[0]?.evidence).not.toContain('RecipeBoxService');
+    expect(stranded[0]?.evidence).toContain('this report says to delete');
   });
 
   it('keeps the far side out of a report it was not asked for', () => {
@@ -232,7 +328,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
     const project = scopedProject();
     const scoped = analyze(project, { scopeDir: '/src' });
     expect(scoped.some(f => f.kind === 'stranded')).toBe(false);
-    expect(scoped.find(f => f.name === 'loadDevice')?.strands).toMatch(/main\.ts:4/);
+    expect(scoped.find(f => f.name === 'loadRecipe')?.strands).toMatch(/main\.ts:4/);
     // Unscoped, the same project reports it.
     expect(analyze(project).some(f => f.kind === 'stranded')).toBe(true);
   });
@@ -241,7 +337,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
     const project = scopedProject('// norefs-ignore-file\n');
     const findings = analyze(project);
     expect(findings.some(f => f.kind === 'stranded')).toBe(false);
-    expect(findings.find(f => f.name === 'loadDevice')?.strands).toBeDefined();
+    expect(findings.find(f => f.name === 'loadRecipe')?.strands).toBeDefined();
   });
 
   it('never treats a payload string as a channel', () => {
@@ -350,11 +446,11 @@ describe('stranded far sides of dead bridge wrappers', () => {
     project.createSourceFile(
       '/app.ts',
       [
-        'const useDeviceIpc = () => ({',
-        "  loadDevice: () => api.invoke('deviceLibrary:loadDevice'),",
+        'const useRecipeIpc = () => ({',
+        "  loadRecipe: () => api.invoke('recipeBox:loadRecipe'),",
         '});',
         'export const keep = () => {',
-        '  useDeviceIpc();',
+        '  useRecipeIpc();',
         '};',
         '',
       ].join('\n')
@@ -365,14 +461,14 @@ describe('stranded far sides of dead bridge wrappers', () => {
         "import { keep } from './app';",
         'keep();',
         'declare function handle(channel: string, listener: () => unknown): void;',
-        "handle('deviceLibrary:loadDevice', () => 0);",
+        "handle('recipeBox:loadRecipe', () => 0);",
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    const folded = findings.find(f => f.kind === 'empty-type' && f.name === 'useDeviceIpc');
+    const folded = findings.find(f => f.kind === 'empty-type' && f.name === 'useRecipeIpc');
     expect(folded).toBeDefined();
-    expect(folded?.strands).toContain("'deviceLibrary:loadDevice'");
+    expect(folded?.strands).toContain("'recipeBox:loadRecipe'");
     expect(formatText(findings, '/')).toContain('strands the far side');
   });
 
@@ -391,19 +487,19 @@ describe('stranded far sides of dead bridge wrappers', () => {
     project.createSourceFile(
       '/app.ts',
       [
-        'class DeviceLibrary {',
-        '  loadDevice(): Promise<unknown> {',
-        "    return api.invoke('deviceLibrary:loadDevice');",
+        'class RecipeBox {',
+        '  loadRecipe(): Promise<unknown> {',
+        "    return api.invoke('recipeBox:loadRecipe');",
         '  }',
         '  ping(): void {}',
         '}',
-        'export const keep = () => new DeviceLibrary().ping();',
+        'export const keep = () => new RecipeBox().ping();',
         '',
       ].join('\n')
     );
     project.createSourceFile('/index.ts', "import { keep } from './app';\nkeep();\n");
     const findings = analyze(project);
-    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadDevice');
+    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
     expect(wrapper?.verdict).toBe('dead');
     expect(wrapper?.strands).toBeUndefined();
   });

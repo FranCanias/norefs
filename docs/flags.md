@@ -22,6 +22,26 @@ Everything else — `--dry-run`, `--no-verify`, `--verify-command`,
 `--allow-dirty`, `--scope`, `--only`, `--entry`, `--watch`, `--explain`,
 `--anon`, `--reporter` — writes no file of its own.
 
+## Which flags belong in norefs.config.json
+
+A **setting** shapes the analysis and the report. It is true of the project
+every time, so it belongs in a file everyone shares. An **action** does
+something — it writes source files, a baseline, a report file, or it keeps
+running — and that is a decision per run.
+
+| Setting (config key) | Action (flag only) |
+|---|---|
+| `-p/--project`, `--entry`, `--only`, `--scope` | `--fix`, `--fix-unsafe` |
+| `--reporter`, `--anon`, `--explain` | `--baseline`, `--ratchet` |
+| `ignore`, `ignoreDependencies` (no flag) | `--export`, `--dry-run`, `--watch` |
+
+A flag passed on the run wins over the file, except `--entry`, which merges.
+`--no-anon` and `--no-explain` are how a run says no to a project that said
+yes. An action key in the config file is a usage error, exit code 2.
+
+`--no-verify`, `--verify-command` and `--allow-dirty` shape what `--fix` does
+rather than what a run finds, so they stay with the action and are flags only.
+
 ## The order a fixing run happens in
 
 1. **Dirty check.** With `--fix` and no `--dry-run`, a tree with uncommitted
@@ -36,7 +56,9 @@ Everything else — `--dry-run`, `--no-verify`, `--verify-command`,
    candidate text, and must exit 0.
 6. **Bisection.** A red probe rolls the whole campaign back and bisects the
    first pass to the fix that broke it. That fix is held back with the error it
-   would have introduced, and the loop tries again without it.
+   would have introduced, and the loop tries again without it. A fix the editor
+   refuses gets the same treatment without the bisection — it names itself by
+   throwing — so one impossible edit never takes the run down with it.
 7. **Writing.** Only now, and only the files a verified result touched. With
    `--dry-run`, this step prints a unified diff instead.
 
@@ -45,7 +67,9 @@ Everything else — `--dry-run`, `--no-verify`, `--verify-command`,
 A fix finishes the finding it acts on, or refuses it:
 
 - A **dead** member, export, or type is removed whole, with the import and
-  export specifiers that forwarded it and the comment lines directly above it.
+  export specifiers that forwarded it, the comment lines directly above it,
+  and the comment beside it on its line. A comment with code after it on the
+  line introduces that code and stays.
 - A **proven write-only** member is removed together with the writes that
   prove it, with any local whose last reader those writes were, and with the
   dependency entries that named that local — `useMemo(() => ({ track }),
@@ -76,6 +100,7 @@ A fix finishes the finding it acts on, or refuses it:
 | `--ratchet` with no baseline file | Does nothing |
 | `--fix --only members` | Fixes members only. `--only` prunes the analysis, so the other kinds are never even found |
 | `--scope <path>` with a stranded handler | The handler is reported only when it lives under the scope. The note on the in-scope wrapper still names its file and line |
+| `--fix` with an over-exported bridge wrapper | Nothing is stranded. The keyword goes, the declaration stays, and every sender inside it keeps sending |
 | `--watch --fix` / `--watch --baseline` | Refused. Exit code 2 |
 | `--dry-run` without `--fix` | Refused. Exit code 2 |
 | `--fix` on a dirty tree | Refused unless `--allow-dirty` or `--dry-run`. Exit code 2 |
@@ -87,6 +112,11 @@ A fix finishes the finding it acts on, or refuses it:
 | 0 | No findings; or a baseline was written; or `--fix` ran and saved |
 | 1 | Findings remain; a `--dry-run` had changes to show; verification failed with no culprit to isolate |
 | 2 | A usage error: bad flag combination, unreadable config, dirty tree |
+
+Code 1 on a run that found something is what linters do, and what norefs has
+always done. A test pins all three codes, so they cannot change without saying
+so here first. If you script norefs and want the findings without the failure,
+read the `json` reporter's output and ignore the code.
 
 ## Where the output goes
 

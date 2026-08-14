@@ -92,9 +92,37 @@ function writeToRemove(site: Node): Node | undefined {
   return undefined;
 }
 
+/**
+ * A fix the editor could not carry out. The campaign holds the finding back
+ * and names the reason, exactly as it does for a fix the type check rejects: a
+ * fix that cannot be applied is one finding's problem, never the run's.
+ */
+export class UnappliedFix extends Error {
+  constructor(
+    readonly finding: Finding,
+    readonly reason: string,
+    /** Every file the abandoned run may have edited, so the caller can roll it back. */
+    readonly filePaths: string[]
+  ) {
+    super(reason);
+    this.name = 'UnappliedFix';
+  }
+}
+
+/** The first line of whatever was thrown — a ts-morph error carries a whole dump. */
+function firstLine(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split('\n')[0].trim();
+}
+
 export function applyFixes(findings: Finding[], options: { save?: boolean; unsafe?: boolean } = {}): FixResult {
   const fixable = findings.filter(f => isFixable(f, options.unsafe ?? false));
   let skipped = findings.length - fixable.length;
+
+  // The comments beside the properties these fixes delete come out first, as
+  // text: no node-level edit reaches them, and left in place they turn the
+  // next removal into a syntax error.
+  const stripped = stripTrailingComments(fixable);
 
   // Fix inner nodes before outer ones, so a member nested inside another
   // finding (an object literal inside a dead method) is still valid when its
@@ -116,7 +144,7 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
     if (nameNode) specifiers.set(finding, danglingSpecifiers(nameNode));
   }
 
-  const touched = new Set<SourceFile>();
+  const touched = new Set<SourceFile>(stripped);
   const kept = new Set<Node>();
   let fixed = 0;
   for (const finding of sorted) {
@@ -129,10 +157,27 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
       fixed++;
       continue;
     }
-    const changed =
-      finding.kind === 'member'
-        ? fixMember(finding, node, kept)
-        : fixExport(finding, node, specifiers.get(finding) ?? [], kept);
+    let changed: SourceFile[];
+    try {
+      changed =
+        finding.kind === 'member'
+          ? fixMember(finding, node, kept)
+          : fixExport(finding, node, specifiers.get(finding) ?? [], kept);
+    } catch (error) {
+      // The editor refused this edit. That is this finding's answer, not the
+      // run's: the campaign rolls back and tries again without it. Every file
+      // the half-done fix could have reached goes with the report, so nothing
+      // it wrote survives the rollback.
+      const reachable = new Set(touched);
+      reachable.add(node.getSourceFile());
+      for (const site of finding.writeSites ?? []) if (!site.wasForgotten()) reachable.add(site.getSourceFile());
+      for (const spec of specifiers.get(finding) ?? []) if (!spec.wasForgotten()) reachable.add(spec.getSourceFile());
+      throw new UnappliedFix(
+        finding,
+        firstLine(error),
+        [...reachable].map(file => file.getFilePath())
+      );
+    }
     if (changed.length > 0) {
       for (const file of changed) touched.add(file);
       fixed++;
@@ -148,6 +193,134 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
     for (const file of touched) file.saveSync();
   }
   return { filePaths, fixed, skipped, keptComments: commentLocations(kept) };
+}
+
+/** Where a node sat, so a text pass that forgets it can hand it back. */
+interface Anchor {
+  sourceFile: SourceFile;
+  start: number;
+  kind: SyntaxKind;
+}
+
+/**
+ * Remove the comment beside every object literal property these fixes delete:
+ * `canvas, // light: #F9F9FA`. It describes that property and nothing else, so
+ * it goes when the property goes — and it has to go first. ts-morph removes a
+ * property without the trivia behind it, and the leftover lands where the next
+ * property belongs: the following removal in that literal throws, and whatever
+ * output the run did produce carries the comment on a line it never described.
+ * Object literal properties are the only shape with the problem; statements,
+ * class members, interface members, and enum members already take their
+ * trailing comment with them.
+ *
+ * No node-level edit spans a node and the trivia behind it, so these come out
+ * as text, one pass per file — which forgets every node in that file. Each
+ * finding gets its nodes back, re-found where the pass leaves them.
+ *
+ * Returns the files it rewrote.
+ */
+function stripTrailingComments(findings: Finding[]): SourceFile[] {
+  const cuts = new Map<SourceFile, Array<[number, number]>>();
+  for (const finding of findings) {
+    for (const node of deletedNodes(finding)) {
+      if (!node.getParent()?.isKind(SyntaxKind.ObjectLiteralExpression)) continue;
+      const cut = trailingComment(node);
+      if (!cut) continue;
+      const sourceFile = node.getSourceFile();
+      cuts.set(sourceFile, [...(cuts.get(sourceFile) ?? []), cut]);
+    }
+  }
+  if (cuts.size === 0) return [];
+
+  const anchors = new Map<Finding, { node?: Anchor; sites: Anchor[] }>();
+  for (const finding of findings) {
+    anchors.set(finding, {
+      node: finding.node && anchorOf(finding.node),
+      sites: (finding.writeSites ?? []).map(anchorOf),
+    });
+  }
+
+  for (const [sourceFile, ranges] of cuts) {
+    const text = sourceFile.getFullText();
+    ranges.sort((a, b) => a[0] - b[0]);
+    let kept = '';
+    let read = 0;
+    for (const [start, end] of ranges) {
+      kept += text.slice(read, start);
+      read = end;
+    }
+    sourceFile.replaceWithText(kept + text.slice(read));
+  }
+
+  for (const finding of findings) {
+    const anchored = anchors.get(finding);
+    if (!anchored) continue;
+    const back = (anchor: Anchor): Node => {
+      const ranges = cuts.get(anchor.sourceFile) ?? [];
+      const moved = ranges.reduce((sum, [start, end]) => (end <= anchor.start ? sum + (end - start) : sum), 0);
+      const node = refind(anchor.sourceFile, anchor.start - moved, anchor.kind);
+      if (!node) {
+        const reason = 'the comment beside it could not be separated from the code';
+        throw new UnappliedFix(
+          finding,
+          reason,
+          [...cuts.keys()].map(file => file.getFilePath())
+        );
+      }
+      return node;
+    };
+    if (anchored.node) finding.node = back(anchored.node);
+    if (finding.writeSites) finding.writeSites = anchored.sites.map(back);
+  }
+  return [...cuts.keys()];
+}
+
+/** The nodes a fix deletes outright — the ones whose comments orphan. */
+function deletedNodes(finding: Finding): Node[] {
+  const nodes: Node[] = [];
+  for (const site of finding.writeSites ?? []) {
+    const write = writeToRemove(site);
+    if (write) nodes.push(write);
+  }
+  const node = finding.node;
+  if (!node) return nodes;
+  // A parameter property keeps its parameter and loses only its modifiers; an
+  // over-exported declaration keeps every line but the `export` keyword.
+  if (finding.kind === 'member' ? !node.isKind(SyntaxKind.Parameter) : finding.dead) nodes.push(node);
+  return nodes;
+}
+
+/**
+ * The comment beside a node: same line, after any comma, with nothing but the
+ * line break behind it. A comment with code after it on the line introduces
+ * that code and stays where it is.
+ */
+function trailingComment(node: Node): [number, number] | undefined {
+  const text = node.getSourceFile().getFullText();
+  let pos = node.getEnd();
+  while (text[pos] === ' ' || text[pos] === '\t') pos++;
+  const from = text[pos] === ',' ? ++pos : node.getEnd();
+  const ranges = ts.getTrailingCommentRanges(text, pos) ?? [];
+  const last = ranges[ranges.length - 1];
+  if (!last) return undefined;
+  let after = last.end;
+  while (text[after] === ' ' || text[after] === '\t') after++;
+  if (after < text.length && text[after] !== '\n' && text[after] !== '\r') return undefined;
+  return [from, last.end];
+}
+
+function anchorOf(node: Node): Anchor {
+  return { sourceFile: node.getSourceFile(), start: node.getStart(), kind: node.getKind() };
+}
+
+/** The same node after a text pass forgot it: same place, same kind. */
+function refind(sourceFile: SourceFile, start: number, kind: SyntaxKind): Node | undefined {
+  let node = sourceFile.getDescendantAtPos(start);
+  while (node) {
+    if (node.getKind() === kind && node.getStart() === start) return node;
+    node = node.getParent();
+  }
+  return undefined;
 }
 
 /**

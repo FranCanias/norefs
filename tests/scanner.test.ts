@@ -103,6 +103,15 @@ describe('the scanner finds the suppression marks', () => {
     expect([...scan.commentLines]).toEqual([1]);
   });
 
+  it('a block mark, which reaches one line here because nothing nests', () => {
+    // The syntax-only kinds are files, dependencies, and imports. None of them
+    // has anything inside it, so the block form and the line form agree — and
+    // both pipelines suppress the same line.
+    expect([...scanText("import { x } from 'y'; // norefs-ignore-block\n").suppressedLines]).toEqual([1]);
+    expect([...scanText('// norefs-ignore-block: reason\nconst a = 1;\n').suppressedLines]).toEqual([1]);
+    expect([...scanText('// norefs-ignore-blocked\nconst a = 1;\n').suppressedLines]).toEqual([]);
+  });
+
   it('a file mark, only in the leading comments', () => {
     expect(scanText('// norefs-ignore-file\nconst a = 1;\n').fileSuppressed).toBe(true);
     expect(scanText('/* norefs-ignore-file */\nconst a = 1;\n').fileSuppressed).toBe(true);

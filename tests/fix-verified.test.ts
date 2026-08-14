@@ -72,6 +72,49 @@ describe('applyVerifiedFixes', () => {
     expect(result.fixed).toBe(2);
   });
 
+  it('holds back a fix the editor refuses and applies the rest', () => {
+    // A fix that throws inside the fixer used to take the whole run down —
+    // every other fix included. It gets the same answer a fix that fails the
+    // type check gets: rolled back, held back, named. No shipped shape throws
+    // today, so the refusal is staged: a node the fixer cannot edit.
+    const { project, lib } = setup();
+    const findings = analyze(project);
+    const other = findings.find(f => f.name === 'other');
+    if (other?.node) {
+      other.node = new Proxy(other.node, {
+        get(target, property) {
+          if (property === 'remove') {
+            return () => {
+              throw new Error('Manipulation error: the editor refused this node.\nwith a long dump behind it');
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }
+    const result = applyVerifiedFixes({
+      project,
+      findings,
+      reanalyze: () => analyze(project),
+      unsafe: false,
+      verify: false,
+      check: () => [],
+      cwd: '/',
+      log: () => {},
+    });
+    expect(result.aborted).toBeUndefined();
+    expect(result.heldBack.map(h => h.finding.name)).toEqual(['other']);
+    expect(result.heldBack[0].unapplied).toBe(true);
+    expect(result.heldBack[0].errors).toEqual(['Manipulation error: the editor refused this node.']);
+    // The run finished: the other two fixes are in, and the refused one is not.
+    const text = lib.getFullText();
+    expect(text).not.toContain('keepMe');
+    expect(text).not.toContain('third');
+    expect(text).toContain('function other');
+    expect(result.fixed).toBe(2);
+  });
+
   it('aborts pristine when the probe fails even with nothing fixed', () => {
     const { project, lib } = setup();
     const before = lib.getFullText();

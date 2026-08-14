@@ -7,7 +7,7 @@ import { analyzeDependencies } from './dependencies';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
-import { SourceIndex, projectFilePaths } from './sources';
+import { projectFilePaths, SourceIndex } from './sources';
 
 /** The findings the syntax alone decides — no type checker is involved. */
 // norefs-ignore: the test suite imports it, outside this tsconfig

@@ -121,4 +121,14 @@ describe('dependency checks', () => {
     );
     expect(findings).toEqual([]);
   });
+
+  it('honors the block form on an import too, so both pipelines agree', () => {
+    // An import has nothing nested inside it, so the block mark reaches the
+    // same one line the syntax-only scanner gives it.
+    const findings = depFindings(
+      { dependencies: {} },
+      { '/main.ts': "// norefs-ignore-block: injected at runtime\nimport { x } from 'mystery';\nexport const y = x;\n" }
+    );
+    expect(findings).toEqual([]);
+  });
 });

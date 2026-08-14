@@ -16,32 +16,32 @@ describe('the write scan behind the dead verdict', () => {
     project.createSourceFile(
       '/main.ts',
       [
-        'interface DiagramContextType {',
-        '  diagramDevices: number[];',
-        '  getDevice: () => void;',
+        'interface PlannerContextType {',
+        '  plannerRecipes: number[];',
+        '  getRecipe: () => void;',
         '}',
         'declare function useMemo<T>(factory: () => T, deps: unknown[]): T;',
-        'declare function provide(value: DiagramContextType): void;',
-        'declare const context: DiagramContextType;',
-        'const diagramDevices: number[] = [];',
-        'const getDevice = () => {};',
+        'declare function provide(value: PlannerContextType): void;',
+        'declare const context: PlannerContextType;',
+        'const plannerRecipes: number[] = [];',
+        'const getRecipe = () => {};',
         'const contextValue = useMemo(',
         '  () => ({',
-        '    diagramDevices,',
-        '    getDevice,',
+        '    plannerRecipes,',
+        '    getRecipe,',
         '  }),',
-        '  [diagramDevices, getDevice]',
+        '  [plannerRecipes, getRecipe]',
         ');',
         'export const run = () => provide(contextValue);',
-        'export const read = () => context.getDevice();',
+        'export const read = () => context.getRecipe();',
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    const member = memberOf(findings, 'diagramDevices');
+    const member = memberOf(findings, 'plannerRecipes');
     expect(member?.verdict).toBe('write-only');
     expect(member?.evidence).toContain('main.ts');
-    // The value flows through the variable into `provide(value: DiagramContextType)`,
+    // The value flows through the variable into `provide(value: PlannerContextType)`,
     // so the write is not a guess: it is proven to feed this member.
     expect(member?.evidence).toContain('typed write');
     expect(member?.evidence).toContain('never read');
@@ -97,16 +97,16 @@ describe('the write scan behind the dead verdict', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(
       '/types.ts',
-      ['export interface Device {', '  ip: string;', '  port: number;', '}', ''].join('\n')
+      ['export interface Peer {', '  ip: string;', '  port: number;', '}', ''].join('\n')
     );
     project.createSourceFile(
       '/main.ts',
       [
-        "import type { Device } from './types';",
+        "import type { Peer } from './types';",
         'declare function wrap<T>(factory: () => T): T;',
-        'declare const device: Device;',
+        'declare const peer: Peer;',
         "const config = wrap(() => ({ ip: '10.0.0.1' }));",
-        'export const run = () => [config, device.port];',
+        'export const run = () => [config, peer.port];',
         '',
       ].join('\n')
     );
@@ -140,28 +140,28 @@ describe('the write scan behind the dead verdict', () => {
 
 describe('the validation rule: a name match must survive the type its write feeds', () => {
   it('discards a write whose known contextual type does not declare the member', () => {
-    // The imperative-handle shape: `deleteDevice` sits as an excess property
+    // The imperative-handle shape: `deleteRecipe` sits as an excess property
     // in a literal whose contextual type is known and different. That write
     // feeds `Handle`, not the service — the match must not protect the member.
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(
       '/app.ts',
       [
-        'class DeviceLibraryService {',
-        '  deleteDevice(): void {}',
+        'class RecipeBoxService {',
+        '  deleteRecipe(): void {}',
         '  ping(): void {}',
         '}',
         'interface Handle { focus(): void; blur(): void }',
         'declare function attach(handle: Handle): void;',
-        'const deleteDevice = () => {};',
-        'export const mount = () => attach({ focus() {}, blur() {}, deleteDevice });',
-        'export const keep = () => { new DeviceLibraryService().ping(); };',
+        'const deleteRecipe = () => {};',
+        'export const mount = () => attach({ focus() {}, blur() {}, deleteRecipe });',
+        'export const keep = () => { new RecipeBoxService().ping(); };',
         '',
       ].join('\n')
     );
     project.createSourceFile('/index.ts', "import { mount, keep } from './app';\nmount();\nkeep();\n");
     const findings = analyze(project);
-    const member = memberOf(findings, 'deleteDevice');
+    const member = memberOf(findings, 'deleteRecipe');
     expect(member?.verdict).toBe('dead');
     expect(member?.evidence).toContain('every write of the name feeds another type');
     expect(member?.evidence).toMatch(/app\.ts:8/);
@@ -249,25 +249,25 @@ describe('the validation rule: a name match must survive the type its write feed
     project.createSourceFile(
       '/main.ts',
       [
-        'interface DiagramContextType {',
-        '  diagramDevices: number[];',
-        '  getDevice: () => void;',
+        'interface PlannerContextType {',
+        '  plannerRecipes: number[];',
+        '  getRecipe: () => void;',
         '}',
-        'declare function provide(value: DiagramContextType): void;',
-        'declare const context: DiagramContextType;',
-        'const diagramDevices: number[] = [];',
-        'const getDevice = () => {};',
+        'declare function provide(value: PlannerContextType): void;',
+        'declare const context: PlannerContextType;',
+        'const plannerRecipes: number[] = [];',
+        'const getRecipe = () => {};',
         'function buildContext() {',
-        '  return { diagramDevices, getDevice };',
+        '  return { plannerRecipes, getRecipe };',
         '}',
         'const contextValue = buildContext();',
         'export const run = () => provide(contextValue);',
-        'export const read = () => context.getDevice();',
+        'export const read = () => context.getRecipe();',
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    const member = memberOf(findings, 'diagramDevices');
+    const member = memberOf(findings, 'plannerRecipes');
     expect(member?.verdict).toBe('write-only');
     expect(member?.evidence).toContain('typed write');
   });
@@ -304,26 +304,26 @@ describe('the validation rule: a name match must survive the type its write feed
     project.createSourceFile(
       '/app.ts',
       [
-        'class DeviceLibraryService {',
-        '  loadDevice(): void {}',
-        '  listDevicesByCategory(): void {}',
-        '  deleteDevice(): void {}',
+        'class RecipeBoxService {',
+        '  loadRecipe(): void {}',
+        '  listRecipesByCategory(): void {}',
+        '  deleteRecipe(): void {}',
         '  ping(): void {}',
         '}',
         'declare function wrap<T>(factory: () => T): T;',
-        'const useDiagram = () => {',
-        '  const deleteDevice = () => {};',
-        '  return wrap(() => ({ deleteDevice }));',
+        'const usePlanner = () => {',
+        '  const deleteRecipe = () => {};',
+        '  return wrap(() => ({ deleteRecipe }));',
         '};',
-        'export const erase = () => useDiagram().deleteDevice();',
-        'export const keep = () => new DeviceLibraryService().ping();',
+        'export const erase = () => usePlanner().deleteRecipe();',
+        'export const keep = () => new RecipeBoxService().ping();',
         '',
       ].join('\n')
     );
     project.createSourceFile('/index.ts', "import { erase, keep } from './app';\nerase();\nkeep();\n");
     const findings = analyze(project);
-    expect(memberOf(findings, 'loadDevice')?.verdict).toBe('dead');
-    expect(memberOf(findings, 'listDevicesByCategory')?.verdict).toBe('dead');
-    expect(memberOf(findings, 'deleteDevice')?.verdict).toBe('dead');
+    expect(memberOf(findings, 'loadRecipe')?.verdict).toBe('dead');
+    expect(memberOf(findings, 'listRecipesByCategory')?.verdict).toBe('dead');
+    expect(memberOf(findings, 'deleteRecipe')?.verdict).toBe('dead');
   });
 });

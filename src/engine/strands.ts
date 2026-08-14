@@ -1,4 +1,4 @@
-import type { Node, Project } from 'ts-morph';
+import type { Node, Project, ts } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import type { Finding } from '../types';
 import { isInside } from './reference-index';
@@ -21,8 +21,8 @@ import { formatLocation, hasAmbientCallee, location } from './verdicts';
  * the same string first in a call that also takes a handler — and must not
  * itself be a bridge call, because a bridge call is another near side. And
  * nothing strands while a sender survives: every near side of the channel
- * must sit inside a declaration this report already flags, or deleting this
- * one leaves the handler with work to do.
+ * must sit inside a declaration this report deletes, or deleting this one
+ * leaves the handler with work to do.
  */
 export function annotateStrandedChannels(
   project: Project,
@@ -67,15 +67,19 @@ export function annotateStrandedChannels(
   }
 
   /**
-   * The reported declarations that send this channel — or undefined when one
-   * sender is not reported at all, which means nothing is stranded: that
-   * sender stays, and the handler keeps its work.
+   * The declarations this report deletes that send this channel — or undefined
+   * when one sender survives, which means nothing is stranded: that sender
+   * stays, and the handler keeps its work.
+   *
+   * A sender dies with the declaration that holds it, so the owner is the
+   * *innermost* reported declaration around it. A class with five senders and
+   * three fates is not one fate.
    */
-  const reportedSenders = (channel: string): Finding[] | undefined => {
+  const deletedSenders = (channel: string): Finding[] | undefined => {
     const owners: Finding[] = [];
     for (const sender of senders.get(channel) ?? []) {
-      const owner = candidates.find(f => isInside(sender.compilerNode, (f.node as Node).compilerNode));
-      if (!owner) return undefined;
+      const owner = innermostOwner(candidates, sender);
+      if (!owner || !deletesDeclaration(owner)) return undefined;
       if (!owners.includes(owner)) owners.push(owner);
     }
     return owners;
@@ -86,11 +90,13 @@ export function annotateStrandedChannels(
   for (const [finding, names] of channels) {
     const declaration = finding.node as Node;
     for (const name of names) {
-      const sending = reportedSenders(name);
+      const sending = deletedSenders(name);
       if (!sending) continue;
       const far = (farSides.get(name) ?? []).find(site => !isInside(site.compilerNode, declaration.compilerNode));
       if (!far) continue;
-      if (!finding.strands) {
+      // "Deleting it" has to be true of this finding's own fix. An
+      // over-exported declaration loses a keyword and keeps every line.
+      if (!finding.strands && deletesDeclaration(finding)) {
         finding.strands = `deleting it strands the far side of \`'${name}'\` at ${location(far, cwd)}`;
       }
       if (!reportedFar.has(far) && reportFarSide(far)) {
@@ -100,6 +106,34 @@ export function annotateStrandedChannels(
     }
   }
   return stranded;
+}
+
+/**
+ * The reported declaration closest around this sender. A method reported on
+ * its own answers for the sender it holds; the class around it answers only
+ * when nothing nearer does.
+ */
+function innermostOwner(candidates: Finding[], sender: Node): Finding | undefined {
+  let owner: Finding | undefined;
+  let inner: ts.Node | undefined;
+  for (const candidate of candidates) {
+    const node = (candidate.node as Node).compilerNode;
+    if (!isInside(sender.compilerNode, node)) continue;
+    if (!inner || (node.pos >= inner.pos && node.end <= inner.end)) {
+      owner = candidate;
+      inner = node;
+    }
+  }
+  return owner;
+}
+
+/**
+ * True when acting on this finding takes the declaration away. Reported is not
+ * dying: the fix for an `over-exported` finding removes an `export` keyword
+ * and deletes nothing, so every sender inside it keeps sending.
+ */
+function deletesDeclaration(finding: Finding): boolean {
+  return finding.verdict !== undefined && finding.verdict !== 'over-exported';
 }
 
 /**
@@ -115,7 +149,10 @@ function strandedFinding(far: Node, channel: string, sending: Finding[], cwd: st
     .map(f => `\`${f.name}\` at ${formatLocation(f.filePath, f.line, cwd)}`)
     .join(', ');
   const rest = sending.length > 3 ? `, and ${sending.length - 3} more` : '';
-  const who = sending.length === 1 ? `its only sender, ${named},` : `every sender of it — ${named}${rest} —`;
+  const who =
+    sending.length === 1
+      ? `its only sender is ${named}, which this report says to delete`
+      : `every sender of it — ${named}${rest} — is one this report says to delete`;
   return {
     kind: 'stranded',
     filePath: sourceFile.getFilePath(),
@@ -124,7 +161,7 @@ function strandedFinding(far: Node, channel: string, sending: Finding[], cwd: st
     name: channel,
     context: sending.map(f => f.name).join(', '),
     anonymous: false,
-    evidence: `${who} is reported unused, so removing what this report flags leaves nothing that sends \`'${channel}'\` — and no reference for any analysis to follow to this handler`,
+    evidence: `${who}, so nothing will send \`'${channel}'\` once this report is applied — and no reference for any analysis to follow to this handler`,
   };
 }
 

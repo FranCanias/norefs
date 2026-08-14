@@ -18,6 +18,10 @@ describe('loadConfig', () => {
       ignore: [],
       only: undefined,
       ignoreDependencies: [],
+      scope: '',
+      reporter: undefined,
+      anon: false,
+      explain: false,
     });
   });
 
@@ -29,6 +33,10 @@ describe('loadConfig', () => {
         ignore: ['src/generated/**'],
         only: ['files', 'exports'],
         ignoreDependencies: ['legacy-*'],
+        scope: 'src/app',
+        reporter: 'github',
+        anon: true,
+        explain: true,
       })
     );
     expect(loadConfig(dir)).toEqual({
@@ -37,6 +45,10 @@ describe('loadConfig', () => {
       ignore: ['src/generated/**'],
       only: ['files', 'exports'],
       ignoreDependencies: ['legacy-*'],
+      scope: 'src/app',
+      reporter: 'github',
+      anon: true,
+      explain: true,
     });
   });
 
@@ -55,6 +67,17 @@ describe('loadConfig', () => {
 
   it('throws on a wrong value type', () => {
     expect(() => loadConfig(dirWith('{ "entry": "src" }'))).toThrow(/"entry" must be an array of strings/);
+    expect(() => loadConfig(dirWith('{ "scope": true }'))).toThrow(/"scope" must be a string/);
+    expect(() => loadConfig(dirWith('{ "anon": "yes" }'))).toThrow(/"anon" must be true or false/);
+    expect(() => loadConfig(dirWith('{ "explain": 1 }'))).toThrow(/"explain" must be true or false/);
+  });
+
+  it('names the settings it accepts when a key is not one of them', () => {
+    // The actions belong to a run, not to the project: --fix, --baseline,
+    // --dry-run, --watch and --export each write something.
+    expect(() => loadConfig(dirWith('{ "fix": true }'))).toThrow(/unknown key "fix"/);
+    expect(() => loadConfig(dirWith('{ "watch": true }'))).toThrow(/unknown key "watch"/);
+    expect(() => loadConfig(dirWith('{ "baseline": true }'))).toThrow(/scope, reporter, anon, explain/);
   });
 });
 
@@ -64,7 +87,17 @@ describe('initConfig', () => {
     expect(initConfig(dir)).toBe('norefs.config.json');
     expect(fs.readFileSync(path.join(dir, 'norefs.config.json'), 'utf8')).toBe(
       `${JSON.stringify(
-        { project: ['tsconfig.json'], entry: [], ignore: [], only: [], ignoreDependencies: [] },
+        {
+          project: ['tsconfig.json'],
+          entry: [],
+          ignore: [],
+          only: [],
+          ignoreDependencies: [],
+          scope: '',
+          reporter: 'text',
+          anon: false,
+          explain: false,
+        },
         null,
         2
       )}\n`
@@ -75,6 +108,10 @@ describe('initConfig', () => {
       ignore: [],
       only: [],
       ignoreDependencies: [],
+      scope: '',
+      reporter: 'text',
+      anon: false,
+      explain: false,
     });
   });
 

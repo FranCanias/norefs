@@ -19,7 +19,7 @@ export type FindingKind =
   | 'dependency'
   /** An imported package no scanned package.json lists. */
   | 'unlisted'
-  /** A handler whose every sender this report calls unused: dead once they go. */
+  /** A handler whose every sender this report deletes: dead once they go. */
   | 'stranded';
 
 /** The declaration keyword behind a type finding. */

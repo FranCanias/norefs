@@ -348,15 +348,24 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
   return out;
 }
 
-/** `norefs-ignore` after a comment opener, and not the `-file` form. */
+/**
+ * `norefs-ignore` or `norefs-ignore-block` after a comment opener, and not the
+ * `-file` form. The kinds this pipeline reports — a file, a dependency, an
+ * import — have nothing nested inside them, so the block form reaches exactly
+ * as far as the line form here, and the two pipelines agree on every line.
+ */
 function hasLineMark(line: string): boolean {
   const mark = 'norefs-ignore';
+  const block = '-block';
   for (let i = 0; i + 1 < line.length; i++) {
     if (line[i] !== '/' || (line[i + 1] !== '/' && line[i + 1] !== '*')) continue;
     let j = i + 2;
     while (j < line.length && isSpace(line[j])) j++;
     if (line.slice(j, j + mark.length) !== mark) continue;
-    if (line[j + mark.length] === '-') continue;
+    let end = j + mark.length;
+    if (line.slice(end, end + block.length) === block) end += block.length;
+    const after = line[end];
+    if (after !== undefined && (after === '-' || isIdentPart(after))) continue;
     return true;
   }
   return false;

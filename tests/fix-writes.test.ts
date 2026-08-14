@@ -209,6 +209,105 @@ describe('--fix-unsafe on a proven write-only member', () => {
     expect(producer).toContain('({ thumb: track.toUpperCase() }), [track])');
   });
 
+  it('takes the comment beside each write with the write', () => {
+    // The 0.4.0 review's exhibit: a six-member color chain whose writes carry
+    // a comment each. ts-morph removes a property without the trivia behind
+    // it, so the comments used to pile up where a property belonged — the
+    // third removal threw, and the two that had gone through left their
+    // comments glued to a line they never described.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/colors.ts',
+      [
+        'export interface ChartColors {',
+        '  canvas: string;',
+        '  grid: string;',
+        '  curve: string;',
+        '  axis: string;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/hook.ts',
+      [
+        "import type { ChartColors } from './colors';",
+        'declare function useMemo<T>(factory: () => T, deps: unknown[]): T;',
+        'declare function theme(name: string): string;',
+        'export function useChartColors(): ChartColors {',
+        '  const canvas = theme("canvas");',
+        '  const grid = theme("grid");',
+        '  const curve = theme("curve");',
+        '  return useMemo(',
+        '    () => ({',
+        '      canvas, // light: #F9F9FA, dark: #242424',
+        '      // Grid - more visible in dark',
+        '      grid, // light: #E6E7E8, dark: #383838',
+        '      curve, // light: #94969D, dark: #FF9999',
+        '      axis: "a",',
+        '    }),',
+        '    [canvas, grid, curve]',
+        '  );',
+        '}',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/index.ts',
+      [
+        "import { useChartColors } from './hook';",
+        "import type { ChartColors } from './colors';",
+        'declare const colors: ChartColors;',
+        'useChartColors();',
+        'export const read = () => colors.axis;',
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project);
+    expect(findings.filter(f => f.verdict === 'write-only').map(f => f.name)).toEqual(['canvas', 'grid', 'curve']);
+
+    // The run completes — that is half the claim.
+    applyFixes(findings, { save: false, unsafe: true });
+    const producer = project.getSourceFileOrThrow('/hook.ts').getFullText();
+    expect(producer).toContain('() => ({\n      axis: "a",\n    }),');
+    expect(producer).toContain('[]');
+    expect(producer).not.toContain('#F9F9FA');
+    expect(producer).not.toContain('#E6E7E8');
+    expect(producer).not.toContain('#FF9999');
+    expect(producer).not.toContain('Grid - more visible');
+    expect(project.getSourceFileOrThrow('/colors.ts').getFullText()).toBe(
+      ['export interface ChartColors {', '  axis: string;', '}', ''].join('\n')
+    );
+  });
+
+  it('keeps a comment that introduces the code after it on the line', () => {
+    // `/* fallback */ used: 1` describes what follows it, not what precedes
+    // it. The rule is "beside the property, with the line break behind it".
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'interface Payload {',
+        '  extra: number;',
+        '  used: number;',
+        '}',
+        'declare function wrap<T>(factory: () => T): T;',
+        'declare function send(p: Payload): void;',
+        'declare const payload: Payload;',
+        'const value = wrap(() => ({ extra: 1, /* fallback */ used: 2 }));',
+        'export const run = () => send(value);',
+        'export const read = () => payload.used;',
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project);
+    expect(memberOf(findings, 'extra')?.verdict).toBe('write-only');
+    applyFixes(findings, { save: false, unsafe: true });
+    const text = project.getSourceFileOrThrow('/main.ts').getFullText();
+    expect(text).toContain('/* fallback */ used: 2');
+    expect(text).not.toContain('extra');
+  });
+
   it('keeps the finding when a write cannot be removed on its own', () => {
     // A spread carries members beyond this one. Deleting it would take live
     // code with it, so the fix refuses and names the write.
