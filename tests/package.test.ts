@@ -15,7 +15,8 @@ function published(): Set<string> {
 /** Every relative link target in a markdown file. Anchors and URLs are not files. */
 function linkedFiles(markdown: string): string[] {
   const targets = [...markdown.matchAll(/\]\(([^)\s]+)\)/g)].map(match => match[1]);
-  return [...new Set(targets.filter(target => !/^(https?:|#|mailto:)/.test(target)))];
+  const files = targets.filter(target => !/^(https?:|#|mailto:)/.test(target)).map(target => target.split('#')[0]);
+  return [...new Set(files)];
 }
 
 describe('the published package', () => {
@@ -25,7 +26,8 @@ describe('the published package', () => {
     // installed the tool. A claim in the release notes has to be true of the
     // artifact, not only of the repository.
     const files = published();
-    for (const source of ['README.md', 'CHANGELOG.md', 'docs/flags.md', 'docs/corpus.md']) {
+    const docs = fs.readdirSync(path.join(root, 'docs')).map(name => `docs/${name}`);
+    for (const source of ['README.md', 'CHANGELOG.md', ...docs]) {
       const markdown = fs.readFileSync(path.join(root, source), 'utf8');
       for (const link of linkedFiles(markdown)) {
         const target = path.posix.normalize(path.posix.join(path.posix.dirname(source), link));

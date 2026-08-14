@@ -8,7 +8,7 @@
  * Both dead members here are optional, and deliberately so: a member the
  * literal writes has a reference to show for it, which is the reference check
  * working as designed rather than the hand-off failing. The blind-spot list in
- * the README names that limit.
+ * docs/limitations.md names that limit.
  */
 interface PantryLimits {
   jarCount: number;

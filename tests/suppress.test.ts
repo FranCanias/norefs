@@ -131,7 +131,7 @@ describe('suppression comments', () => {
   });
 
   it('covers every declaration that holds findings', () => {
-    // The README names these shapes, so the README is tested.
+    // docs/configuration.md names these shapes, so the docs are tested.
     const entry = { '/index.ts': "import { go } from './lib';\ngo();\n" };
     const clean = (lib: string) => findingsOf({ ...entry, '/lib.ts': lib });
 
