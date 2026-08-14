@@ -1,4 +1,4 @@
-import type { Node, Project, SourceFile, Type } from 'ts-morph';
+import type { Node, Project, SourceFile, Type, TypeLiteralNode } from 'ts-morph';
 import { SymbolFlags, SyntaxKind } from 'ts-morph';
 
 /**
@@ -12,7 +12,9 @@ import { SymbolFlags, SyntaxKind } from 'ts-morph';
  * This index records those required member names per owner declaration
  * (interface, type literal, or class). Constraint sources: property overrides
  * under a declared heritage clause (interface extends, class extends and
- * implements) and type predicates (`x is T` constrains T by x's type).
+ * implements), type predicates (`x is T` constrains T by x's type), and
+ * type-level reads — a property named in a written type literal that the type
+ * system matches structurally against another type.
  */
 export type ConstraintIndex = Map<Node, Set<string>>;
 
@@ -24,6 +26,7 @@ export function buildConstraintIndex(project: Project): ConstraintIndex {
     if (sourceFile.isDeclarationFile()) continue;
     collectHeritageConstraints(sourceFile, index);
     collectPredicateConstraints(sourceFile, index);
+    collectStructuralMatchConstraints(sourceFile, index);
   }
   return index;
 }
@@ -80,6 +83,202 @@ function collectPredicateConstraints(sourceFile: SourceFile, index: ConstraintIn
     if (!param) continue;
     constrain(typeNode.getType(), param.getType(), index, 0);
   }
+}
+
+/**
+ * Type-level reads. Some properties are never touched at runtime and are still
+ * read on every compile, because the type system matches a written type literal
+ * against another type and the property names decide the answer:
+ *
+ * ```ts
+ * type Daily = Extract<Schedule, { type: 'DAILY' }>;   // `type` picks the branch
+ * function hasId(r: Recipe): r is Recipe & { id: string };  // `id` is what narrows
+ * pickFirst<Row>(rows);   // Row satisfies `T extends { id: string }` through `id`
+ * ```
+ *
+ * Delete `type` from the filter and `Extract` matches the whole union; delete it
+ * from `Schedule`'s members and the filter matches nothing. The name is doing
+ * work on both sides of the match, so it counts as a read on both sides.
+ *
+ * Only written type arguments are matched here. An inferred one — `pickFirst(rows)`
+ * — passes the value itself into the call, and the escape check already stops
+ * tracking members of a value that leaves whole.
+ */
+function collectStructuralMatchConstraints(sourceFile: SourceFile, index: ConstraintIndex): void {
+  for (const conditional of sourceFile.getDescendantsOfKind(SyntaxKind.ConditionalType)) {
+    matchStructurally(conditional.getCheckType(), conditional.getExtendsType(), index);
+  }
+  for (const predicate of sourceFile.getDescendantsOfKind(SyntaxKind.TypePredicate)) {
+    const asserted = predicate.getTypeNode();
+    const narrowed = predicateParameterType(predicate);
+    if (asserted && narrowed) creditLiterals(asserted, narrowed, index);
+  }
+
+  sourceFile.forEachDescendant(node => {
+    if (node.isKind(SyntaxKind.TypeReference)) {
+      const pair = conditionalAliasArguments(node);
+      if (pair) matchStructurally(pair[0], pair[1], index);
+      creditConstraints(node.getTypeArguments(), node.getTypeName(), index);
+      return;
+    }
+    if (
+      node.isKind(SyntaxKind.CallExpression) ||
+      node.isKind(SyntaxKind.NewExpression) ||
+      node.isKind(SyntaxKind.ExpressionWithTypeArguments)
+    ) {
+      creditConstraints(node.getTypeArguments(), node.getExpression(), index);
+    }
+  });
+}
+
+/**
+ * `pickFirst<Row>(…)` against `<T extends { id: string }>`: the constraint names
+ * `id`, and the argument is what has to have it. Nothing reads `id` at runtime
+ * through a `Row`, and removing it stops the file compiling.
+ */
+function creditConstraints(args: Node[], target: Node, index: ConstraintIndex): void {
+  if (args.length === 0) return;
+  const parameters = typeParametersOf(target);
+  for (let i = 0; i < Math.min(args.length, parameters.length); i++) {
+    const constraint = parameters[i].getConstraint();
+    if (constraint) creditLiterals(constraint, args[i].getType(), index);
+  }
+}
+
+/** The one thing this file needs from a type parameter, across every kind of declaration that has them. */
+interface ConstrainedParameter {
+  getConstraint(): Node | undefined;
+}
+
+function typeParametersOf(target: Node): ConstrainedParameter[] {
+  const symbol = target.getSymbol();
+  for (const decl of (symbol?.getAliasedSymbol() ?? symbol)?.getDeclarations() ?? []) {
+    if (!('getTypeParameters' in decl)) continue;
+    const parameters = (decl as { getTypeParameters(): ConstrainedParameter[] }).getTypeParameters();
+    if (parameters.length > 0) return parameters;
+  }
+  return [];
+}
+
+/**
+ * `Extract<Schedule, { type: 'DAILY' }>` is the same match as
+ * `Schedule extends { type: 'DAILY' } ? …`, one alias away. When a reference
+ * names an alias whose body is a conditional type over its own parameters,
+ * return the call-site arguments standing in those two positions. This resolves
+ * `Extract` and `Exclude` without naming them — any conditional alias works.
+ */
+function conditionalAliasArguments(reference: Node): [Node, Node] | undefined {
+  if (!reference.isKind(SyntaxKind.TypeReference)) return undefined;
+  const args = reference.getTypeArguments();
+  if (args.length === 0) return undefined;
+
+  const name = reference.getTypeName();
+  if (!name.isKind(SyntaxKind.Identifier)) return undefined;
+  const alias = name
+    .getSymbol()
+    ?.getDeclarations()
+    .find(decl => decl.isKind(SyntaxKind.TypeAliasDeclaration));
+  if (!alias?.isKind(SyntaxKind.TypeAliasDeclaration)) return undefined;
+
+  const body = alias.getTypeNode();
+  if (!body?.isKind(SyntaxKind.ConditionalType)) return undefined;
+
+  const parameters = alias.getTypeParameters().map(p => p.getName());
+  const argumentFor = (node: Node): Node | undefined => {
+    if (!node.isKind(SyntaxKind.TypeReference)) return undefined;
+    const position = parameters.indexOf(node.getTypeName().getText());
+    return position === -1 ? undefined : args[position];
+  };
+
+  const check = argumentFor(body.getCheckType());
+  const extend = argumentFor(body.getExtendsType());
+  return check && extend ? [check, extend] : undefined;
+}
+
+function predicateParameterType(predicate: Node): Type | undefined {
+  if (!predicate.isKind(SyntaxKind.TypePredicate)) return undefined;
+  const paramName = predicate.getParameterNameNode();
+  if (!paramName.isKind(SyntaxKind.Identifier)) return undefined;
+  const signature = predicate.getParent();
+  if (!('getParameters' in signature)) return undefined;
+  return (signature as { getParameters(): Array<{ getName(): string; getType(): Type }> })
+    .getParameters()
+    .find(p => p.getName() === paramName.getText())
+    ?.getType();
+}
+
+/** Both operands of a match read each other's names, so credit each side with the other's literals. */
+function matchStructurally(left: Node, right: Node, index: ConstraintIndex): void {
+  creditLiterals(left, right.getType(), index);
+  creditLiterals(right, left.getType(), index);
+}
+
+/**
+ * Credit every name written in `source`'s type literals to those literals and to
+ * the declarations behind `against`. Only literals at the top level of the type
+ * expression count: a literal nested inside a member matches that member's type,
+ * not the type being compared here.
+ */
+function creditLiterals(source: Node, against: Type, index: ConstraintIndex): void {
+  const literals = topLevelLiterals(source);
+  if (literals.length === 0) return;
+
+  const owners = new Set<Node>();
+  collectOwners(against, owners, 0);
+
+  for (const literal of literals) {
+    for (const member of literal.getMembers()) {
+      const name = memberName(member);
+      if (!name) continue;
+      record(literal, name, index);
+      for (const owner of owners) record(owner, name, index);
+    }
+  }
+}
+
+function topLevelLiterals(node: Node, out: TypeLiteralNode[] = []): TypeLiteralNode[] {
+  if (node.isKind(SyntaxKind.TypeLiteral)) out.push(node);
+  else if (node.isKind(SyntaxKind.ParenthesizedType)) topLevelLiterals(node.getTypeNode(), out);
+  else if (node.isKind(SyntaxKind.UnionType) || node.isKind(SyntaxKind.IntersectionType)) {
+    for (const part of node.getTypeNodes()) topLevelLiterals(part, out);
+  }
+  return out;
+}
+
+function memberName(member: Node): string | undefined {
+  if (!member.isKind(SyntaxKind.PropertySignature) && !member.isKind(SyntaxKind.MethodSignature)) return undefined;
+  const nameNode = member.getNameNode();
+  if (nameNode.isKind(SyntaxKind.ComputedPropertyName)) return undefined;
+  return nameNode.isKind(SyntaxKind.StringLiteral) ? nameNode.getLiteralValue() : nameNode.getText();
+}
+
+function collectOwners(type: Type, out: Set<Node>, depth: number): void {
+  if (depth > MAX_DEPTH) return;
+  if (type.isUnion()) {
+    for (const part of type.getUnionTypes()) collectOwners(part, out, depth + 1);
+    return;
+  }
+  if (type.isIntersection()) {
+    for (const part of type.getIntersectionTypes()) collectOwners(part, out, depth + 1);
+    return;
+  }
+  for (const symbol of [type.getAliasSymbol(), type.getSymbol()]) {
+    for (const decl of symbol?.getDeclarations() ?? []) {
+      if (
+        decl.isKind(SyntaxKind.InterfaceDeclaration) ||
+        decl.isKind(SyntaxKind.TypeLiteral) ||
+        decl.isKind(SyntaxKind.ClassDeclaration)
+      ) {
+        out.add(decl);
+      }
+    }
+  }
+}
+
+function record(owner: Node, name: string, index: ConstraintIndex): void {
+  const names = index.get(owner) ?? new Set<string>();
+  names.add(name);
+  index.set(owner, names);
 }
 
 /**

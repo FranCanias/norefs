@@ -1,70 +1,144 @@
-import type { Node, Project, ts } from 'ts-morph';
+import type { CallExpression, Node, Project, ts } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
-import type { Finding } from '../types';
+import type { Boundary, Finding } from '../types';
 import { isInside } from './reference-index';
 import { formatLocation, hasAmbientCallee, location } from './verdicts';
 
 /**
- * A reported bridge wrapper has a far side. When a reported declaration calls
- * a bridge the project's own .d.ts declares — an IPC invoke, a preload global
- * — the first string it passes is a channel name, and the handler registered
- * under the same string lives in another file, usually an entry file no
- * reference-based analysis will ever flag: the registration call keeps it
- * "used". Deleting the wrapper strands that handler, unreachable in practice
- * and invisible in principle. The channel string is the only correlation
- * there is, so the finding carries it — and the far side gets a finding of
- * its own, at its own coordinates, so the handler is visible *before* the
- * deletion that hides it forever.
+ * A reported bridge wrapper has a far side. When a reported declaration sends
+ * on a channel that leaves this program — an IPC invoke, a preload global, an
+ * HTTP request — the first string it passes is the channel name, and the
+ * handler registered under the same string lives in another file, usually an
+ * entry file no reference-based analysis will ever flag: the registration call
+ * keeps it "used". Deleting the wrapper strands that handler, unreachable in
+ * practice and invisible in principle. The channel string is the only
+ * correlation there is, so the finding carries it — and the far side gets a
+ * finding of its own, at its own coordinates, so the handler is visible
+ * *before* the deletion that hides it forever.
  *
- * The claim stays honest by shape: a channel is only the *first* argument of
- * a bridge call, never a payload; a far side must look like a registration —
- * the same string first in a call that also takes a handler — and must not
- * itself be a bridge call, because a bridge call is another near side. And
- * nothing strands while a sender survives: every near side of the channel
- * must sit inside a declaration this report deletes, or deleting this one
- * leaves the handler with work to do.
+ * The claim stays honest by shape: a channel is only the *first* argument of a
+ * sending call, never a payload; a far side must look like a registration — the
+ * same string first in a call that also takes a handler — and must not itself
+ * be a sender, because a sender is another near side. And nothing strands while
+ * a sender survives: every near side of the channel must sit inside a
+ * declaration this report deletes, or deleting this one leaves the handler with
+ * work to do.
  */
 export function annotateStrandedChannels(
   project: Project,
   findings: Finding[],
   cwd: string,
-  /**
-   * True when this far side deserves a finding of its own. The caller owns
-   * that policy — a dead file or a suppressed one already tells the story.
-   */
-  reportFarSide: (node: Node) => boolean = () => true
+  options: {
+    /**
+     * True when this far side deserves a finding of its own. The caller owns
+     * that policy — a dead file or a suppressed one already tells the story.
+     */
+    reportFarSide?: (node: Node) => boolean;
+    /** Boundaries the project declared, each paired independently of the rest. */
+    boundaries?: Boundary[];
+  } = {}
 ): Finding[] {
+  const reportFarSide = options.reportFarSide ?? (() => true);
   const candidates = findings.filter(f => f.node && (f.kind === 'member' || f.kind === 'export'));
-  const channels = new Map<Finding, string[]>();
-  for (const finding of candidates) {
-    const names = channelStrings(finding.node as Node);
-    if (names.length > 0) channels.set(finding, names);
-  }
-  if (channels.size === 0) return [];
+  if (candidates.length === 0) return [];
 
-  // One pass over the project: every wanted string in registration position
-  // (a far side) and in bridge-call position (another sender).
-  const wanted = new Set([...channels.values()].flat());
-  const farSides = new Map<string, Node[]>();
-  const senders = new Map<string, Node[]>();
-  for (const sourceFile of project.getSourceFiles()) {
-    if (sourceFile.isDeclarationFile()) continue;
-    for (const literal of stringLiterals(sourceFile)) {
-      const text = literal.getLiteralText();
-      if (!wanted.has(text)) continue;
-      const call = literal.getParent();
-      if (!call?.isKind(SyntaxKind.CallExpression)) continue;
-      if (call.getArguments()[0] !== literal) continue;
-      // A bridge call is a near side: another sender of the same channel.
-      if (hasAmbientCallee(call)) {
-        push(senders, text, literal);
-        continue;
-      }
-      // A registration passes the channel first and a handler with it.
-      if (call.getArguments().length < 2) continue;
-      push(farSides, text, literal);
+  const pairings: Pairing[] = [];
+  for (const rule of [OWN_BRIDGE, ...(options.boundaries ?? []).map(declaredRule)]) {
+    const channels = new Map<Finding, string[]>();
+    for (const finding of candidates) {
+      const names = channelsSentBy(finding.node as Node, rule);
+      if (names.length > 0) channels.set(finding, names);
+    }
+    if (channels.size > 0) {
+      pairings.push({
+        rule,
+        channels,
+        wanted: new Set([...channels.values()].flat()),
+        senders: new Map(),
+        farSides: new Map(),
+      });
     }
   }
+  if (pairings.length === 0) return [];
+
+  // One pass over the project. Each rule claims the calls it recognizes: a
+  // sender of a wanted channel, or a registration of one. A call no rule
+  // recognizes is neither, and a rule that does not want the channel never
+  // looks at it.
+  for (const sourceFile of project.getSourceFiles()) {
+    if (sourceFile.isDeclarationFile()) continue;
+    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+      const first = call.getArguments()[0];
+      const channel = channelOf(first);
+      if (channel === undefined) continue;
+      for (const pairing of pairings) {
+        if (!pairing.wanted.has(channel)) continue;
+        if (pairing.rule.sends(call)) push(pairing.senders, channel, first);
+        else if (pairing.rule.registers(call)) push(pairing.farSides, channel, first);
+      }
+    }
+  }
+
+  const stranded: Finding[] = [];
+  const reportedFar = new Set<Node>();
+  for (const pairing of pairings) collectStrands(pairing, candidates, cwd, reportFarSide, reportedFar, stranded);
+  return stranded;
+}
+
+/** A rule and everything the project scan found for it. */
+interface Pairing {
+  rule: ChannelRule;
+  /** The channels each reported declaration sends on. */
+  channels: Map<Finding, string[]>;
+  wanted: Set<string>;
+  senders: Map<string, Node[]>;
+  farSides: Map<string, Node[]>;
+}
+
+/** Which calls send on a channel, and which register a handler for one. */
+interface ChannelRule {
+  sends(call: CallExpression): boolean;
+  registers(call: CallExpression): boolean;
+}
+
+/**
+ * The bridge a project wrote for itself. A callee its own .d.ts declares — a
+ * preload global, an ambient IPC handle — runs outside this program, so the
+ * string it takes first is a channel. Anything else taking the same string
+ * first, with a handler beside it, is the far side.
+ */
+const OWN_BRIDGE: ChannelRule = {
+  sends: call => hasAmbientCallee(call),
+  registers: call => !hasAmbientCallee(call) && call.getArguments().length >= 2,
+};
+
+/** A boundary the project named: these callees send, those ones register. */
+function declaredRule(boundary: Boundary): ChannelRule {
+  return {
+    sends: call => calleeMatches(call, boundary.send),
+    registers: call => calleeMatches(call, boundary.handle) && call.getArguments().length >= 2,
+  };
+}
+
+/**
+ * True when the callee as written is one of these names. A name matches the
+ * whole callee or its tail, so `app.get` covers `this.app.get` and `fetch`
+ * covers `window.fetch` — without covering `getApp`.
+ */
+function calleeMatches(call: CallExpression, names: string[]): boolean {
+  const text = call.getExpression().getText();
+  return names.some(name => text === name || text.endsWith(`.${name}`));
+}
+
+function collectStrands(
+  pairing: Pairing,
+  candidates: Finding[],
+  cwd: string,
+  reportFarSide: (node: Node) => boolean,
+  reportedFar: Set<Node>,
+  stranded: Finding[]
+): void {
+  const { channels, senders, farSides } = pairing;
 
   /**
    * The declarations this report deletes that send this channel — or undefined
@@ -85,8 +159,6 @@ export function annotateStrandedChannels(
     return owners;
   };
 
-  const stranded: Finding[] = [];
-  const reportedFar = new Set<Node>();
   for (const [finding, names] of channels) {
     const declaration = finding.node as Node;
     for (const name of names) {
@@ -94,18 +166,20 @@ export function annotateStrandedChannels(
       if (!sending) continue;
       const far = (farSides.get(name) ?? []).find(site => !isInside(site.compilerNode, declaration.compilerNode));
       if (!far) continue;
+      // Matching normalizes a route; naming it must not. A reader goes looking
+      // for the channel, and the one to search for is the one they wrote.
+      const written = writtenChannel(far);
       // "Deleting it" has to be true of this finding's own fix. An
       // over-exported declaration loses a keyword and keeps every line.
       if (!finding.strands && deletesDeclaration(finding)) {
-        finding.strands = `deleting it strands the far side of \`'${name}'\` at ${location(far, cwd)}`;
+        finding.strands = `deleting it strands the far side of \`'${written}'\` at ${location(far, cwd)}`;
       }
       if (!reportedFar.has(far) && reportFarSide(far)) {
         reportedFar.add(far);
-        stranded.push(strandedFinding(far, name, sending, cwd));
+        stranded.push(strandedFinding(far, written, sending, cwd));
       }
     }
   }
-  return stranded;
 }
 
 /**
@@ -171,22 +245,57 @@ function push(map: Map<string, Node[]>, key: string, value: Node): void {
   map.set(key, list);
 }
 
-/** The first-argument string of each call whose callee a project .d.ts declares. */
-function channelStrings(declaration: Node): string[] {
+/** The channels this declaration sends on, under one rule. */
+function channelsSentBy(declaration: Node, rule: ChannelRule): string[] {
   const names: string[] = [];
   for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-    if (!hasAmbientCallee(call)) continue;
-    const [first] = call.getArguments();
-    if (first?.isKind(SyntaxKind.StringLiteral) || first?.isKind(SyntaxKind.NoSubstitutionTemplateLiteral)) {
-      names.push(first.getLiteralText());
-    }
+    if (!rule.sends(call)) continue;
+    const channel = channelOf(call.getArguments()[0]);
+    if (channel !== undefined) names.push(channel);
   }
   return names;
 }
 
-function stringLiterals(sourceFile: Node): Array<Node & { getLiteralText(): string }> {
-  return [
-    ...sourceFile.getDescendantsOfKind(SyntaxKind.StringLiteral),
-    ...sourceFile.getDescendantsOfKind(SyntaxKind.NoSubstitutionTemplateLiteral),
-  ];
+/**
+ * The channel an argument names, or nothing. A written string is the channel
+ * itself. A template is one only when it starts with `/`: a route's holes are
+ * exactly what the two sides fill differently, while an interpolated opaque
+ * name has no shape the two sides can agree on.
+ */
+function channelOf(argument: Node | undefined): string | undefined {
+  if (!argument) return undefined;
+  if (argument.isKind(SyntaxKind.StringLiteral) || argument.isKind(SyntaxKind.NoSubstitutionTemplateLiteral)) {
+    const text = argument.getLiteralText();
+    return text.startsWith('/') ? routeShape(text) : text;
+  }
+  if (argument.isKind(SyntaxKind.TemplateExpression)) {
+    const head = argument.getHead().getLiteralText();
+    if (!head.startsWith('/')) return undefined;
+    const spans = argument.getTemplateSpans().map(span => `${HOLE}${routeShape(span.getLiteral().getLiteralText())}`);
+    return routeShape(head) + spans.join('');
+  }
+  return undefined;
+}
+
+/** The channel as its own site writes it: the text a reader can search for. */
+function writtenChannel(node: Node): string {
+  if (node.isKind(SyntaxKind.StringLiteral) || node.isKind(SyntaxKind.NoSubstitutionTemplateLiteral)) {
+    return node.getLiteralText();
+  }
+  return node.getText();
+}
+
+/** Stands in for a hole, so both sides of a route write it the same way. */
+const HOLE = '*';
+
+/**
+ * A route as its shape. The two sides write the same route differently —
+ * `app.get('/recipes/:id/audit')` against `` fetch(`/recipes/${id}/audit`) ``
+ * — and every difference sits in the holes. Turning each hole into one
+ * character leaves a string both sides produce and no other route does. The
+ * list route, the item route, and the nested one under it all stay apart,
+ * which matters: they are the three routes every REST API has.
+ */
+function routeShape(text: string): string {
+  return text.replace(/:[A-Za-z0-9_]+/g, HOLE);
 }

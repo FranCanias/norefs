@@ -1,0 +1,8 @@
+{
+  "name": "entry-fixtures",
+  "private": true,
+  "scripts": {
+    "serve": "tsx src/server.ts",
+    "lint": "biome lint ."
+  }
+}

@@ -54,6 +54,10 @@ export interface CommentLocation {
  */
 /** True when --fix may act on this finding, given the unsafe opt-in. */
 export function isFixable(finding: Finding, unsafe: boolean): boolean {
+  // package.json entries are edited as text, outside the verified campaign —
+  // no type check reads a manifest. They ride with --fix-unsafe for that
+  // reason, and `applyFixes` never sees them.
+  if (finding.kind === 'dependency' || finding.kind === 'misplaced') return unsafe;
   if (finding.kind !== 'export' && finding.kind !== 'type' && finding.kind !== 'member') return false;
   // A test-only finding is never fixable: the fix is deleting the code
   // together with its tests, and only a human deletes tests.

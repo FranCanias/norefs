@@ -9,22 +9,22 @@ function memberOf(findings: Finding[], name: string): Finding | undefined {
 }
 
 /** A hook that computes two colors into a value only its interface describes. */
-function limiterProject(): Project {
+function legendProject(): Project {
   const project = new Project({ useInMemoryFileSystem: true });
   project.createSourceFile(
     '/colors.ts',
-    ['export interface LimiterColors {', '  track: string;', '  thumb: string;', '}', ''].join('\n')
+    ['export interface LegendColors {', '  stroke: string;', '  fill: string;', '}', ''].join('\n')
   );
   project.createSourceFile(
     '/hook.ts',
     [
-      "import type { LimiterColors } from './colors';",
+      "import type { LegendColors } from './colors';",
       'declare function useMemo<T>(factory: () => T, deps: unknown[]): T;',
-      'export function useLimiterColors(): LimiterColors {',
-      '  // the track reads darker in the dark theme',
-      '  const track = "a";',
-      '  const thumb = "b";',
-      '  return useMemo(() => ({ track, thumb }), []);',
+      'export function useLegendColors(): LegendColors {',
+      '  // the stroke reads darker in the dark theme',
+      '  const stroke = "a";',
+      '  const fill = "b";',
+      '  return useMemo(() => ({ stroke, fill }), []);',
       '}',
       '',
     ].join('\n')
@@ -32,11 +32,11 @@ function limiterProject(): Project {
   project.createSourceFile(
     '/index.ts',
     [
-      "import { useLimiterColors } from './hook';",
-      "import type { LimiterColors } from './colors';",
-      'declare const colors: LimiterColors;',
-      'useLimiterColors();',
-      'export const read = () => colors.thumb;',
+      "import { useLegendColors } from './hook';",
+      "import type { LegendColors } from './colors';",
+      'declare const colors: LegendColors;',
+      'useLegendColors();',
+      'export const read = () => colors.fill;',
       '',
     ].join('\n')
   );
@@ -45,9 +45,9 @@ function limiterProject(): Project {
 
 describe('--fix-unsafe on a proven write-only member', () => {
   it('retires the member together with the write that proves it', () => {
-    const project = limiterProject();
+    const project = legendProject();
     const findings = analyze(project);
-    const member = memberOf(findings, 'track');
+    const member = memberOf(findings, 'stroke');
     expect(member?.verdict).toBe('write-only');
     expect(member?.evidence).toContain('a typed write at');
 
@@ -56,20 +56,20 @@ describe('--fix-unsafe on a proven write-only member', () => {
     const producer = project.getSourceFileOrThrow('/hook.ts').getFullText();
     // The claim and its proof go together: no stranded write survives in a
     // literal no named type describes.
-    expect(declaration).not.toContain('track');
-    expect(producer).not.toContain('{ track, thumb }');
-    expect(producer).toContain('thumb');
+    expect(declaration).not.toContain('stroke');
+    expect(producer).not.toContain('{ stroke, fill }');
+    expect(producer).toContain('fill');
     expect(result.filePaths).toContain('/hook.ts');
   });
 
   it('leaves nothing the next run cannot see', () => {
-    const project = limiterProject();
+    const project = legendProject();
     applyFixes(analyze(project), { save: false, unsafe: true });
     // Run the tool on its own output: the fixed slice is gone, not hidden in
     // an anonymous literal the default filters skip.
     const after = analyze(project);
-    expect(memberOf(after, 'track')).toBeUndefined();
-    expect(project.getSourceFileOrThrow('/hook.ts').getFullText()).not.toContain('const track');
+    expect(memberOf(after, 'stroke')).toBeUndefined();
+    expect(project.getSourceFileOrThrow('/hook.ts').getFullText()).not.toContain('const stroke');
   });
 
   it('retires two members that share one literal', () => {
@@ -78,19 +78,19 @@ describe('--fix-unsafe on a proven write-only member', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(
       '/colors.ts',
-      ['export interface LimiterColors {', '  track: string;', '  thumb: string;', '  border: string;', '}', ''].join(
+      ['export interface LegendColors {', '  stroke: string;', '  fill: string;', '  frame: string;', '}', ''].join(
         '\n'
       )
     );
     project.createSourceFile(
       '/hook.ts',
       [
-        "import type { LimiterColors } from './colors';",
+        "import type { LegendColors } from './colors';",
         'declare function useMemo<T>(factory: () => T, deps: unknown[]): T;',
-        'export function useLimiterColors(): LimiterColors {',
-        '  const track = "a";',
-        '  const thumb = "b";',
-        '  return useMemo(() => ({ track, thumb, border: "c" }), []);',
+        'export function useLegendColors(): LegendColors {',
+        '  const stroke = "a";',
+        '  const fill = "b";',
+        '  return useMemo(() => ({ stroke, fill, frame: "c" }), []);',
         '}',
         '',
       ].join('\n')
@@ -98,49 +98,49 @@ describe('--fix-unsafe on a proven write-only member', () => {
     project.createSourceFile(
       '/index.ts',
       [
-        "import { useLimiterColors } from './hook';",
-        "import type { LimiterColors } from './colors';",
-        'declare const colors: LimiterColors;',
-        'useLimiterColors();',
-        'export const read = () => colors.border;',
+        "import { useLegendColors } from './hook';",
+        "import type { LegendColors } from './colors';",
+        'declare const colors: LegendColors;',
+        'useLegendColors();',
+        'export const read = () => colors.frame;',
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    expect(memberOf(findings, 'track')?.verdict).toBe('write-only');
-    expect(memberOf(findings, 'thumb')?.verdict).toBe('write-only');
+    expect(memberOf(findings, 'stroke')?.verdict).toBe('write-only');
+    expect(memberOf(findings, 'fill')?.verdict).toBe('write-only');
 
     applyFixes(findings, { save: false, unsafe: true });
     const declaration = project.getSourceFileOrThrow('/colors.ts').getFullText();
     const producer = project.getSourceFileOrThrow('/hook.ts').getFullText();
-    expect(declaration).toContain('border: string;');
-    expect(declaration).not.toContain('track');
-    expect(declaration).not.toContain('thumb');
-    expect(producer).toContain('{ border: "c" }');
-    expect(producer).not.toContain('const track');
-    expect(producer).not.toContain('const thumb');
+    expect(declaration).toContain('frame: string;');
+    expect(declaration).not.toContain('stroke');
+    expect(declaration).not.toContain('fill');
+    expect(producer).toContain('{ frame: "c" }');
+    expect(producer).not.toContain('const stroke');
+    expect(producer).not.toContain('const fill');
   });
 
   it('takes the stale dependency entry with the local it kept alive', () => {
-    // The React shape the feature exists for: `useMemo(() => ({ track }), [track])`.
+    // The React shape the feature exists for: `useMemo(() => ({ stroke }), [stroke])`.
     // Leave the dependency entry and the local stays "used" for norefs and for
     // noUnusedLocals alike — the computation survives with no consumer and no
     // check that can ever see it again.
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(
       '/colors.ts',
-      ['export interface LimiterColors {', '  track: string;', '  thumb: string;', '}', ''].join('\n')
+      ['export interface LegendColors {', '  stroke: string;', '  fill: string;', '}', ''].join('\n')
     );
     project.createSourceFile(
       '/hook.ts',
       [
-        "import type { LimiterColors } from './colors';",
+        "import type { LegendColors } from './colors';",
         'declare function useMemo<T>(factory: () => T, deps: unknown[]): T;',
         'declare function theme(name: string): string;',
-        'export function useLimiterColors(): LimiterColors {',
-        '  const track = theme("track");',
-        '  const thumb = theme("thumb");',
-        '  return useMemo(() => ({ track, thumb }), [track, thumb]);',
+        'export function useLegendColors(): LegendColors {',
+        '  const stroke = theme("stroke");',
+        '  const fill = theme("fill");',
+        '  return useMemo(() => ({ stroke, fill }), [stroke, fill]);',
         '}',
         '',
       ].join('\n')
@@ -148,41 +148,41 @@ describe('--fix-unsafe on a proven write-only member', () => {
     project.createSourceFile(
       '/index.ts',
       [
-        "import { useLimiterColors } from './hook';",
-        "import type { LimiterColors } from './colors';",
-        'declare const colors: LimiterColors;',
-        'useLimiterColors();',
-        'export const read = () => colors.thumb;',
+        "import { useLegendColors } from './hook';",
+        "import type { LegendColors } from './colors';",
+        'declare const colors: LegendColors;',
+        'useLegendColors();',
+        'export const read = () => colors.fill;',
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    expect(memberOf(findings, 'track')?.verdict).toBe('write-only');
+    expect(memberOf(findings, 'stroke')?.verdict).toBe('write-only');
 
     applyFixes(findings, { save: false, unsafe: true });
     const producer = project.getSourceFileOrThrow('/hook.ts').getFullText();
-    expect(producer).not.toContain('const track');
-    expect(producer).toContain('useMemo(() => ({ thumb }), [thumb])');
+    expect(producer).not.toContain('const stroke');
+    expect(producer).toContain('useMemo(() => ({ fill }), [fill])');
     // And the whole chain is gone for good: a second run finds nothing left
     // to see, because nothing dead is left.
-    expect(memberOf(analyze(project), 'track')).toBeUndefined();
+    expect(memberOf(analyze(project), 'stroke')).toBeUndefined();
   });
 
   it('leaves the local alone while the factory still reads it', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(
       '/colors.ts',
-      ['export interface LimiterColors {', '  track: string;', '  thumb: string;', '}', ''].join('\n')
+      ['export interface LegendColors {', '  stroke: string;', '  fill: string;', '}', ''].join('\n')
     );
     project.createSourceFile(
       '/hook.ts',
       [
-        "import type { LimiterColors } from './colors';",
+        "import type { LegendColors } from './colors';",
         'declare function useMemo<T>(factory: () => T, deps: unknown[]): T;',
         'declare function theme(name: string): string;',
-        'export function useLimiterColors(): LimiterColors {',
-        '  const track = theme("track");',
-        '  return useMemo(() => ({ track, thumb: track.toUpperCase() }), [track]);',
+        'export function useLegendColors(): LegendColors {',
+        '  const stroke = theme("stroke");',
+        '  return useMemo(() => ({ stroke, fill: stroke.toUpperCase() }), [stroke]);',
         '}',
         '',
       ].join('\n')
@@ -190,23 +190,23 @@ describe('--fix-unsafe on a proven write-only member', () => {
     project.createSourceFile(
       '/index.ts',
       [
-        "import { useLimiterColors } from './hook';",
-        "import type { LimiterColors } from './colors';",
-        'declare const colors: LimiterColors;',
-        'useLimiterColors();',
-        'export const read = () => colors.thumb;',
+        "import { useLegendColors } from './hook';",
+        "import type { LegendColors } from './colors';",
+        'declare const colors: LegendColors;',
+        'useLegendColors();',
+        'export const read = () => colors.fill;',
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    expect(memberOf(findings, 'track')?.verdict).toBe('write-only');
+    expect(memberOf(findings, 'stroke')?.verdict).toBe('write-only');
 
     applyFixes(findings, { save: false, unsafe: true });
     const producer = project.getSourceFileOrThrow('/hook.ts').getFullText();
     // The write goes; the local and its dependency stay, because the factory
     // still reads them. A dependency is only stale once nothing reads it.
-    expect(producer).toContain('const track');
-    expect(producer).toContain('({ thumb: track.toUpperCase() }), [track])');
+    expect(producer).toContain('const stroke');
+    expect(producer).toContain('({ fill: stroke.toUpperCase() }), [stroke])');
   });
 
   it('takes the comment beside each write with the write', () => {

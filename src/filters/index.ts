@@ -39,6 +39,7 @@ const KIND_NAMES: Record<string, FindingKind> = {
   'empty-types': 'empty-type',
   dependencies: 'dependency',
   unlisted: 'unlisted',
+  misplaced: 'misplaced',
   stranded: 'stranded',
 };
 

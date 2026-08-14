@@ -7,6 +7,12 @@ export interface Specifier {
   /** Offsets of the literal, quotes included. */
   start: number;
   end: number;
+  /**
+   * True when the clause names types alone — `import type`, or braces whose
+   * every binding is one. The compiler erases those, so nothing is left at run
+   * time to need the package installed.
+   */
+  typeOnly: boolean;
 }
 
 /** Everything one source file says without a type checker being asked. */
@@ -276,8 +282,23 @@ const DECLARATION_WORDS = new Set([
   'interface',
 ]);
 
-function pushSpecifier(text: string, literal: Token, out: Specifier[]): void {
-  out.push({ text: text.slice(literal.innerStart, literal.innerEnd), start: literal.start, end: literal.end });
+function pushSpecifier(text: string, literal: Token, typeOnly: boolean, out: Specifier[]): void {
+  out.push({
+    text: text.slice(literal.innerStart, literal.innerEnd),
+    start: literal.start,
+    end: literal.end,
+    typeOnly,
+  });
+}
+
+/**
+ * One binding inside the braces, as its words. `type X` and `type X as Y` are
+ * erased; `{ type }` and `{ type as X }` bind a value that happens to be called
+ * `type`.
+ */
+function isTypeBinding(words: string[]): boolean {
+  if (words[0] !== 'type' || words.length < 2) return false;
+  return !(words[1] === 'as' && words.length === 3);
 }
 
 /**
@@ -285,21 +306,57 @@ function pushSpecifier(text: string, literal: Token, out: Specifier[]): void {
  * a module. Walks the clause grammar — bindings, commas, a brace group, `from`
  * — and stops at the first token no clause can contain, so a clause without a
  * specifier never runs into the statement that follows it.
+ *
+ * Along the way it reads whether the clause survives compilation. `import type`
+ * is erased, and so are braces whose every binding is erased; a default or
+ * namespace binding, a bare `import 'x'`, and `export *` all keep the module
+ * present at run time.
  */
 function scanClause(text: string, tokens: Token[], index: number, out: Specifier[]): number {
+  // `import type X from 'x'`, unless `type` is the binding itself, as in
+  // `import type from 'x'`, `import type, { x } from 'x'`, `import type = …`.
+  const keyword = tokens[index + 1];
+  const after = tokens[index + 2];
+  const typeKeyword =
+    keyword?.kind === 'ident' &&
+    word(text, keyword) === 'type' &&
+    !(after?.kind === 'ident' && word(text, after) === 'from') &&
+    !(after?.kind === 'punct' && (after.punct === ',' || after.punct === '='));
+
   let inBraces = false;
   let seenBraces = false;
+  /** A binding the compiler keeps: a default, a namespace, a value in braces. */
+  let valueBinding = false;
+  let bindings = 0;
+  let binding: string[] = [];
+  const endBinding = (): void => {
+    if (binding.length === 0) return;
+    bindings++;
+    if (!isTypeBinding(binding)) valueBinding = true;
+    binding = [];
+  };
+
   for (let j = index + 1; j < tokens.length; j++) {
     const token = tokens[j];
     if (token.kind === 'str') {
       // `import 'x'` names a module; a string anywhere else needs `from`.
       if (j === index + 1 || (tokens[j - 1].kind === 'ident' && word(text, tokens[j - 1]) === 'from')) {
-        pushSpecifier(text, token, out);
+        endBinding();
+        // `import 'x'` runs the module for its side effects: nothing is erased.
+        const typeOnly = j > index + 1 && (typeKeyword || (bindings > 0 && !valueBinding));
+        pushSpecifier(text, token, typeOnly, out);
       }
       return j;
     }
     if (token.kind === 'ident') {
-      if (!inBraces && DECLARATION_WORDS.has(word(text, token))) return j;
+      const name = word(text, token);
+      if (inBraces) {
+        binding.push(name);
+        continue;
+      }
+      if (DECLARATION_WORDS.has(name)) return j;
+      // `import ns from`, `import * as ns from`: a binding that outlives the compile.
+      if (name !== 'from' && name !== 'as' && !(j === index + 1 && typeKeyword)) valueBinding = true;
       continue;
     }
     if (token.kind !== 'punct') return j;
@@ -309,10 +366,15 @@ function scanClause(text: string, tokens: Token[], index: number, out: Specifier
       continue;
     }
     if (token.punct === '}' && inBraces) {
+      endBinding();
       inBraces = false;
       continue;
     }
-    if (token.punct === ',' || token.punct === '*') continue;
+    if (token.punct === ',') {
+      endBinding();
+      continue;
+    }
+    if (token.punct === '*') continue;
     return j;
   }
   return tokens.length;
@@ -326,7 +388,7 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
 
     const name = word(text, token);
     if (name === 'import' && i + 2 < tokens.length && tokens[i + 1].kind === 'punct' && tokens[i + 1].punct === '(') {
-      if (tokens[i + 2].kind === 'str') pushSpecifier(text, tokens[i + 2], out);
+      if (tokens[i + 2].kind === 'str') pushSpecifier(text, tokens[i + 2], false, out);
       i += 2;
       continue;
     }
@@ -341,7 +403,7 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
       tokens[i + 1].punct === '(' &&
       tokens[i + 2].kind === 'str'
     ) {
-      pushSpecifier(text, tokens[i + 2], out);
+      pushSpecifier(text, tokens[i + 2], false, out);
       i += 2;
     }
   }

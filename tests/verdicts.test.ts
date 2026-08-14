@@ -147,10 +147,10 @@ describe('verdicts', () => {
     project.createSourceFile(
       '/a.ts',
       [
-        'export interface IOWithSoundZones {',
+        'export interface IOWithTags {',
         '  id?: string;',
         '  name?: string;',
-        '  soundZones?: string[];',
+        '  tags?: string[];',
         '  alias?: string;',
         '}',
         '',
@@ -159,21 +159,21 @@ describe('verdicts', () => {
     project.createSourceFile(
       '/b.ts',
       [
-        'export interface IOWithSoundZones {',
+        'export interface IOWithTags {',
         '  id: string;',
-        '  soundZones?: string[];',
+        '  tags?: string[];',
         '}',
-        'export const pick = (v: IOWithSoundZones) => v.id + (v.soundZones ?? []).length;',
+        'export const pick = (v: IOWithTags) => v.id + (v.tags ?? []).length;',
         '',
       ].join('\n')
     );
     project.createSourceFile(
       '/main.ts',
       [
-        "import type { IOWithSoundZones } from './a';",
+        "import type { IOWithTags } from './a';",
         "import { pick } from './b';",
-        'declare const io: IOWithSoundZones;',
-        "export const run = () => pick({ id: io.id ?? '', soundZones: io.soundZones }) + (io.alias ?? '');",
+        'declare const io: IOWithTags;',
+        "export const run = () => pick({ id: io.id ?? '', tags: io.tags }) + (io.alias ?? '');",
         '',
       ].join('\n')
     );
@@ -181,7 +181,7 @@ describe('verdicts', () => {
 
     const name = findings.find(f => f.kind === 'member' && f.name === 'name');
     expect(name?.verdict).toBe('shadowed');
-    expect(name?.evidence).toContain('IOWithSoundZones');
+    expect(name?.evidence).toContain('IOWithTags');
     expect(name?.evidence).toContain('b.ts');
   });
 

@@ -28,6 +28,15 @@ describe('unused files', () => {
     expect(reportedIn('index.ts')).toEqual([]);
   });
 
+  it('keeps a file alive that only a side-effect import reaches', () => {
+    // A file with no import and no export of its own is a script, and the type
+    // system links a specifier only to a module — so `getReferencedSourceFiles`
+    // drops `import './registered'` and the file looks unreached. tsc compiles
+    // it without complaint, so calling it dead is a false positive at the
+    // highest confidence there is.
+    expect(reportedIn('registered.ts')).toEqual([]);
+  });
+
   it('treats test and config files as their own entry points', () => {
     expect(reportedIn('harness.config.ts')).toEqual([]);
   });

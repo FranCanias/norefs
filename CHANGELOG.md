@@ -4,6 +4,294 @@ norefs follows [semver](https://semver.org). Before 1.0.0, minor versions
 (0.x.0) may change output formats, flag semantics, and verdicts; patch
 versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 
+## 0.6.0 — 2026-08-14
+
+A property can be read by the type system and never touched at runtime. Every
+such property was reported `dead`, with the evidence "no references anywhere" —
+and there were references. They were type references. This release counts them.
+
+It also stops making you keep two lists your build already keeps — the entry
+points and, in a monorepo, the packages — opens the stranded-handler check to
+boundaries beyond Electron, starts answering two questions about `package.json`
+it used to decline, adds a stricter question to ask of a repository, and fixes a
+`dead file` that a side-effect import should always have prevented.
+
+### Fixed
+
+- **A name written in a type-level match counts as a read.** Three positions,
+  one rule: the name is doing work, on both sides of the match.
+
+  ```ts
+  type OnlyDaily = Extract<Schedule, { type: 'DAILY' }>;      // `type` picks the branch
+  function hasId(r: Recipe): r is Recipe & { id: string };    // `id` is what narrows
+  pickFirst<Row>(rows);   // Row fits `T extends { key: string }` by having `key`
+  ```
+
+  Each of the three reported the named property `dead` on the filter *and* on
+  the type the filter matches. Both halves were false, and the second half was
+  the dangerous one: delete `type` from `Schedule`'s branches and the filter
+  matches nothing; delete `key` from `Row` and the file stops compiling.
+
+  The credit now goes both ways. A property named in a written type literal is
+  kept on the literal and on the declarations behind the type it is matched
+  against — a conditional type's `extends` clause, an alias whose body is a
+  conditional (`Extract` and `Exclude` resolve through their own definitions, so
+  any conditional alias works, yours included), a predicate's asserted type, and
+  a written type argument against a literal constraint.
+
+  Only the names actually written are credited. The members beside them are
+  reported exactly as before: `Weekly.day` is still dead next to a live
+  `Weekly.type`, and `Row.deadRank` is still dead next to a constrained
+  `Row.key`.
+
+  An inferred type argument — `pickFirst(rows)` — never needed a rule. The value
+  goes into the call whole, and the escape check has always stopped tracking
+  members there. This is written down because it was checked, not assumed.
+
+- **A write inside a dead file is no longer cited as proof.** A member written
+  only from a file the same report calls dead was reported `write-only`, with
+  evidence naming that file — `a typed write at fixtures.ts:1 feeds this member
+  — proven, never read`. The report had already said that code was going away,
+  so the proof pointed at a corpse. Those writes no longer count, and the member
+  gets the `dead` verdict it earned. `--production` made this easy to see,
+  because it creates dead files where a normal run had none, but the same
+  evidence could always be produced.
+
+- **A side-effect import keeps its file alive.** `import './routes'` marked its
+  target used only when that target was a *module*. A file with no import and no
+  export of its own is a script, and the type system links a specifier only to a
+  module — so the file looked unreached and was reported `dead file`, the
+  highest-confidence verdict there is. That shape is not exotic: it is how a
+  route table, a polyfill, and a registration side effect are written, and `tsc`
+  compiles it without a word.
+
+  The two pipelines disagreed about it, which is how it surfaced: `norefs --only
+  files` reported nothing while a full `norefs` run called the same file dead.
+  The fast path had always resolved specifiers with the compiler's own resolver,
+  which holds no opinion about modules. The full run now asks it for the
+  specifiers the type system dropped, and the two agree.
+
+  The README already promised this behaviour under "Remaining blind spots". It
+  is now true.
+
+### Added
+
+- **The entry points come from the build, not from a list you keep.** Until now
+  norefs knew three: `--entry`, `package.json`'s `main`/`bin`/`exports`, and the
+  `index`/`main`/`cli` convention. Everything else was yours to remember — the
+  Vite input, the Vitest setup file, the HTML the bundler starts from — and a
+  hand-kept copy of the build's own list is the copy that goes stale when the
+  build changes. On a small Vite-shaped app, 0.5.0 reported four dead files and
+  three of them were alive.
+
+  Your build already wrote the list down. norefs now reads it:
+
+  | Declared in | What is read |
+  | --- | --- |
+  | `package.json` scripts | any argument naming a project file — `tsx src/server.ts`, `--config=playwright.config.ts` |
+  | `*.html` | every `<script src>`; a leading `/` means the package root, as bundlers read it |
+  | `*.config.*` | every quoted path that lands on a project file |
+
+  No config is executed and no tool is special-cased. A config is read as text,
+  and a path string that names a file this project holds is taken at its word.
+  One rule covers Vite's `input`, Vitest's `setupFiles`, Playwright's
+  `globalSetup` and the same thing in a tool nobody has written a plugin for.
+  A string that lands on nothing is dropped, which is what makes the loose
+  reading safe: the failure mode is a missed entry point, never an invented one.
+  `node_modules` and build output — `dist`, `build`, `out`, `coverage` — are
+  never walked, so a stale config in `dist/` cannot silence a finding.
+
+- **`norefs entries` prints every entry point and what named it.**
+
+  ```
+  src/boot.tsx    —  <script src> in index.html
+  src/main.ts     —  index/main/cli beside a tsconfig
+  src/preload.ts  —  a path named in vite.config.ts
+  src/server.ts   —  package.json scripts.serve
+  ```
+
+  Discovery that cannot be inspected is discovery nobody should trust. An entry
+  point makes a file used and its exports public API — a wrong one hides real
+  findings and leaves no trace of having done it. This is the trace. It reads
+  the text alone, so the audit needs no type checker and costs about a tenth of
+  a second.
+
+- **`--production` analyzes the shipping code path alone.** Every finding is
+  relative to a question, and the default one — "does anything here use it?" —
+  counts the tests. That is why `test-only` exists. `--production` asks the
+  stricter one: what is left standing if the tests were not there at all?
+
+  Test, spec, stories, bench and config files, and everything under a test
+  directory, are treated as absent. Three things follow, and they are the whole
+  definition: they stop keeping code reachable, so a file only a test imports
+  becomes a `dead file`; their references stop counting, so `test-only` becomes
+  plain `dead`; and they report nothing of their own, because they are not part
+  of the question. `devDependencies` and the misplaced-dependency check fall
+  outside it too — one exists to build and test, the other needs both halves of
+  the code to decide anything.
+
+  The evidence says which question was asked. A `dependencies` entry the tests
+  import and the shipping path does not is dead here, and the line reads `no
+  file on the shipping path imports it and no script runs it` — the run skipped
+  half the source tree and does not claim otherwise.
+
+  It never combines with `--fix`, and that is a refusal rather than an
+  oversight: a production finding is dead to the shipping path and may be alive
+  in the tests the run ignored. Deleting it breaks them. Exit code 2, for the
+  same reason `test-only` findings have never been fixable.
+
+  Available as `--production`, as `"production": true` in the config file, and
+  `--no-production` says no to a project that said yes.
+
+- **A script says what a package is for, and norefs reads it.** `"build": "tsc
+  -p tsconfig.json"` is TypeScript being used, and no import will ever say so.
+  Because of that, devDependencies were counted as listed and never reportable —
+  norefs sidestepped the question instead of answering it, and could not tell
+  you a devDependency was unused at all.
+
+  Now each script's tokens are matched against the packages the manifest lists:
+  by name, and by the binaries each installed package declares in its own `bin`
+  field. Nothing guesses which tool owns which command — `tsc` maps to
+  `typescript` because TypeScript's manifest says so, and `biome` maps to
+  `@biomejs/biome` for the same reason, not because it is the tail of the scoped
+  name. Unused devDependencies are reported, and a `dependencies` entry that
+  only a script runs stops being a false positive.
+
+  The evidence line grew a clause to match: `no source file imports it and no
+  script runs it`. And a package that is not installed has no binaries to read,
+  so norefs will not call a devDependency unused — the claim waits for the
+  evidence rather than guessing.
+
+- **A dependency in the wrong section is a finding.** Where an entry sits is a
+  claim about when it is needed, and both directions break something:
+
+  ```
+  package.json
+    9:5   `only-in-tests` is in dependencies: only test, spec, story, bench, and
+          config files import it, so it ships for nothing
+    15:5  `vitest` is in devDependencies: production code imports it, so an
+          install without dev dependencies is missing it
+  ```
+
+  The second is the expensive one: `npm install --omit=dev` and it is gone at
+  run time.
+
+  Only an import that survives compilation is asked the question. `import type
+  { Recipe } from 'shapes'` is erased, so a devDependency the shipping code
+  reads for types alone is already where it belongs — moving it would ship a
+  package the build output never loads. The erased import still counts as the
+  package being used, so nothing calls it dead either.
+
+  New kind `misplaced`, reportable on its own with `--only misplaced` — and like
+  the other three import-graph kinds, it needs no type checker, so asking for it
+  alone stays in the fast path.
+
+- **`--fix-unsafe` edits package.json.** An unused entry is removed, a misplaced
+  one is moved, as text — the key order, the indentation, and every line the
+  edit does not name survive, because a manifest is a file people read and write
+  by hand.
+
+  It needs `--fix-unsafe` rather than `--fix` for an honest reason. The rule
+  everywhere else is that nothing reaches disk unless it verified, and the
+  probe that does the verifying is a type check — which does not read a
+  dependency list. So these edits sit outside the campaign, `--verify-command`
+  is the probe that can actually judge them, and a red result holds the manifest
+  edits back *on their own*: the source fixes that did verify still land. When
+  no command is given, the `Verified:` line says what the type check could not
+  see rather than implying cover it never had.
+
+  An entry that does not sit on a line of its own is refused and named. These
+  edits move whole lines, and saying "not found" about an entry that is plainly
+  there would be a false reason.
+
+- **A workspace names its own packages.** A monorepo meant repeating `--project`
+  once per package, which is a copy of a list the package manager already has —
+  and the copy is what goes stale when someone adds a package. With no `-p` and
+  no `project` key, norefs now reads `pnpm-workspace.yaml` or the `workspaces`
+  list in `package.json`, and analyzes every declared package that has a
+  `tsconfig.json`:
+
+  ```
+  $ norefs
+  2 workspace package(s) from pnpm-workspace.yaml; skipped tools/jsonly — no tsconfig.json
+  ```
+
+  Negated globs are honoured. A declared package with no tsconfig is named
+  rather than dropped quietly: nothing analyzes it, and a run that silently
+  covers less than the workspace is a run whose findings mean less than they
+  look like they mean. An explicit `-p` is the list you meant, so it turns
+  discovery off.
+
+  The reader takes no YAML dependency — `packages:` holds a list of globs in one
+  of two documented forms, and one key is what gets read. As with the entry
+  points, nothing is executed and a glob that matches no package directory is
+  dropped, so the failure mode is a package nobody analyzed rather than a
+  project nobody has.
+
+- **`boundaries` pairs senders with handlers across any boundary you name.**
+  The stranded-handler check is the most distinctive thing norefs does, and it
+  only ever fired for one shape: a callee your project's own `.d.ts` declares.
+  That is the Electron preload bridge, and it stays automatic. Everything else
+  — an HTTP route, a socket bus, a job queue — belongs to a library, and no
+  shape in the source says which library pairs `fetch` with `app.get` rather
+  than running the handler itself. Guessing there would invent findings against
+  live code, so norefs asks instead:
+
+  ```json
+  "boundaries": [
+    { "send": "fetch", "handle": ["app.get", "app.post"] },
+    { "send": "socket.emit", "handle": "socket.on" }
+  ]
+  ```
+
+  ```
+  src/client.ts
+    12:9  dead property `saveLegacy` — deleting it strands the far side of
+          `'/api/recipes/legacy'` at src/routes.ts:5
+  src/routes.ts
+    5:10  stranded handler for `'/api/recipes/legacy'`: its only sender is
+          `saveLegacy` at src/client.ts:12, which this report says to delete
+  ```
+
+  Each entry pairs only with itself, both sides are required — a boundary with
+  one side pairs nothing, and a config that looks like it works is worse than
+  none — and a name matches the whole callee or its tail, so `app.get` covers
+  `this.app.get` without covering `getApp`. Everything the check already
+  guaranteed still holds: one surviving sender and nothing is stranded.
+
+  Routes match by shape, so the holes the two sides fill differently line up:
+  ``fetch(`/recipes/${id}/audit`)`` pairs with `app.get('/recipes/:id/audit')`.
+  Matching the static head alone would have been simpler and wrong — it folds
+  `/recipes` and `/recipes/:id` into one channel, and the live sender of the
+  list route then hides the stranded handler of the item route. That is the
+  most common pair in any REST API. The report never shows the normalized
+  form: a reader goes looking for the channel, so the channel it prints is the
+  one they wrote.
+
+### Changed
+
+- **A baseline written before this release no longer matches its dependency
+  entries.** A dependency finding now carries the manifest section it was found
+  in, so `--fix-unsafe` knows where the entry it moves is written. That section
+  is part of the key a baseline matches on, so an entry recorded as `""` and a
+  finding reported as `"dependencies"` are two different things to it: every
+  baselined dead dependency comes back as new *and* gets reported stale in the
+  same run — `--ratchet` drops it. Run `norefs --baseline` once to refresh the
+  file. Nothing else about a baseline changed, and no other kind is affected.
+- `--entry` is still there and still merges with the config file. It is now for
+  what nothing declares in writing — a file loaded by a name the code computes
+  at run time. Check `norefs entries` before reaching for it.
+- Both pipelines answered "what is an entry point?" with their own copy of the
+  same code, and only one copy was ever extended. They now share one.
+- A tsconfig that does not exist now exits 2 with `error: no tsconfig at …`. It
+  used to arrive as a raw stack trace from inside TypeScript, which the flag
+  reference never described and no exit code matched.
+- The filesystem the readers share moved out of the entry-point module, and the
+  two walks stopped sharing a skip list they never agreed on. Hunting tool
+  configs skips build output; hunting workspace packages must not, because a
+  package legitimately called `build` is still a package. Its own test caught
+  that one.
+
 ## 0.5.0 — 2026-08-14
 
 0.4.0 gave the fixer a rule: a fix finishes the finding it acts on, or says

@@ -175,7 +175,7 @@ describe('the validation rule: a name match must survive the type its write feed
     project.createSourceFile(
       '/app.ts',
       [
-        'class SDKService {',
+        'class PantryService {',
         '  reset(): void {}',
         '  ping(): void {}',
         '}',
@@ -185,7 +185,7 @@ describe('the validation rule: a name match must survive the type its write feed
         '  return wrap(() => ({ reset }));',
         '};',
         'export const submit = () => useForm().reset();',
-        'export const keep = () => new SDKService().ping();',
+        'export const keep = () => new PantryService().ping();',
         '',
       ].join('\n')
     );

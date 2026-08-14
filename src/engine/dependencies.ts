@@ -2,6 +2,8 @@ import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
 import type { Finding } from '../types';
+import { isHarnessFile } from './reachability';
+import { commandTokens, scriptsOf } from './scripts';
 
 const BUILTINS = new Set(builtinModules);
 
@@ -12,6 +14,8 @@ export interface DependencyUse {
   text: string;
   /** Offset of the literal, for the finding's position and its suppression check. */
   start: number;
+  /** The compiler erases this import, so it needs nothing installed at run time. */
+  typeOnly: boolean;
 }
 
 /** What the checks need to read the manifests and place a finding. */
@@ -26,11 +30,23 @@ interface Manifest {
   filePath: string;
   dir: string;
   text: string;
-  /** Names in "dependencies" — the only section reported when unused. */
+  /** Names in "dependencies": what the package ships with. */
   dependencies: string[];
+  /** Names in "devDependencies": what building and testing it needs. */
+  devDependencies: string[];
   /** Names in every dependency section; imports of these are never unlisted. */
   listed: Set<string>;
   used: Set<string>;
+  /** Names imported from a file that is not a test, spec, story, bench, or config. */
+  usedInProduction: Set<string>;
+  /**
+   * The same, minus the imports the compiler erases. A package a shipped file
+   * reads for types alone is absent from the build output, so an install
+   * without it still runs.
+   */
+  neededAtRuntime: Set<string>;
+  /** Names a script runs, matched against what each package declares as its binary. */
+  usedByScript: Set<string>;
 }
 
 /**
@@ -46,11 +62,22 @@ interface Manifest {
 export function analyzeDependencies(
   uses: DependencyUse[],
   rootDirs: string[],
-  scopeDir: string | undefined,
-  ignore: string[],
-  aliasPatterns: string[],
+  options: {
+    scopeDir?: string;
+    /** Dependency names or globs never reported. */
+    ignore: string[];
+    /** tsconfig `paths` patterns: an alias into project code, never a package. */
+    aliasPatterns: string[];
+    /**
+     * The shipping code path alone. A harness file is absent, so what it
+     * imports is not usage — and devDependencies, which exist to build and
+     * test, are outside the question this run is asking.
+     */
+    production?: boolean;
+  },
   context: DependencyContext
 ): Finding[] {
+  const { scopeDir, ignore, aliasPatterns, production } = options;
   const manifests: Manifest[] = [];
   for (const dir of rootDirs) {
     const manifest = readManifest(context, dir);
@@ -72,11 +99,20 @@ export function analyzeDependencies(
   const reportedUnlisted = new Set<string>();
 
   for (const use of uses) {
+    // A production run treats the harness as absent, so its imports are not
+    // usage — which also makes every use that gets this far a shipped one.
+    const shipped = !isHarnessFile(use.filePath, rootDirs);
+    if (production && !shipped) continue;
     const specifier = stripQuerySuffix(use.text);
     if (matchesAlias(specifier, aliasPatterns)) continue;
     const name = packageName(specifier);
     if (!name) continue;
-    for (const owner of owningManifests(use.filePath, manifests)) owner.used.add(name);
+    for (const owner of owningManifests(use.filePath, manifests)) {
+      owner.used.add(name);
+      if (!shipped) continue;
+      owner.usedInProduction.add(name);
+      if (!use.typeOnly) owner.neededAtRuntime.add(name);
+    }
 
     if (listedAnywhere.has(name) || listedAnywhere.has(typesPackage(name))) continue;
     if (reportedUnlisted.has(name) || isIgnored(name, ignore)) continue;
@@ -96,23 +132,72 @@ export function analyzeDependencies(
   }
 
   for (const manifest of manifests) {
-    for (const name of manifest.dependencies) {
-      if (name.startsWith('@types/') || isIgnored(name, ignore) || manifest.used.has(name)) continue;
-      const { line, column } = manifestPosition(manifest.text, name);
-      findings.push({
-        kind: 'dependency',
-        filePath: manifest.filePath,
-        line,
-        column,
-        name,
-        context: '',
-        anonymous: false,
-        verdict: 'dead',
-        evidence: 'no source file imports it',
-      });
+    const sections = production ? (['dependencies'] as const) : (['dependencies', 'devDependencies'] as const);
+    for (const section of sections) {
+      for (const name of manifest[section]) {
+        // @types packages are consumed by the compiler, which no import shows.
+        if (name.startsWith('@types/') || isIgnored(name, ignore)) continue;
+        const at = manifestPosition(manifest.text, section, name);
+        const place = (finding: Omit<Finding, 'filePath' | 'line' | 'column' | 'name' | 'context' | 'anonymous'>) =>
+          findings.push({ ...finding, filePath: manifest.filePath, ...at, name, context: section, anonymous: false });
+
+        const imported = manifest.used.has(name);
+        if (!imported && !manifest.usedByScript.has(name)) {
+          if (!unusedIsProvable(manifest, name, section, context)) continue;
+          place({
+            kind: 'dependency',
+            verdict: 'dead',
+            // A production run never looked at the harness, so it cannot say
+            // the whole source tree is silent — only the half it read.
+            evidence: production
+              ? 'no file on the shipping path imports it and no script runs it'
+              : 'no source file imports it and no script runs it',
+          });
+          continue;
+        }
+
+        // Which section a package sits in is a claim about when it is needed.
+        // Getting it wrong one way ships a broken install; the other way ships
+        // weight nobody uses. A production run cannot say: it never looked at
+        // the half of the code that would decide it.
+        if (production) continue;
+        // Only a runtime import breaks the install. `import type` is erased, so
+        // a devDependency the shipped code reads for types alone is where it
+        // belongs — and moving it would ship weight the output never loads.
+        if (section === 'devDependencies' && manifest.neededAtRuntime.has(name)) {
+          place({
+            kind: 'misplaced',
+            evidence: 'production code imports it, so an install without dev dependencies is missing it',
+          });
+        } else if (section === 'dependencies' && imported && !manifest.usedInProduction.has(name)) {
+          place({
+            kind: 'misplaced',
+            evidence: 'only test, spec, story, bench, and config files import it, so it ships for nothing',
+          });
+        }
+      }
     }
   }
   return findings;
+}
+
+/**
+ * Whether "nothing uses it" is something this run can actually establish.
+ *
+ * A package's binaries live in its own manifest, and a package that is not
+ * installed has none to read — so a devDependency run by a command whose name
+ * differs from the package's would look unused when it is not. `dependencies`
+ * has been reported without that evidence since the check existed, and the
+ * shape it would miss (a build tool shipped to consumers) barely occurs. The
+ * new claim is the one that waits for proof.
+ */
+function unusedIsProvable(
+  manifest: Manifest,
+  name: string,
+  section: 'dependencies' | 'devDependencies',
+  context: DependencyContext
+): boolean {
+  return section === 'dependencies' || installedManifest(manifest.dir, name, context) !== undefined;
 }
 
 function readManifest(context: DependencyContext, dir: string): Manifest | undefined {
@@ -138,7 +223,84 @@ function readManifest(context: DependencyContext, dir: string): Manifest | undef
     ...names('peerDependencies'),
     ...names('optionalDependencies'),
   ]);
-  return { filePath, dir, text, dependencies: names('dependencies'), listed, used: new Set() };
+  const manifest: Manifest = {
+    filePath,
+    dir,
+    text,
+    dependencies: names('dependencies'),
+    devDependencies: names('devDependencies'),
+    listed,
+    used: new Set(),
+    usedInProduction: new Set(),
+    neededAtRuntime: new Set(),
+    usedByScript: new Set(),
+  };
+  collectScriptUse(manifest, sections, context);
+  return manifest;
+}
+
+/**
+ * The packages this manifest's own scripts run.
+ *
+ * `"build": "tsc -p tsconfig.json"` uses TypeScript, and no import says so —
+ * which is why a tool that only reads the import graph has to treat every
+ * devDependency as untouchable. The scripts already name it, so norefs reads
+ * them: a token that matches a listed package's name, or a binary that package
+ * declares, is that package being used.
+ *
+ * Every binary comes from the installed package's own manifest, so nothing here
+ * is a guess about which tool owns which command. What is not installed has no
+ * declared binaries to read, and a package whose binaries are unknown is never
+ * called unused — see `unusedIsProvable`.
+ */
+function collectScriptUse(manifest: Manifest, data: Record<string, unknown>, context: DependencyContext): void {
+  const scripts = scriptsOf(data);
+  if (scripts.length === 0) return;
+
+  const owner = new Map<string, string>();
+  for (const name of manifest.listed) {
+    owner.set(name, name);
+    for (const binary of declaredBinaries(manifest.dir, name, context)) owner.set(binary, name);
+  }
+
+  for (const { command } of scripts) {
+    for (const token of commandTokens(command)) {
+      const name = owner.get(token);
+      if (name) manifest.usedByScript.add(name);
+    }
+  }
+}
+
+/**
+ * The command names an installed package declares, from its own package.json
+ * `bin` field. Node hoists, so the search climbs the way a require would.
+ */
+function declaredBinaries(fromDir: string, name: string, context: DependencyContext): string[] {
+  const data = installedManifest(fromDir, name, context);
+  if (data === undefined) return [];
+  const bin = (data as { bin?: unknown }).bin;
+  // A string `bin` is published under the package's own unscoped name.
+  if (typeof bin === 'string') return [name.startsWith('@') ? name.slice(name.indexOf('/') + 1) : name];
+  if (typeof bin === 'object' && bin !== null) return Object.keys(bin);
+  return [];
+}
+
+/** An installed package's own manifest, or nothing when it is not installed. */
+function installedManifest(fromDir: string, name: string, context: DependencyContext): unknown {
+  for (let dir = fromDir; ; dir = path.dirname(dir)) {
+    const filePath = path.join(dir, 'node_modules', name, 'package.json');
+    // readFile throws on a path that is not there; fileExists is the guard
+    // every other reader in this file uses.
+    const text = context.fileExists(filePath) ? context.readFile(filePath) : undefined;
+    if (text !== undefined) {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return undefined;
+      }
+    }
+    if (dir === path.dirname(dir)) return undefined;
+  }
 }
 
 /** Manifests whose directory contains the file; every manifest when none does. */
@@ -192,9 +354,16 @@ function isIgnored(name: string, ignore: string[]): boolean {
   return ignore.some(pattern => minimatch(name, pattern));
 }
 
-function manifestPosition(text: string, name: string): { line: number; column: number } {
+/**
+ * Where a name sits inside a section. The search starts at the section's own
+ * key, because a package name also appears in the script that runs it, and a
+ * finding about `devDependencies` that points into `scripts` is a finding
+ * pointing at the wrong line.
+ */
+function manifestPosition(text: string, section: string, name: string): { line: number; column: number } {
   const lines = text.split('\n');
-  const index = lines.findIndex(line => line.includes(`"${name}"`));
+  const from = lines.findIndex(line => line.includes(`"${section}"`));
+  const index = lines.findIndex((line, at) => at >= Math.max(from, 0) && line.includes(`"${name}"`));
   if (index === -1) return { line: 1, column: 1 };
   return { line: index + 1, column: lines[index].indexOf(`"${name}"`) + 1 };
 }

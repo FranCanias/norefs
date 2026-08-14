@@ -27,13 +27,13 @@ describe('formatGitHub', () => {
 
   it('spells out a soft verdict with its evidence', () => {
     const finding = {
-      ...make('member', 'zoneId', 'interface `EdgeData`'),
+      ...make('member', 'stepId', 'interface `EdgeData`'),
       verdict: 'shadowed' as const,
-      evidence: 'a structural twin `LocalEdgeData` (src/SignalEdge.tsx:12) reads `zoneId`',
+      evidence: 'a structural twin `LocalEdgeData` (src/StepLink.tsx:12) reads `stepId`',
     };
     const output = formatGitHub([finding], '/proj');
     expect(output).toContain(
-      'property `zoneId` in interface `EdgeData` is unread here, but a structural twin `LocalEdgeData` (src/SignalEdge.tsx:12) reads `zoneId` — the finding is the duplication'
+      'property `stepId` in interface `EdgeData` is unread here, but a structural twin `LocalEdgeData` (src/StepLink.tsx:12) reads `stepId` — the finding is the duplication'
     );
     expect(output).toContain('1 finding: 1 shadowed by a duplicate type');
   });

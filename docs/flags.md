@@ -8,19 +8,24 @@ One rule holds everywhere: **nothing reaches disk unless it verified.** Every
 fix is applied to an in-memory copy of the project first. The files on disk
 change only after the probe is green.
 
+`package.json` is the one file no probe reads by default — the type checker has
+no opinion about a dependency list. So those edits need `--fix-unsafe`, and
+`--verify-command` is the probe that can actually judge them.
+
 ## The flags that touch files
 
 | Flag | What it writes |
 |---|---|
 | `--fix` | Source files: dead code removed, over-exported declarations de-exported |
-| `--fix-unsafe` | The same, plus write-only, contract, and shadowed findings — and the proven writes behind them |
+| `--fix-unsafe` | The same, plus write-only, contract, and shadowed findings — and the proven writes behind them. Also `package.json`: an unused entry is removed, a misplaced one is moved |
 | `--baseline` | `norefs-baseline.json` in the current directory. Never touches source |
 | `--ratchet` | `norefs-baseline.json`, when entries went stale. Never touches source |
 | `--export md\|json` | `norefs-findings.md` or `norefs-findings.json`. Never touches source |
+| `norefs init` | `norefs.config.json`, and never over an existing one. Never touches source |
 
 Everything else — `--dry-run`, `--no-verify`, `--verify-command`,
 `--allow-dirty`, `--scope`, `--only`, `--entry`, `--watch`, `--explain`,
-`--anon`, `--reporter` — writes no file of its own.
+`--anon`, `--production`, `--reporter` — writes no file of its own.
 
 ## Which flags belong in norefs.config.json
 
@@ -32,18 +37,21 @@ running — and that is a decision per run.
 | Setting (config key) | Action (flag only) |
 |---|---|
 | `-p/--project`, `--entry`, `--only`, `--scope` | `--fix`, `--fix-unsafe` |
-| `--reporter`, `--anon`, `--explain` | `--baseline`, `--ratchet` |
-| `ignore`, `ignoreDependencies` (no flag) | `--export`, `--dry-run`, `--watch` |
+| `--reporter`, `--anon`, `--explain`, `--production` | `--baseline`, `--ratchet` |
+| `ignore`, `ignoreDependencies`, `boundaries` (no flag) | `--export`, `--dry-run`, `--watch` |
 
 A flag passed on the run wins over the file, except `--entry`, which merges.
-`--no-anon` and `--no-explain` are how a run says no to a project that said
-yes. An action key in the config file is a usage error, exit code 2.
+`--no-anon`, `--no-explain` and `--no-production` are how a run says no to a
+project that said yes. An action key in the config file is a usage error, exit code 2.
 
 `--no-verify`, `--verify-command` and `--allow-dirty` shape what `--fix` does
 rather than what a run finds, so they stay with the action and are flags only.
 
 ## The order a fixing run happens in
 
+0. **Projects.** With no `-p` and no `project` key, a `pnpm-workspace.yaml` or a
+   `workspaces` list names them; otherwise it is `./tsconfig.json`. A tsconfig
+   that does not exist is a usage error, exit code 2.
 1. **Dirty check.** With `--fix` and no `--dry-run`, a tree with uncommitted
    changes stops the run. Pass `--allow-dirty` to go ahead anyway.
 2. **Analysis**, shaped by `--only`, `--scope`, `--entry`, and the config file.
@@ -59,7 +67,12 @@ rather than what a run finds, so they stay with the action and are flags only.
    would have introduced, and the loop tries again without it. A fix the editor
    refuses gets the same treatment without the bisection — it names itself by
    throwing — so one impossible edit never takes the run down with it.
-7. **Writing.** Only now, and only the files a verified result touched. With
+7. **The manifest.** `--fix-unsafe` edits `package.json` after the campaign, not
+   inside it: no type check reads a manifest, so the campaign's probe has
+   nothing to say about these edits. When `--verify-command` is set it runs once
+   more with the manifest applied, and a red result holds the manifest edits
+   back on their own — the verified source fixes still land.
+8. **Writing.** Only now, and only the files a verified result touched. With
    `--dry-run`, this step prints a unified diff instead.
 
 ## What a fix is allowed to leave behind
@@ -81,9 +94,12 @@ A fix finishes the finding it acts on, or refuses it:
   kept and the write is named on stderr.
 - **Prose is never edited.** A comment that survived next to a fix is listed
   as a location to reread.
-- **Files, namespace findings, emptied types, and dependencies** are never
-  fixed. Nor are `test-only` findings: the fix is deleting the tests too, and
-  only you do that.
+- A **`package.json` entry** is retired or relocated as text, so the key order,
+  the indentation, and everything the edit does not name survive. An entry that
+  does not sit on a line of its own is refused and named, because these edits
+  move whole lines.
+- **Files, namespace findings, and emptied types** are never fixed. Nor are
+  `test-only` findings: the fix is deleting the tests too, and only you do that.
 
 ## Combinations worth knowing
 
@@ -93,7 +109,7 @@ A fix finishes the finding it acts on, or refuses it:
 | `--fix --dry-run` | Prints the diff, writes nothing, skips the dirty check. Exit code 1 |
 | `--fix --no-verify` | No type check. Fixes are written as applied — the one mode where an unverified edit reaches disk |
 | `--no-verify --verify-command "npm test"` | The type check is skipped, your command still runs and still gates the write |
-| `--fix --verify-command "npm test"` | Both probes, type check first. The only way to catch runtime-only reads of a deleted member |
+| `--fix --verify-command "npm test"` | Both probes, type check first. The only way to catch runtime-only reads of a deleted member — and the only probe that can judge a `package.json` edit |
 | `--fix` with a baseline file | Fixes new findings only. Baselined ones stay untouched |
 | `--baseline --fix` | The baseline wins: the file is written, nothing is fixed |
 | `--baseline --ratchet` | `--baseline` rewrites the file from scratch, so `--ratchet` has nothing to drop |
@@ -101,6 +117,8 @@ A fix finishes the finding it acts on, or refuses it:
 | `--fix --only members` | Fixes members only. `--only` prunes the analysis, so the other kinds are never even found |
 | `--scope <path>` with a stranded handler | The handler is reported only when it lives under the scope. The note on the in-scope wrapper still names its file and line |
 | `--fix` with an over-exported bridge wrapper | Nothing is stranded. The keyword goes, the declaration stays, and every sender inside it keeps sending |
+| `--production --fix` | Refused. Exit code 2: a production finding may be alive in the tests the run ignored |
+| `--production --baseline` | Fine. A baseline of the strict cut is a useful thing to hold |
 | `--watch --fix` / `--watch --baseline` | Refused. Exit code 2 |
 | `--dry-run` without `--fix` | Refused. Exit code 2 |
 | `--fix` on a dirty tree | Refused unless `--allow-dirty` or `--dry-run`. Exit code 2 |
@@ -111,7 +129,10 @@ A fix finishes the finding it acts on, or refuses it:
 |---|---|
 | 0 | No findings; or a baseline was written; or `--fix` ran and saved |
 | 1 | Findings remain; a `--dry-run` had changes to show; verification failed with no culprit to isolate |
-| 2 | A usage error: bad flag combination, unreadable config, dirty tree |
+| 2 | A usage error: bad flag combination, unreadable config, missing tsconfig, dirty tree, unknown command |
+
+`norefs init` and `norefs entries` report, they do not judge: both exit 0
+whenever they ran, however many entry points there were.
 
 Code 1 on a run that found something is what linters do, and what norefs has
 always done. A test pins all three codes, so they cannot change without saying

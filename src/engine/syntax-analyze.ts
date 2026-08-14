@@ -4,6 +4,9 @@ import type { ts } from 'ts-morph';
 import type { Finding, FindingKind } from '../types';
 import type { DependencyUse } from './dependencies';
 import { analyzeDependencies } from './dependencies';
+import type { EntryPoint } from './entry-points';
+import { packageEntryPoints } from './entry-points';
+import { diskFileSystem } from './file-system';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
@@ -11,7 +14,7 @@ import { projectFilePaths, SourceIndex } from './sources';
 
 /** The findings the syntax alone decides — no type checker is involved. */
 // norefs-ignore: the test suite imports it, outside this tsconfig
-export const SYNTAX_KINDS: FindingKind[] = ['file', 'dependency', 'unlisted'];
+export const SYNTAX_KINDS: FindingKind[] = ['file', 'dependency', 'unlisted', 'misplaced'];
 
 /** True when every requested kind can be answered without a type checker. */
 export function isSyntaxOnly(kinds: FindingKind[] | undefined): boolean {
@@ -24,6 +27,8 @@ interface SyntaxOptions {
   rootDirs?: string[];
   packages?: PackageConfig[];
   ignoreDependencies?: string[];
+  /** Treat harness files as absent: the shipping code path alone. */
+  production?: boolean;
 }
 
 /**
@@ -50,7 +55,9 @@ export function analyzeSyntax(
   const entries = [
     ...(options.entries ?? []),
     ...rootDirs.flatMap(dir =>
-      manifestEntries(dir, fallbackRoot, optionsForDir(packages, dir) ?? fallbackOptions, known)
+      packageEntryPoints(dir, fallbackRoot, optionsForDir(packages, dir) ?? fallbackOptions, known, diskFileSystem).map(
+        entry => entry.filePath
+      )
     ),
   ];
 
@@ -58,7 +65,7 @@ export function analyzeSyntax(
     filePaths,
     filePath =>
       isEntryFile(filePath, rootDirs, entries) ||
-      isHarnessFile(filePath, rootDirs) ||
+      (!options.production && isHarnessFile(filePath, rootDirs)) ||
       sources.isFileSuppressed(filePath),
     filePath => sources.importsOf(filePath).flatMap(entry => (entry.target ? [entry.target] : []))
   );
@@ -68,11 +75,17 @@ export function analyzeSyntax(
   for (const filePath of filePaths) {
     for (const entry of sources.importsOf(filePath)) {
       if (entry.resolved && !entry.external) continue;
-      uses.push({ filePath, text: entry.specifier.text, start: entry.specifier.start });
+      uses.push({
+        filePath,
+        text: entry.specifier.text,
+        start: entry.specifier.start,
+        typeOnly: entry.specifier.typeOnly,
+      });
     }
 
     if (options.scopeDir && !filePath.startsWith(options.scopeDir)) continue;
     if (isEntryFile(filePath, rootDirs, entries)) continue;
+    if (options.production && isHarnessFile(filePath, rootDirs)) continue;
     if (sources.isFileSuppressed(filePath)) continue;
     if (reachable.has(filePath)) continue;
     findings.push({
@@ -92,9 +105,12 @@ export function analyzeSyntax(
     ...analyzeDependencies(
       uses,
       rootDirs,
-      options.scopeDir,
-      options.ignoreDependencies ?? [],
-      pathAliasPatterns(packages, fallbackOptions),
+      {
+        scopeDir: options.scopeDir,
+        ignore: options.ignoreDependencies ?? [],
+        aliasPatterns: pathAliasPatterns(packages, fallbackOptions),
+        production: options.production,
+      },
       {
         fileExists: filePath => fs.existsSync(filePath),
         readFile: filePath => readFile(filePath),
@@ -108,78 +124,54 @@ export function analyzeSyntax(
   return findings;
 }
 
+/**
+ * Every entry point of the project, and the thing that named each one.
+ *
+ * Discovery that cannot be inspected is discovery nobody can trust: an entry
+ * point silently makes a file used and its exports public API, so a wrong one
+ * hides findings without leaving a trace. This is what `norefs entries` prints.
+ * It reads the text alone, so the audit costs no type checker.
+ */
+export function listEntryPoints(
+  tsConfigFilePaths: string[],
+  fallbackOptions: ts.CompilerOptions,
+  options: SyntaxOptions = {}
+): EntryPoint[] {
+  const filePaths = projectFilePaths(tsConfigFilePaths);
+  const packages = options.packages ?? [];
+  const fallbackRoot = commonDirectory(filePaths);
+  const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
+  const known = new Set(filePaths);
+
+  const discovered = new Map<string, string>();
+  for (const dir of rootDirs) {
+    for (const entry of packageEntryPoints(
+      dir,
+      fallbackRoot,
+      optionsForDir(packages, dir) ?? fallbackOptions,
+      known,
+      diskFileSystem
+    )) {
+      if (!discovered.has(entry.filePath)) discovered.set(entry.filePath, entry.source);
+    }
+  }
+
+  const asked = options.entries ?? [];
+  const entries: EntryPoint[] = [];
+  for (const filePath of filePaths) {
+    const source = asked.some(entry => filePath === entry || filePath.startsWith(`${entry}/`))
+      ? 'asked for with --entry'
+      : (discovered.get(filePath) ??
+        (isEntryFile(filePath, rootDirs, []) ? 'index/main/cli beside a tsconfig' : undefined));
+    if (source) entries.push({ filePath, source });
+  }
+  return entries;
+}
+
 function readFile(filePath: string): string | undefined {
   try {
     return fs.readFileSync(filePath, 'utf8');
   } catch {
     return undefined;
   }
-}
-
-const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'];
-const OUTPUT_EXTENSION = /\.(?:d\.ts|d\.mts|d\.cts|js|jsx|mjs|cjs)$/;
-
-/**
- * Entry files a package.json names: main, bin, and exports. A path pointing
- * into the compiled output is mapped back to source through the package's own
- * outDir and rootDir. Only paths that land on a project file count.
- */
-function manifestEntries(
-  packageDir: string,
-  fallbackSourceRoot: string,
-  compilerOptions: ts.CompilerOptions,
-  known: Set<string>
-): string[] {
-  const text = readFile(path.join(packageDir, 'package.json'));
-  if (text === undefined) return [];
-  let manifest: unknown;
-  try {
-    manifest = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  if (typeof manifest !== 'object' || manifest === null) return [];
-  const data = manifest as Record<string, unknown>;
-
-  const candidates = new Set<string>();
-  collectStrings(data.main, candidates);
-  collectStrings(data.bin, candidates);
-  collectStrings(data.exports, candidates);
-
-  const outDir = compilerOptions.outDir ? path.resolve(packageDir, compilerOptions.outDir) : undefined;
-  const sourceRoot = compilerOptions.rootDir ? path.resolve(packageDir, compilerOptions.rootDir) : fallbackSourceRoot;
-
-  const entries = new Set<string>();
-  for (const candidate of candidates) {
-    for (const sourcePath of sourceCandidates(path.resolve(packageDir, candidate), outDir, sourceRoot)) {
-      if (known.has(sourcePath)) entries.add(sourcePath);
-    }
-  }
-  return [...entries];
-}
-
-/** Strings in main ("dist/index.js"), bin ({name: path}), and exports (nested conditions). */
-function collectStrings(value: unknown, out: Set<string>): void {
-  if (typeof value === 'string') {
-    if (!value.includes('*')) out.add(value);
-    return;
-  }
-  if (typeof value === 'object' && value !== null) {
-    for (const nested of Object.values(value)) collectStrings(nested, out);
-  }
-}
-
-/** The source files a published path can correspond to, including the path itself. */
-function sourceCandidates(filePath: string, outDir: string | undefined, sourceRoot: string): string[] {
-  const bases = new Set<string>([filePath]);
-  if (outDir && (filePath === outDir || filePath.startsWith(`${outDir}${path.sep}`))) {
-    bases.add(path.join(sourceRoot, path.relative(outDir, filePath)));
-  }
-  const candidates = new Set<string>(bases);
-  for (const base of bases) {
-    if (!OUTPUT_EXTENSION.test(base)) continue;
-    const stem = base.replace(OUTPUT_EXTENSION, '');
-    for (const extension of SOURCE_EXTENSIONS) candidates.add(stem + extension);
-  }
-  return [...candidates];
 }

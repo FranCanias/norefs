@@ -42,6 +42,8 @@ function describeFinding(finding: Finding): string {
       return `dead dependency \`${finding.name}\``;
     case 'unlisted':
       return `dependency \`${finding.name}\` is not listed in package.json`;
+    case 'misplaced':
+      return `\`${finding.name}\` is in ${finding.context}: ${finding.evidence}`;
     case 'stranded':
       return `stranded handler for \`'${finding.name}'\`: ${finding.evidence ?? 'this report deletes its only sender'}`;
   }
@@ -96,6 +98,7 @@ function summarize(findings: Finding[]): string {
     [count(f => f.verdict === 'shadowed'), 'shadowed by a duplicate type', 'shadowed by duplicate types'],
     [count(f => f.verdict === 'test-only'), 'test-only', 'test-only'],
     [count(f => f.kind === 'unlisted'), 'unlisted dependency', 'unlisted dependencies'],
+    [count(f => f.kind === 'misplaced'), 'misplaced dependency', 'misplaced dependencies'],
     [count(f => f.kind === 'stranded'), 'stranded handler', 'stranded handlers'],
   ];
   const parts = groups.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);

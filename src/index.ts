@@ -11,12 +11,14 @@ import { CONFIG_FILE, initConfig, loadConfig } from './config';
 import { analyze } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { isFixable, unremovableWrites } from './engine/fix';
+import { editManifest, manifestEdits } from './engine/fix-manifest';
 import { applyVerifiedFixes, findingKey } from './engine/fix-verified';
 import { loadPackages, loadProject, optionsForDir } from './engine/project';
 import { formatGitHub, formatJson, formatMarkdown, formatPatch, formatSarif, formatText } from './engine/report';
-import { analyzeSyntax, isSyntaxOnly } from './engine/syntax-analyze';
+import { analyzeSyntax, isSyntaxOnly, listEntryPoints } from './engine/syntax-analyze';
 import { formatLocation } from './engine/verdicts';
 import { watchProject } from './engine/watch';
+import { findWorkspace } from './engine/workspaces';
 import type { FilterOptions } from './filters';
 import { applyFilters, parseKinds } from './filters';
 import type { Finding } from './types';
@@ -25,21 +27,26 @@ const HELP = `norefs - find unused files, exports, and properties in a TypeScrip
 
 Usage: norefs [options]
        norefs init            Write a norefs.config.json with every option at its default
+       norefs entries         List every entry point and what named it
 
 Options:
-  -p, --project <path>  Path to tsconfig.json (default: ./tsconfig.json).
-                         Repeatable for a monorepo: every package resolves its
-                         imports with its own tsconfig's compiler options
+  -p, --project <path>  Path to tsconfig.json. Repeatable: every package
+                         resolves its imports with its own tsconfig's compiler
+                         options. Rarely needed in a workspace — norefs reads
+                         the packages from pnpm-workspace.yaml or the
+                         package.json "workspaces" list. Default: ./tsconfig.json
   --scope <path>         Only report findings declared under this path
                          (still uses the whole project to resolve usages —
                          handy when a tsconfig spans an SDK and its consumer)
   --entry <path>         Treat this file or directory as an entry point: it is
                          never reported unused and its exports are the public
-                         API (repeatable; index/main/cli files in the project
-                         root or src/ are entry points by default)
+                         API. Repeatable, and rarely needed: norefs already
+                         reads the entry points your build declares — see
+                         \`norefs entries\` for the list and where each came from
   --only <kinds>         Report only these finding kinds, comma-separated:
                          files, exports, types, ns-exports, ns-types, members,
-                         empty-types, dependencies, unlisted, stranded.
+                         empty-types, dependencies, unlisted, misplaced,
+                         stranded.
                          This prunes the analysis, it does not filter its
                          output: asking for files and dependencies alone
                          skips the type checker, and leaving members out
@@ -53,8 +60,8 @@ Options:
   --fix                  Apply the fixes the verdicts prove safe: dead code is
                          removed, over-exported declarations lose the export
                          keyword
-  --fix-unsafe           Also apply write-only, contract, and shadowed findings
-                         (implies --fix). A proven write-only member is retired
+  --fix-unsafe           Also apply write-only, contract, and shadowed findings,
+                         and edit package.json (implies --fix). A proven write-only member is retired
                          together with the writes that prove it; when one of
                          those writes cannot be removed on its own, the whole
                          finding is kept and the write is named. These are
@@ -80,6 +87,11 @@ Options:
   --anon                 Include findings on unnamed inline types and anonymous
                          functions. Hidden by default: with no name to anchor
                          them, they are the most false-positive-prone
+  --production           Analyze the shipping code path alone. Test, spec,
+                         stories, bench and config files are treated as absent:
+                         they keep nothing reachable, they count as no usage,
+                         and they report nothing. Stricter than the test-only
+                         verdict, and never combined with --fix
   -h, --help             Show this help message
 
 Configuration:
@@ -125,6 +137,7 @@ function main(): void {
       'dry-run': { type: 'boolean', default: false },
       watch: { type: 'boolean', default: false },
       anon: { type: 'boolean' },
+      production: { type: 'boolean' },
       help: { type: 'boolean', short: 'h', default: false },
     },
     allowNegative: true,
@@ -138,8 +151,9 @@ function main(): void {
   if (values['fix-unsafe']) values.fix = true;
 
   const command = positionals[0];
-  if (command !== undefined && command !== 'init') {
-    process.stderr.write(`error: unknown command "${command}" (the only command is "init")\n`);
+  const COMMANDS = ['init', 'entries'];
+  if (command !== undefined && !COMMANDS.includes(command)) {
+    process.stderr.write(`error: unknown command "${command}" (the commands are ${COMMANDS.join(', ')})\n`);
     process.exitCode = 2;
     return;
   }
@@ -163,16 +177,6 @@ function main(): void {
 
   if (values['dry-run'] && !values.fix) {
     process.stderr.write('error: --dry-run requires --fix\n');
-    process.exitCode = 2;
-    return;
-  }
-
-  // Fixes written into a dirty tree cannot be reviewed or reverted apart
-  // from the user's own edits, so --fix wants a clean slate.
-  if (values.fix && !values['dry-run'] && !values['allow-dirty'] && hasUncommittedChanges(process.cwd())) {
-    process.stderr.write(
-      'error: the working tree has uncommitted changes. Commit or stash them so the fixes stay separable, or pass --allow-dirty.\n'
-    );
     process.exitCode = 2;
     return;
   }
@@ -201,6 +205,30 @@ function main(): void {
     return;
   }
 
+  // A production finding is dead to the shipping code path and may be alive in
+  // the tests this run did not look at. Deleting it breaks them — which is the
+  // same reason a `test-only` finding is never fixed either. This asks about
+  // the flags alone, so it answers before anything about the tree does: a
+  // combination that cannot work says so whether or not the tree is clean.
+  const production = values.production ?? config.production;
+  if (production && values.fix) {
+    process.stderr.write(
+      'error: --production cannot combine with --fix. Its findings are dead to production and may still be used by the tests this run ignored.\n'
+    );
+    process.exitCode = 2;
+    return;
+  }
+
+  // Fixes written into a dirty tree cannot be reviewed or reverted apart
+  // from the user's own edits, so --fix wants a clean slate.
+  if (values.fix && !values['dry-run'] && !values['allow-dirty'] && hasUncommittedChanges(cwd)) {
+    process.stderr.write(
+      'error: the working tree has uncommitted changes. Commit or stash them so the fixes stay separable, or pass --allow-dirty.\n'
+    );
+    process.exitCode = 2;
+    return;
+  }
+
   // A flag that was passed wins; otherwise the project's own answer stands.
   // `--no-anon` and `--no-explain` are how a run overrides a config that says
   // yes, which is why neither flag carries a default.
@@ -224,7 +252,35 @@ function main(): void {
 
   const cliProjects = values.project ?? [];
   const tsConfigPaths = (cliProjects.length > 0 ? cliProjects : config.project).map(p => path.resolve(cwd, p));
+  // A monorepo already says where its packages are. Only when nothing was
+  // asked for: a list you passed is the list you meant.
+  const workspace = tsConfigPaths.length === 0 ? findWorkspace(cwd) : undefined;
+  if (workspace) {
+    tsConfigPaths.push(...workspace.tsConfigPaths);
+    // Which packages a run covers decides what every finding means, so a run
+    // that decided it for you says so.
+    const missing = workspace.withoutTsConfig;
+    process.stderr.write(
+      `${workspace.tsConfigPaths.length} workspace package(s) from ${workspace.source}` +
+        `${missing.length > 0 ? `; skipped ${missing.join(', ')} — no tsconfig.json` : ''}\n`
+    );
+  }
   if (tsConfigPaths.length === 0) tsConfigPaths.push(path.resolve(cwd, 'tsconfig.json'));
+
+  const unreadable = tsConfigPaths.filter(p => !fs.existsSync(p));
+  if (unreadable.length > 0) {
+    // A tsconfig nobody can read is a usage error like any other, and the flag
+    // reference says so. It used to arrive as a stack trace from inside ts.
+    const named = unreadable.map(p => path.relative(cwd, p) || p).join(', ');
+    process.stderr.write(
+      `error: no tsconfig at ${named}\n` +
+        (workspace === undefined && cliProjects.length === 0 && config.project.length === 0
+          ? 'Pass one with --project, or run norefs from a directory that has a tsconfig.json.\n'
+          : '')
+    );
+    process.exitCode = 2;
+    return;
+  }
   const packages = loadPackages(tsConfigPaths);
 
   // Loading the project parses every file and builds a type checker: seconds
@@ -265,8 +321,23 @@ function main(): void {
     rootDirs,
     packages,
     ignoreDependencies: config.ignoreDependencies,
+    boundaries: config.boundaries,
+    production,
     kinds: filterOptions.only,
   };
+  if (command === 'entries') {
+    const found = listEntryPoints(tsConfigPaths, optionsForDir(packages, rootDirs[0]) ?? {}, analyzeOptions);
+    for (const entry of found) {
+      process.stdout.write(`${path.relative(cwd, entry.filePath)}  —  ${entry.source}\n`);
+    }
+    process.stderr.write(
+      found.length === 0
+        ? 'No entry points. Every file will be reported unused; name one with --entry.\n'
+        : `${found.length} entry point(s). Their exports are public API and never reported unused.\n`
+    );
+    return;
+  }
+
   const runAnalysis = (): Finding[] => {
     const findings = syntaxOnly
       ? analyzeSyntax(tsConfigPaths, optionsForDir(packages, rootDirs[0]) ?? {}, analyzeOptions)
@@ -457,10 +528,46 @@ function main(): void {
       );
     }
 
+    // package.json is edited as text, after the campaign and outside it: no
+    // type check reads a manifest, so there is nothing for the campaign's probe
+    // to say about these. The command you supply is the only probe that can
+    // judge them, and it gets the last word below.
+    const manifests = new Map<string, string>();
+    let manifestFixed = 0;
+    const manifestFindings = findings.filter(f => isFixable(f, unsafe) && !held.has(findingKey(f, cwd)));
+    for (const [filePath, edits] of manifestEdits(manifestFindings)) {
+      const before = fs.readFileSync(filePath, 'utf8');
+      const { text, refused } = editManifest(before, edits);
+      for (const { name, reason } of refused) {
+        process.stderr.write(`Held back \`${name}\` (${path.relative(cwd, filePath)}): ${reason}\n`);
+      }
+      if (text === before) continue;
+      manifests.set(filePath, text);
+      manifestFixed += edits.length - refused.length;
+    }
+    if (manifests.size > 0 && command) {
+      const candidates = new Map(manifests);
+      for (const filePath of result.touched) {
+        const text = project().getSourceFile(filePath)?.getFullText();
+        if (text !== undefined) candidates.set(filePath, text);
+      }
+      const errors = runOnCandidates(command, cwd, candidates);
+      if (errors.length > 0) {
+        process.stderr.write(`Held back the package.json edits: ${errors[0]}\n`);
+        manifests.clear();
+        manifestFixed = 0;
+      }
+    }
+    const fixedCount = result.fixed + manifestFixed;
+    const fileCount = result.touched.length + manifests.size;
+
     const verifiedLine = (fixes: string): string => {
+      const unseen = [memberFixes ? blindSpot : '', manifests.size > 0 ? 'a package.json edit' : ''].filter(
+        part => part.length > 0
+      );
       const caveat =
-        memberFixes && !command
-          ? ` A type check cannot see ${blindSpot}; add --verify-command to run your tests too.\n`
+        unseen.length > 0 && !command
+          ? ` A type check cannot see ${unseen.join(' or ')}; add --verify-command to run your tests too.\n`
           : '\n';
       return `Verified: tsc reports no new errors after the ${fixes}.${caveat}`;
     };
@@ -471,8 +578,12 @@ function main(): void {
         const after = project().getSourceFile(filePath)?.getFullText() ?? before;
         process.stdout.write(`${formatPatch(path.relative(cwd, filePath), before, after)}\n`);
       }
+      for (const [filePath, after] of [...manifests].sort()) {
+        const before = fs.readFileSync(filePath, 'utf8');
+        process.stdout.write(`${formatPatch(path.relative(cwd, filePath), before, after)}\n`);
+      }
       if (verify) process.stderr.write(verifiedLine('would-be fixes'));
-      process.stderr.write(`Dry run: would fix ${result.fixed} finding(s) in ${result.touched.length} file(s)\n`);
+      process.stderr.write(`Dry run: would fix ${fixedCount} finding(s) in ${fileCount} file(s)\n`);
       process.exitCode = 1;
       return;
     }
@@ -480,13 +591,14 @@ function main(): void {
     for (const filePath of result.touched) {
       project().getSourceFile(filePath)?.saveSync();
     }
+    for (const [filePath, text] of manifests) fs.writeFileSync(filePath, text);
     if (verify) process.stderr.write(verifiedLine('fixes'));
-    process.stderr.write(`Fixed ${result.fixed} finding(s) in ${result.touched.length} file(s)\n`);
+    process.stderr.write(`Fixed ${fixedCount} finding(s) in ${fileCount} file(s)\n`);
 
     if (skipped > 0) {
       const untouched = unsafe
-        ? 'files, namespaces, emptied types, dependencies, proven writes no single edit can retire'
-        : 'write-only, contract, and shadowed verdicts need --fix-unsafe; files, namespaces, emptied types, dependencies are never touched';
+        ? 'files, namespaces, emptied types, test-only findings, proven writes no single edit can retire'
+        : 'write-only, contract, shadowed, and package.json findings need --fix-unsafe; files, namespaces, emptied types, and test-only findings are never touched';
       process.stderr.write(`Skipped ${skipped} finding(s) --fix does not touch (${untouched})\n`);
     }
     return;
@@ -508,20 +620,27 @@ function hasUncommittedChanges(cwd: string): boolean {
  */
 function commandCheck(command: string, cwd: string): (project: Project, dirtyFilePaths: string[]) => string[] {
   return (project, dirtyFilePaths) => {
-    const originals = new Map(dirtyFilePaths.map(filePath => [filePath, fs.readFileSync(filePath, 'utf8')]));
-    try {
-      for (const filePath of dirtyFilePaths) {
-        const text = project.getSourceFile(filePath)?.getFullText();
-        if (text !== undefined) fs.writeFileSync(filePath, text);
-      }
-      const run = spawnSync(command, { shell: true, cwd, encoding: 'utf8' });
-      if (run.status === 0) return [];
-      const tail = `${run.stdout ?? ''}\n${run.stderr ?? ''}`.trim().split('\n').slice(-3).join(' | ');
-      return [`\`${command}\` exited with ${run.status ?? 'a signal'}: ${tail}`];
-    } finally {
-      for (const [filePath, text] of originals) fs.writeFileSync(filePath, text);
+    const candidates = new Map<string, string>();
+    for (const filePath of dirtyFilePaths) {
+      const text = project.getSourceFile(filePath)?.getFullText();
+      if (text !== undefined) candidates.set(filePath, text);
     }
+    return runOnCandidates(command, cwd, candidates);
   };
+}
+
+/** Run the command with these texts in place, and put the originals back. */
+function runOnCandidates(command: string, cwd: string, candidates: Map<string, string>): string[] {
+  const originals = new Map([...candidates.keys()].map(filePath => [filePath, fs.readFileSync(filePath, 'utf8')]));
+  try {
+    for (const [filePath, text] of candidates) fs.writeFileSync(filePath, text);
+    const run = spawnSync(command, { shell: true, cwd, encoding: 'utf8' });
+    if (run.status === 0) return [];
+    const tail = `${run.stdout ?? ''}\n${run.stderr ?? ''}`.trim().split('\n').slice(-3).join(' | ');
+    return [`\`${command}\` exited with ${run.status ?? 'a signal'}: ${tail}`];
+  } finally {
+    for (const [filePath, text] of originals) fs.writeFileSync(filePath, text);
+  }
 }
 
 main();

@@ -77,32 +77,32 @@ describe('the two positions a factory literal leaves through', () => {
   it('reads the proof off a return annotation instead of guessing', () => {
     // `useMemo` infers its type argument from the factory, so the literal's
     // contextual type is its own shape. The annotation on the hook is the
-    // destination: every caller reads the result as `LimiterColors`.
+    // destination: every caller reads the result as `LegendColors`.
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(
       '/app.ts',
       [
-        'export interface LimiterColors {',
-        '  track: string;',
-        '  thumb: string;',
+        'export interface LegendColors {',
+        '  stroke: string;',
+        '  fill: string;',
         '}',
         'declare function useMemo<T>(factory: () => T, deps: unknown[]): T;',
-        'export function useLimiterColors(): LimiterColors {',
-        '  const track = "a";',
-        '  const thumb = "b";',
-        '  return useMemo(() => ({ track, thumb }), []);',
+        'export function useLegendColors(): LegendColors {',
+        '  const stroke = "a";',
+        '  const fill = "b";',
+        '  return useMemo(() => ({ stroke, fill }), []);',
         '}',
-        'declare const colors: LimiterColors;',
-        'export const read = () => colors.thumb;',
+        'declare const colors: LegendColors;',
+        'export const read = () => colors.fill;',
         '',
       ].join('\n')
     );
     project.createSourceFile(
       '/index.ts',
-      "import { useLimiterColors, read } from './app';\nuseLimiterColors();\nread();\n"
+      "import { useLegendColors, read } from './app';\nuseLegendColors();\nread();\n"
     );
     const findings = analyze(project);
-    const member = memberOf(findings, 'track');
+    const member = memberOf(findings, 'stroke');
     expect(member?.verdict).toBe('write-only');
     expect(member?.evidence).toContain('a typed write at');
     expect(member?.evidence).toContain('proven, never read');
@@ -114,23 +114,23 @@ describe('the two positions a factory literal leaves through', () => {
     project.createSourceFile(
       '/app.ts',
       [
-        'export interface LimiterColors {',
-        '  track: string;',
-        '  thumb: string;',
+        'export interface LegendColors {',
+        '  stroke: string;',
+        '  fill: string;',
         '}',
         'declare function useMemo<T>(factory: () => T, deps: unknown[]): T;',
-        'export const useLimiterColors = (): LimiterColors => useMemo(() => ({ track: "a", thumb: "b" }), []);',
-        'declare const colors: LimiterColors;',
-        'export const read = () => colors.thumb;',
+        'export const useLegendColors = (): LegendColors => useMemo(() => ({ stroke: "a", fill: "b" }), []);',
+        'declare const colors: LegendColors;',
+        'export const read = () => colors.fill;',
         '',
       ].join('\n')
     );
     project.createSourceFile(
       '/index.ts',
-      "import { useLimiterColors, read } from './app';\nuseLimiterColors();\nread();\n"
+      "import { useLegendColors, read } from './app';\nuseLegendColors();\nread();\n"
     );
     const findings = analyze(project);
-    expect(memberOf(findings, 'track')?.evidence).toContain('a typed write at');
+    expect(memberOf(findings, 'stroke')?.evidence).toContain('a typed write at');
   });
 
   it('keeps the write unverified when the shape could be the owner after all', () => {

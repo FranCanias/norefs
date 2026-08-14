@@ -22,7 +22,17 @@ import { findReferencesAsNodes } from './references';
  * An empty-type finding takes the most cautious verdict of its members: it
  * only exists because every member was reported.
  */
-export function assignVerdicts(project: Project, findings: Finding[], cwd: string): void {
+export function assignVerdicts(
+  project: Project,
+  findings: Finding[],
+  cwd: string,
+  /**
+   * Files this same report calls dead. A write sitting in one of them proves
+   * nothing — the report already says that code is going away — so citing it
+   * as `proven, never read` would point the evidence at a corpse.
+   */
+  isDeadFile: (filePath: string) => boolean = () => false
+): void {
   const memberFindings = findings.filter(f => f.kind === 'member' && f.node && !f.verdict);
   if (memberFindings.length === 0) {
     assignEmptyTypeVerdicts(findings);
@@ -59,7 +69,13 @@ export function assignVerdicts(project: Project, findings: Finding[], cwd: strin
       continue;
     }
     const nameNode = (finding.node as Node & { getNameNode(): Node }).getNameNode();
-    const sites = index.unattributedWriteSites(finding.name, nameNode);
+    const found = index.unattributedWriteSites(finding.name, nameNode);
+    const alive = (site: Node): boolean => !isDeadFile(site.getSourceFile().getFilePath());
+    const sites = {
+      typed: found.typed.filter(alive),
+      unverified: found.unverified.filter(alive),
+      accounted: found.accounted.filter(alive),
+    };
     if (sites.typed.length > 0) {
       finding.verdict = 'write-only';
       const writes = sites.typed.length === 1 ? 'a typed write at' : 'typed writes at';
@@ -359,7 +375,7 @@ interface TwinCandidate {
  * Duplicated types, found two ways. Structural twins share their whole
  * member-name signature: when the twin's member of the flagged name is read,
  * the flagged member is probably read too — through the duplicate. Name twins
- * share their declared name and enough of their shape: two `IOWithSoundZones`
+ * share their declared name and enough of their shape: two `IOWithTags`
  * in one codebase is a stronger duplication signal than congruence, even
  * where the shapes have drifted apart. Either way the real finding is the
  * duplication.

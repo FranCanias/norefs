@@ -18,10 +18,12 @@ describe('loadConfig', () => {
       ignore: [],
       only: undefined,
       ignoreDependencies: [],
+      boundaries: [],
       scope: '',
       reporter: undefined,
       anon: false,
       explain: false,
+      production: false,
     });
   });
 
@@ -33,10 +35,12 @@ describe('loadConfig', () => {
         ignore: ['src/generated/**'],
         only: ['files', 'exports'],
         ignoreDependencies: ['legacy-*'],
+        boundaries: [{ send: 'fetch', handle: ['app.get', 'app.post'] }],
         scope: 'src/app',
         reporter: 'github',
         anon: true,
         explain: true,
+        production: true,
       })
     );
     expect(loadConfig(dir)).toEqual({
@@ -45,10 +49,12 @@ describe('loadConfig', () => {
       ignore: ['src/generated/**'],
       only: ['files', 'exports'],
       ignoreDependencies: ['legacy-*'],
+      boundaries: [{ send: ['fetch'], handle: ['app.get', 'app.post'] }],
       scope: 'src/app',
       reporter: 'github',
       anon: true,
       explain: true,
+      production: true,
     });
   });
 
@@ -93,10 +99,12 @@ describe('initConfig', () => {
           ignore: [],
           only: [],
           ignoreDependencies: [],
+          boundaries: [],
           scope: '',
           reporter: 'text',
           anon: false,
           explain: false,
+          production: false,
         },
         null,
         2
@@ -108,10 +116,12 @@ describe('initConfig', () => {
       ignore: [],
       only: [],
       ignoreDependencies: [],
+      boundaries: [],
       scope: '',
       reporter: 'text',
       anon: false,
       explain: false,
+      production: false,
     });
   });
 

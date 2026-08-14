@@ -1,9 +1,18 @@
-import type { Identifier, ModuleDeclaration, Node, Project, SourceFile } from 'ts-morph';
+import type {
+  ExportDeclaration,
+  Identifier,
+  ImportDeclaration,
+  ModuleDeclaration,
+  Node,
+  Project,
+  SourceFile,
+} from 'ts-morph';
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
-import type { Finding, FindingKind, TypeKeyword } from '../types';
+import type { Boundary, Finding, FindingKind, TypeKeyword } from '../types';
 import type { DependencyUse } from './dependencies';
 import { analyzeDependencies } from './dependencies';
-import { packageEntries } from './package-entries';
+import { packageEntryPoints } from './entry-points';
+import { hostFileSystem } from './file-system';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
@@ -37,21 +46,61 @@ export interface ModuleOptions {
   packages?: PackageConfig[];
   /** Dependency names or globs the dependency checks never report. */
   ignoreDependencies?: string[];
+  /** Channel boundaries the project declared, for the stranded-handler pairing. */
+  boundaries?: Boundary[];
+  /**
+   * Analyze the shipping code path alone: test, spec, stories, bench, config
+   * files and everything under a test directory are treated as absent. They
+   * stop keeping code reachable, they stop counting as usage, and they report
+   * nothing of their own.
+   */
+  production?: boolean;
+}
+
+/**
+ * The project files a file imports.
+ *
+ * `getReferencedSourceFiles` answers from the type system, and the type system
+ * links a specifier only to a *module*. A file with no import and no export of
+ * its own is a script, so `import './routes'` — how a route table or a polyfill
+ * gets registered — resolves to nothing, and the file it names looks unreached.
+ * The compiler's own resolver holds no such opinion, and the syntax-only run
+ * has always used it. Asking it for the specifiers the type system dropped is
+ * what makes the two runs agree.
+ */
+function importedFiles(sourceFile: SourceFile, project: Project, byPath: Map<string, SourceFile>): SourceFile[] {
+  const targets = sourceFile.getReferencedSourceFiles().filter(target => !target.isDeclarationFile());
+  for (const declaration of sourceFile.getImportDeclarations()) {
+    if (declaration.getModuleSpecifierSourceFile()) continue;
+    const resolved = ts.resolveModuleName(
+      declaration.getModuleSpecifierValue(),
+      sourceFile.getFilePath(),
+      project.getCompilerOptions(),
+      project.getModuleResolutionHost()
+    ).resolvedModule;
+    const target = resolved && byPath.get(resolved.resolvedFileName);
+    if (target) targets.push(target);
+  }
+  return targets;
 }
 
 export function analyzeModules(project: Project, options: ModuleOptions = {}): ModuleAnalysis {
   const sourceFiles = project.getSourceFiles().filter(sf => !sf.isDeclarationFile());
   const fallbackRoot = commonDirectory(sourceFiles.map(sf => sf.getFilePath()));
   const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
+  const byPath = new Map(sourceFiles.map(sf => [sf.getFilePath(), sf]));
+  const known = new Set(byPath.keys());
+  const entryFileSystem = hostFileSystem(project.getFileSystem());
   const entries = [
     ...(options.entries ?? []),
     ...rootDirs.flatMap(dir =>
-      packageEntries(
-        project,
+      packageEntryPoints(
         dir,
         fallbackRoot,
-        optionsForDir(options.packages ?? [], dir) ?? project.getCompilerOptions()
-      )
+        optionsForDir(options.packages ?? [], dir) ?? project.getCompilerOptions(),
+        known,
+        entryFileSystem
+      ).map(entry => entry.filePath)
     ),
   ];
   const reachable = reachableFiles(
@@ -59,10 +108,12 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
     sourceFile => {
       const filePath = sourceFile.getFilePath();
       return (
-        isEntryFile(filePath, rootDirs, entries) || isHarnessFile(filePath, rootDirs) || isFileSuppressed(sourceFile)
+        isEntryFile(filePath, rootDirs, entries) ||
+        (!options.production && isHarnessFile(filePath, rootDirs)) ||
+        isFileSuppressed(sourceFile)
       );
     },
-    sourceFile => sourceFile.getReferencedSourceFiles().filter(target => !target.isDeclarationFile())
+    sourceFile => importedFiles(sourceFile, project, byPath)
   );
   const namespaceConsumers = findNamespaceConsumers(project);
 
@@ -76,6 +127,8 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
     const filePath = sourceFile.getFilePath();
     if (options.scopeDir && !filePath.startsWith(options.scopeDir)) continue;
     if (isEntryFile(filePath, rootDirs, entries)) continue;
+    // A file the run treats as absent reports nothing, itself included.
+    if (options.production && harnessFiles.has(sourceFile)) continue;
     if (isFileSuppressed(sourceFile)) continue;
 
     if (!reachable.has(sourceFile)) {
@@ -104,7 +157,8 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       findings,
       deadDecls,
       publicDecls,
-      harnessFiles
+      harnessFiles,
+      options.production ?? false
     );
     for (const ns of sourceFile.getModules()) {
       if (publicDecls.has(ns)) continue;
@@ -117,9 +171,12 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
     ...analyzeDependencies(
       dependencyUses(project),
       rootDirs,
-      options.scopeDir,
-      options.ignoreDependencies ?? [],
-      pathAliasPatterns(options.packages ?? [], project.getCompilerOptions()),
+      {
+        scopeDir: options.scopeDir,
+        ignore: options.ignoreDependencies ?? [],
+        aliasPatterns: pathAliasPatterns(options.packages ?? [], project.getCompilerOptions()),
+        production: options.production,
+      },
       {
         fileExists: filePath => fileSystem.fileExistsSync(filePath),
         readFile: filePath => fileSystem.readFileSync(filePath),
@@ -162,7 +219,8 @@ function collectExportFindings(
   findings: Finding[],
   deadDecls: Set<Node>,
   publicDecls: Set<Node>,
-  harnessFiles: Set<SourceFile>
+  harnessFiles: Set<SourceFile>,
+  production: boolean
 ): void {
   const seen = new Set<Node>();
   for (const declarations of sourceFile.getExportedDeclarations().values()) {
@@ -175,7 +233,12 @@ function collectExportFindings(
       if (!nameNode) continue;
       if (isNodeSuppressed(nameNode)) continue;
 
-      const { externallyUsed, locallyUsed, testOnly } = classifyReferences(nameNode, sourceFile, harnessFiles);
+      const { externallyUsed, locallyUsed, testOnly } = classifyReferences(
+        nameNode,
+        sourceFile,
+        harnessFiles,
+        production
+      );
       if (externallyUsed) continue;
 
       const typeKind = typeKeyword(decl);
@@ -266,7 +329,9 @@ function makeFinding(
 function classifyReferences(
   nameNode: Identifier,
   sourceFile: SourceFile,
-  harnessFiles: Set<SourceFile>
+  harnessFiles: Set<SourceFile>,
+  /** When true a harness reference is no reference: the declaration is unused. */
+  production: boolean
 ): { externallyUsed: boolean; locallyUsed: boolean; testOnly: boolean } {
   let locallyUsed = false;
   let harnessUsed = false;
@@ -281,7 +346,7 @@ function classifyReferences(
       return { externallyUsed: true, locallyUsed, testOnly: false };
     }
   }
-  return { externallyUsed: false, locallyUsed, testOnly: harnessUsed };
+  return { externallyUsed: false, locallyUsed, testOnly: harnessUsed && !production };
 }
 
 /** True for occurrences that only bind or forward a name (import/export sites), not real usage. */
@@ -378,13 +443,36 @@ function dependencyUses(project: Project): DependencyUse[] {
     if (sourceFile.isDeclarationFile()) continue;
     for (const literal of sourceFile.getImportStringLiterals()) {
       const parent = literal.getParent();
-      const target =
+      const clause =
         parent?.isKind(SyntaxKind.ImportDeclaration) || parent?.isKind(SyntaxKind.ExportDeclaration)
-          ? parent.getModuleSpecifierSourceFile()
+          ? parent
           : undefined;
+      const target = clause?.getModuleSpecifierSourceFile();
       if (target && !target.isInNodeModules()) continue;
-      uses.push({ filePath: sourceFile.getFilePath(), text: literal.getLiteralText(), start: literal.getStart() });
+      uses.push({
+        filePath: sourceFile.getFilePath(),
+        text: literal.getLiteralText(),
+        start: literal.getStart(),
+        typeOnly: clause !== undefined && isTypeOnlyClause(clause),
+      });
     }
   }
   return uses;
+}
+
+/**
+ * True when the compiler erases the whole clause: `import type`, or braces
+ * whose every binding carries `type`. A default binding, a namespace, `export
+ * *`, and a bare `import 'x'` all leave the module standing at run time.
+ */
+function isTypeOnlyClause(clause: ImportDeclaration | ExportDeclaration): boolean {
+  if (clause.isTypeOnly()) return true;
+  if (clause.isKind(SyntaxKind.ExportDeclaration)) {
+    if (clause.isNamespaceExport()) return false;
+    const named = clause.getNamedExports();
+    return named.length > 0 && named.every(specifier => specifier.isTypeOnly());
+  }
+  if (clause.getDefaultImport() || clause.getNamespaceImport()) return false;
+  const named = clause.getNamedImports();
+  return named.length > 0 && named.every(specifier => specifier.isTypeOnly());
 }

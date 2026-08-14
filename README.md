@@ -10,11 +10,11 @@ Most dead-code tools stop at the declaration boundary: an interface counts as "u
 
 ### Module-level checks
 
-- **Unused files** — no chain of imports from any entry point reaches the file. Because the check is reachability, not a count of direct importers, a whole dead cluster gets reported — including two unused files that only import each other. Entry points are: paths given with `--entry`, `index`/`main`/`cli` files in the project root or `src/`, and the files `package.json` names in `main`, `bin`, and `exports` (paths into the compiled output are mapped back to source through the tsconfig `outDir` and `rootDir`). Test, spec, stories, bench, and config files (and anything under a `test`, `tests`, `__tests__`, or `__mocks__` directory) are their own entry points, so they are never reported either — and their members are not analyzed: a fixture type with an unread field is noise, not dead code.
+- **Unused files** — no chain of imports from any entry point reaches the file. Because the check is reachability, not a count of direct importers, a whole dead cluster gets reported — including two unused files that only import each other. Entry points are read from what the build already declares — see [Entry points](#entry-points) — and `--entry` adds any the build does not name. Test, spec, stories, bench, and config files (and anything under a `test`, `tests`, `__tests__`, or `__mocks__` directory) are their own entry points, so they are never reported either — and their members are not analyzed: a fixture type with an unread field is noise, not dead code.
 - **Unused exports** and **unused exported types** — an exported declaration that nothing outside its file uses. Interfaces, type aliases, and enums count as types; functions, classes, variables, and namespaces count as exports. References resolve through re-export chains, so a barrel between the declaration and its consumers does not hide usage. A declaration that is used inside its own file but never imported is reported as **over-exported**: the `export` keyword is dead even though the code is not, so the fix is to drop the keyword, not to delete the declaration. The public API is never reported: every declaration an entry file exports — resolved through re-export chains, `export *` and `export * as ns` included — is exempt, members and all, because its consumers live outside this program.
 - **Exports in used namespace** and **exported types in used namespace** — the same check, at lower confidence, for two namespace shapes. When a module is consumed through a used `import * as ns` binding, its zero-reference exports are reported this way, because the namespace object may be consumed dynamically. And when a TS `namespace N { … }` is used, its exported members whose references never leave the namespace body are reported this way too.
-- **Stranded handlers** — a handler registered under a channel string (`ipcMain.handle('recipeBox:load', …)`) whose every sender this report deletes. The registration keeps the handler "used", so no reference-based analysis will ever flag it — including the next norefs run, once you remove the wrapper that sends to it. The finding lands on the handler's own file and line, while it is still visible. A sender counts as dying only when its own declaration goes: the method that holds the channel string, not the class around it, and never an over-exported declaration, whose fix drops a keyword and deletes nothing. It obeys `--scope` and the suppression comments like any other finding; the note on the wrapper names the far side either way.
-- **Unused dependencies** and **unlisted dependencies** — entries of `dependencies` in `package.json` that no source file imports, and imported packages that no scanned `package.json` lists. `devDependencies` are consumed by tooling the import graph cannot see, so they count as listed but are never reported unused; the same goes for peer and optional dependencies. `@types/*` packages are consumed by the compiler and pair with their base package. Path aliases, node builtins, and relative imports never count as packages. Use the `ignoreDependencies` config key for runtime-only dependencies norefs cannot see, like a CLI invoked from npm scripts.
+- **Stranded handlers** — a handler registered under a channel string (`ipcMain.handle('recipeBox:load', …)`) whose every sender this report deletes. norefs finds the bridge your own `.d.ts` declares without being told; name any other boundary — HTTP routes, a socket bus — with the [`boundaries`](#boundaries) config key. The registration keeps the handler "used", so no reference-based analysis will ever flag it — including the next norefs run, once you remove the wrapper that sends to it. The finding lands on the handler's own file and line, while it is still visible. A sender counts as dying only when its own declaration goes: the method that holds the channel string, not the class around it, and never an over-exported declaration, whose fix drops a keyword and deletes nothing. It obeys `--scope` and the suppression comments like any other finding; the note on the wrapper names the far side either way.
+- **Unused dependencies**, **unlisted dependencies**, and **misplaced dependencies** — see [Dependencies](#dependencies). An entry nothing imports and no script runs; an imported package no scanned `package.json` lists; and an entry whose section does not match how it is used. Peer and optional dependencies exist for consumers and are never reported. `@types/*` packages are consumed by the compiler and pair with their base package. Path aliases, node builtins, and relative imports never count as packages.
 
 A finding at a higher level swallows the findings inside it: an unused file hides its exports and members, an unused export with zero references anywhere hides its members, and a type losing every member folds them into its one `becomes empty` finding. One line per problem, not fifty.
 
@@ -27,7 +27,7 @@ Every finding carries a verdict: the claim it makes, with its safety profile. "U
 - **write-only** — a write of the member's name exists, and it survived validation against the type it feeds. The evidence says which kind you are holding: a *typed write* is proven — the value flows into a use whose type declares this very member, and nothing reads it; an *unverified name match* is a write the analysis could not type either way. A name match that provably feeds a *different* type is discarded instead of reported, so a member is never protected by how popular its name is elsewhere. `--fix-unsafe` retires a proven write-only member together with the writes that prove it.
 - **contract** — the type's values cross a boundary the types cannot follow: a serialization call (`JSON.parse`, `JSON.stringify`, `structuredClone`, `postMessage`), a call on something a project `.d.ts` declares (an IPC bridge, a preload global), or any untraced result (`any`/`unknown`) pinned to the type by assertion — directly or through a containing type. The members document a wire format; deleting them destroys the documentation, not the data. When a twin of the type sits across the boundary, the two findings merge into one contract and each names the other side.
 - **shadowed** — a duplicate of the type elsewhere *is* read: a structurally identical twin, or a same-named type whose shape overlaps enough to be a drifted copy. The member is probably alive through the duplicate, and the real finding is the duplication: merge the twins, don't delete the member.
-- **test-only** — production code never touches it; only test files keep it alive. A real and common category of dead code, and never auto-fixed: the fix is deleting the code together with its tests, and only a human deletes tests.
+- **test-only** — production code never touches it; only test files keep it alive. A real and common category of dead code, and never auto-fixed: the fix is deleting the code together with its tests, and only a human deletes tests. [`--production`](#production-mode) is the stricter cut, where the tests are not there at all.
 
 Each soft verdict prints its evidence — the twin that reads the member, the boundary the type crosses. `--fix` only applies `dead` and `over-exported` findings; the rest wait for `--fix-unsafe` or your judgment.
 
@@ -66,14 +66,15 @@ Then run `norefs` from any project with a `tsconfig.json`.
 ```sh
 norefs [options]
 norefs init      # write a norefs.config.json with every option at its default
+norefs entries   # list every entry point and what named it
 ```
 
 | Option | Description |
 | --- | --- |
 | `-p, --project <path>` | Path to `tsconfig.json` (default: `./tsconfig.json`); repeatable for a monorepo, where each package resolves imports with its own tsconfig's options |
 | `--scope <path>` | Only report findings declared under this path; the whole project still resolves usages |
-| `--entry <path>` | Treat this file or directory as an entry point: never reported unused, exports never reported (repeatable) |
-| `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members`, `empty-types`, `dependencies`, `unlisted`, `stranded` |
+| `--entry <path>` | Treat this file or directory as an entry point: never reported unused, exports never reported (repeatable). Rarely needed — see [Entry points](#entry-points) |
+| `--only <kinds>` | Report only these finding kinds, comma-separated: `files`, `exports`, `types`, `ns-exports`, `ns-types`, `members`, `empty-types`, `dependencies`, `unlisted`, `misplaced`, `stranded` |
 | `--reporter <name>` | Output format: `text` (default), `json`, `github`, `sarif` |
 | `--baseline` | Write the findings to `norefs-baseline.json` and exit; later runs fail on new findings only |
 | `--ratchet` | With a baseline: drop entries whose finding vanished, so the count can only go down |
@@ -104,10 +105,12 @@ Put a `norefs.config.json` next to where you run `norefs`, and CI and teammates 
   "ignore": ["src/generated/**"],
   "only": ["files", "exports", "types", "members"],
   "ignoreDependencies": ["ts-node", "@internal/*"],
+  "boundaries": [{ "send": "fetch", "handle": ["app.get", "app.post"] }],
   "scope": "src",
   "reporter": "github",
   "anon": false,
-  "explain": true
+  "explain": true,
+  "production": false
 }
 ```
 
@@ -122,16 +125,44 @@ The file holds **settings** — what shapes the analysis and the report. Those a
   "ignore": [],
   "only": [],
   "ignoreDependencies": [],
+  "boundaries": [],
   "scope": "",
   "reporter": "text",
   "anon": false,
-  "explain": false
+  "explain": false,
+  "production": false
 }
 ```
 
 Fill in the keys you need and delete the rest — an empty array means the default: no extra entry points, nothing ignored, every kind reported. An empty `scope` is the whole project. `init` never overwrites an existing config.
 
-All keys are optional. `project` also accepts an array of tsconfig paths for a monorepo. `entry` merges with `--entry`; for every other key, a flag passed on the run wins over the file. `--no-anon` and `--no-explain` are how a run says no to a project that said yes. `ignore` takes globs, matched against paths relative to the current directory (and absolute paths). Ignored files produce no findings, but their contents still count as usage of other code. `ignoreDependencies` takes package names or globs the dependency checks never report.
+All keys are optional. `project` also accepts an array of tsconfig paths for a monorepo. `entry` merges with `--entry`; for every other key, a flag passed on the run wins over the file. `--no-anon` and `--no-explain` are how a run says no to a project that said yes. `ignore` takes globs, matched against paths relative to the current directory (and absolute paths). Ignored files produce no findings, but their contents still count as usage of other code. `ignoreDependencies` takes package names or globs the dependency checks never report. `boundaries` is described below.
+
+### Boundaries
+
+norefs finds one kind of boundary on its own: a callee your project's own `.d.ts` declares — a preload global, an ambient IPC handle. That call leaves the program, so the string it takes first is a channel, and whatever registers a handler under the same string is its far side. That is the [stranded handler](#module-level-checks) check, and it needs no configuration.
+
+Every other boundary belongs to a library, and no shape in the source says which library pairs `fetch` with `app.get` rather than running the handler itself. So you say it — two lists of callee names, one that sends on a channel and one that registers a handler for it:
+
+```json
+"boundaries": [
+  { "send": "fetch", "handle": ["app.get", "app.post", "router.get"] },
+  { "send": "socket.emit", "handle": "socket.on" }
+]
+```
+
+Now a dead `fetch('/api/recipes/legacy')` names the route it was the last sender of, and the route gets a `stranded` finding on its own line:
+
+```
+src/client.ts
+  12:9  dead property `saveLegacy` in class `ApiClient` — deleting it strands the far side of `'/api/recipes/legacy'` at src/routes.ts:5
+src/routes.ts
+  5:10  stranded handler for `'/api/recipes/legacy'`: its only sender is `saveLegacy` at src/client.ts:12, …
+```
+
+Each entry pairs only with itself, so a `socket.on('save', …)` never answers for a `fetch('save')`. Both sides are required — a boundary with one side pairs nothing, and a config that looks like it works is worse than none. A name matches the whole callee or its tail: `app.get` covers `this.app.get`, `fetch` covers `window.fetch`, and neither covers `getApp`.
+
+Routes match by shape, so the holes the two sides fill differently line up: `app.get('/recipes/:id/audit')` pairs with ``fetch(`/recipes/${id}/audit`)``. The list route, the item route, and anything nested under them stay separate channels. An interpolated string that is not a route — `` api.send(`job:${kind}`) `` — is not a channel at all, because there is no shape both sides agree on.
 
 ### Suppressing findings
 
@@ -183,13 +214,13 @@ Two reporters are made for CI:
 
 ### Speed
 
-Unused files and both dependency checks are decided by the import graph, and the
+Unused files and every dependency check are decided by the import graph, and the
 import graph is in the source text. Ask for only those and norefs never builds a
 type checker: a single-pass scanner reads every file, the compiler resolves the
 specifiers it found, and the answer arrives in well under a second.
 
 ```sh
-norefs --only files,dependencies,unlisted
+norefs --only files,dependencies,unlisted,misplaced
 ```
 
 The member checks are the other half. To know that `{ id: 1 }` writes the `id`
@@ -254,7 +285,7 @@ Loading the project is the expensive part of a run, so watch mode does it once. 
 - Every fix happens in memory first. After the last pass, norefs verifies its own work: it type-checks the fixed project and compares against the errors that existed before. When a fix introduced an error, norefs bisects the fix set to the culprit, holds that one fix back with the errors as evidence, and re-verifies the rest — then it saves only the verified result. Disk never sees an unverified edit. `--no-verify` skips the check when the double type-check costs more than you want to pay.
 - Know what "Verified" means per fix class. De-exporting is compiler-checkable by construction. A deleted member is not: a type check cannot see runtime-only reads (an identity-tracked context value, an inference-typed producer). When member deletions ride on the type check alone, norefs says so — and `--verify-command` is the honest witness for them.
 - A fix that cannot be applied is held back too. When the editor refuses an edit, that is one finding's answer, not the run's: the campaign rolls back, names the finding and the refusal, and applies everything else. The same rule as a fix that fails the type check.
-- Two things no probe can verify get pointed out instead. A comment that sits next to an edit but was kept — the leading comment of a statement a fix trimmed, or one a blank line above a deletion — is listed for you to reread, because no heuristic fixes prose. And a reported wrapper around a project-declared bridge (`api.invoke('recipeBox:load')`) reports where the same channel string reappears: deleting the wrapper strands that far-side handler, which no reference-based analysis will ever flag. The note only appears when the fix deletes every sender of that channel — one surviving sender and nothing is stranded — and the handler also gets a `stranded` finding of its own, so it is visible before the deletion hides it.
+- Two things no probe can verify get pointed out instead. A comment that sits next to an edit but was kept — the leading comment of a statement a fix trimmed, or one a blank line above a deletion — is listed for you to reread, because no heuristic fixes prose. And a reported wrapper around a bridge — one your project's own `.d.ts` declares, or one you named with `boundaries` — reports where the same channel reappears: deleting the wrapper strands that far-side handler, which no reference-based analysis will ever flag. The note only appears when the fix deletes every sender of that channel — one surviving sender and nothing is stranded — and the handler also gets a `stranded` finding of its own, so it is visible before the deletion hides it.
 - `--verify-command "npm test"` raises the bar: after the type check passes, the candidate files go to disk, the command runs, and the originals come back before the verdict. A fix your test suite rejects is held back like any other — the diff you get is one your own tests already passed.
 
 Review the diff before you commit. The emptied-type findings point at the leftovers that need human judgment.
@@ -290,7 +321,18 @@ norefs --anon
 
 ### Monorepos and cross-project scans
 
-Pass `-p` once per package and norefs loads them all into one scan, so cross-package usage counts:
+In a workspace, run `norefs` with no flags. It reads the packages your package manager already reads — `pnpm-workspace.yaml`, or `workspaces` in `package.json` — and analyzes each package that has a `tsconfig.json`:
+
+```sh
+$ norefs
+2 workspace package(s) from pnpm-workspace.yaml; skipped tools/jsonly — no tsconfig.json
+```
+
+Negated globs (`'!packages/legacy'`) are honoured, and a declared package with no `tsconfig.json` is named on stderr rather than dropped quietly — nothing analyzes it, and a run that silently covers less than the workspace is a run whose findings mean less than they look like they mean.
+
+Nothing is executed and no glob can invent a project: every one resolves to a `tsconfig.json` that exists on disk, so the failure mode is a package nobody analyzed, never a package nobody has.
+
+Pass `-p` when you want a different set. An explicit list is the list you meant, so it turns discovery off:
 
 ```sh
 norefs -p packages/app/tsconfig.json -p packages/lib/tsconfig.json
@@ -305,6 +347,82 @@ To find unused properties in a library whose only consumer lives in another repo
 3. Run `norefs -p umbrella.tsconfig.json --scope path/to/library/src`.
 
 Resolution is everything here: each import that fails to resolve hides all references flowing through it, which turns used properties into "unused" findings. norefs checks for this and prints a warning listing the unresolved specifiers — fix those before trusting the results.
+
+## Production mode
+
+Every finding norefs makes is relative to a question. The default question is "does anything in this repository use it?", and the tests count — a member only a test reads is labelled `test-only`, not dead, because deleting it breaks something real.
+
+`--production` asks the stricter question: **what is left standing if the tests were not there at all?**
+
+```sh
+norefs --production
+```
+
+Test, spec, stories, bench and config files — and everything under `test`, `tests`, `__tests__`, `__mocks__` — are treated as absent. Three things follow, and they are the whole definition:
+
+- They stop keeping code reachable. A file only a test imports becomes a **dead file**, where a normal run would only label its exports `test-only`.
+- Their references stop counting. What was `test-only` becomes plain **dead**.
+- They report nothing of their own. A dead export inside a test file is not a finding, because that file is not part of the question.
+
+`devDependencies` fall outside it too: they exist to build and test. So does the misplaced-dependency check, which needs both halves of the code to decide anything. A `dependencies` entry only the tests import is simply unused here.
+
+**It never combines with `--fix`.** A production finding is dead to the shipping path and may be perfectly alive in the tests this run ignored — deleting it breaks them. That is the same reason `test-only` findings are never fixed either: the fix is deleting the tests too, and only you do that. `norefs --production --fix` is a usage error, exit code 2.
+
+The two modes answer different questions, so run both: the default one to find what nothing uses, `--production` to find what only the scaffolding is holding up.
+
+## Dependencies
+
+A `package.json` says two things about every entry: that the project needs it, and when. norefs checks both.
+
+**Nothing uses it.** An entry no source file imports *and* no script runs is reported dead. The script half matters: `"build": "tsc -p tsconfig.json"` is TypeScript being used, and no import will ever say so. norefs reads each script's tokens and matches them against the packages you listed — by name, and by the binaries each installed package declares in its own `bin` field. Nothing here guesses which tool owns which command; `tsc` maps to `typescript` because TypeScript's own manifest says it does.
+
+That is also the limit. A package that is not installed has no binaries to read, so norefs will not call a devDependency unused — it cannot see what a script might be running. Install first, or the claim goes unmade.
+
+**It is in the wrong section.** Where an entry sits is a claim about when it is needed, and getting it wrong breaks something either way:
+
+```
+package.json
+  9:5   `only-in-tests` is in dependencies: only test, spec, story, bench, and config files import it, so it ships for nothing
+  15:5  `vitest` is in devDependencies: production code imports it, so an install without dev dependencies is missing it
+```
+
+The second one is the expensive one — `npm install --omit=dev` and the package is gone at runtime.
+
+Only an import that survives compilation counts here. `import type { Recipe } from 'shapes'` is erased before anything runs, so a devDependency the shipping code reads for types alone is already in the right section — moving it would ship a package the output never loads. The import still counts as the package being used, so nothing calls it dead.
+
+**Fixing them.** `--fix-unsafe` removes an unused entry and moves a misplaced one, editing `package.json` as text so the key order and the indentation survive. It needs `--fix-unsafe` rather than `--fix` for an honest reason: the type checker does not read a dependency list, so the probe that guards every other fix has nothing to say here. `--verify-command` is the one that can judge these, and when it fails the manifest edits are held back on their own — the source fixes it did verify still land.
+
+Use the `ignoreDependencies` config key for a dependency norefs cannot see at all: a plugin a config file loads by name, a binary invoked from somewhere other than a script.
+
+## Entry points
+
+An entry point is where the import graph starts: the file is never reported unused, and its exports are the public API, so they are never reported either. Getting the list wrong is expensive in both directions — a missing entry reports a live file as dead, an invented one hides real findings.
+
+So norefs does not ask you to keep the list. Your build already has it, written down in files norefs can read:
+
+| Declared in | What is read |
+| --- | --- |
+| `package.json` | `main`, `bin`, and `exports`; paths into the compiled output map back to source through the tsconfig `outDir` and `rootDir` |
+| `package.json` scripts | any argument that names a project file — `tsx src/server.ts`, `--config=playwright.config.ts` |
+| `*.html` | the `src` of every `<script>`; a leading `/` is the package root, as bundlers read it |
+| `*.config.*` | every quoted path that lands on a project file — Vite's `input`, Vitest's `setupFiles`, Playwright's `globalSetup`, and the same in tools nobody has written a plugin for |
+| convention | `index`/`main`/`cli` beside a tsconfig or in its `src/` |
+
+Nothing is executed. A config is read as text, and a path string that names a file this project holds is taken at its word — one rule, no per-tool plugins. Build output (`dist`, `build`, `out`, `coverage`, …) and `node_modules` are never walked, so a stale config in `dist/` cannot silence anything.
+
+Test, spec, stories, bench, and config files are reachability roots too, on their own rule, and so is anything under `test`, `tests`, `__tests__`, or `__mocks__`. They are not entry points: nothing outside imports them, so their exports stay open to report.
+
+To see what a run decided, and why:
+
+```sh
+$ norefs entries
+src/boot.tsx    —  <script src> in index.html
+src/main.ts     —  index/main/cli beside a tsconfig
+src/preload.ts  —  a path named in vite.config.ts
+src/server.ts   —  package.json scripts.serve
+```
+
+`--entry` is still there for what no config names — a script run straight with `node path/to/script.ts`, a file loaded by a name computed at runtime.
 
 ## What counts as usage
 
@@ -328,6 +446,7 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - **Key-enumerating and serializing sinks**: a value passed to `Object.keys`/`values`/`entries`/`assign`, `JSON.stringify`, `structuredClone`, or `Reflect.ownKeys`, iterated with `for...in`, or probed with a dynamic `key in v` marks its whole type as dynamically consumed.
 - **Escaping values**: when an object leaves local view as a whole — a returned literal passed on as a bare argument, a whole-binding parameter or variable forwarded via shorthand into a differently-declared type, a property whose value flows onward wholesale, an `as`/`satisfies` cast whose value is spread into a combined array or passed bare — its properties may be consumed without any per-property reference. The affected type literal is skipped.
 - **Assignability-required members**: a declared relation can make a member load-bearing with zero references. An `extends`/`implements` override (`interface Derived extends Base { items: DerivedItem[] }`) or a type predicate (`v is Derived`) forces one type to stay assignable to another, so the required members of the base shape are kept even when nothing reads them.
+- **Type-level reads**: a name written in a type literal that the type system matches against another type is read on every compile, whatever the runtime does. Three positions count, and each credits the name to the literal *and* to the type it is matched against: a conditional type's `extends` clause, including through an alias like `Extract<Schedule, { type: 'DAILY' }>`; a predicate's asserted type (`r is Recipe & { id: string }`); and a written type argument against a literal constraint (`pickFirst<Row>(…)` where `T extends { id: string }`). An inferred type argument needs no rule — the value goes into the call whole, and the escape check already stops there.
 - **Parameters of function types**: callback signatures declare parameter types, but implementations bind their own parameters; when callbacks are invoked with variables rather than literals, the signature's members can't be tracked.
 - **Structural class implementations**: when an instance escapes into a type that is not the class or its declared heritage — `return new StoreImpl()` from a function typed as interface `Store`, with no `implements` clause — every call goes through the interface and the class members collect zero references while being used at runtime. The whole class is skipped, along with its base classes and any class whose instances only leave through methods of such a class. Declaring `implements` restores tracking.
 - **Decorated classes**: a decorator hands the class to a framework that reads members through reflection or metadata. The whole class is skipped.
@@ -341,8 +460,9 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - Declaration files (`.d.ts`) are not scanned.
 - Anonymous default exports (`export default { … }`) have no name to search references for, so the export check skips them.
 - A file consumed only through a bare `import './x'` for its side effects counts as used when its importer is reachable, even if nothing else touches it. That is the safe reading.
-- An entry point neither the naming conventions nor `package.json` names (a script run directly with `node path/to/script.ts`) is a false positive until you pass it with `--entry`.
-- A dependency consumed without an import — a CLI run from npm scripts, a plugin loaded by name from a config file — shows up as an unused dependency until you add it to `ignoreDependencies`.
+- An entry point nothing declares in writing — a file loaded by a name the code computes at runtime — is a false positive until you pass it with `--entry`. Run `norefs entries` to see what was found before reaching for the flag.
+- A dependency consumed without an import *and* without a script — a plugin a config file loads by name, a binary called from a Makefile — shows up as unused until you add it to `ignoreDependencies`. A binary named in a `package.json` script is read; anywhere else is not.
+- A devDependency is never called unused when the package is not installed, because its binaries live in its own manifest and there is nothing there to read.
 
 ## Project layout
 

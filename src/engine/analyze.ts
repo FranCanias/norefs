@@ -55,7 +55,10 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     if (isFileSuppressed(member.getSourceFile())) continue;
     const nameNode = member.getNameNode();
     if (isNodeSuppressed(nameNode)) continue;
-    const usage = memberUsage(member, sf => modules.harnessFiles.has(sf));
+    // A harness reference is no reference when the harness is treated as absent,
+    // so what would be `test-only` is simply unused.
+    const found = memberUsage(member, sf => modules.harnessFiles.has(sf));
+    const usage = options.production && found === 'test-only' ? 'unused' : found;
     if (usage === 'used') continue;
     const sourceFile = member.getSourceFile();
     const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
@@ -78,7 +81,8 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
   const typeFold = emptyOwnerFindings(reportedMembers);
   const sliceFold = emptyReturnedObjectFindings(reportedMembers);
   findings.push(...typeFold.emptyFindings, ...sliceFold.emptyFindings);
-  assignVerdicts(project, findings, process.cwd());
+  const deadFilePaths = new Set<string>([...modules.deadFiles].map(sf => sf.getFilePath()));
+  assignVerdicts(project, findings, process.cwd(), filePath => deadFilePaths.has(filePath));
   // A far side earns a finding on the same terms as everything else: nothing
   // already reported covers it, it sits inside the scope this run was asked
   // for, and nobody suppressed it.
@@ -91,7 +95,9 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     if (isFileSuppressed(sourceFile)) return false;
     return !isNodeSuppressed(far);
   };
-  findings.push(...annotateStrandedChannels(project, findings, process.cwd(), reportFarSide));
+  findings.push(
+    ...annotateStrandedChannels(project, findings, process.cwd(), { reportFarSide, boundaries: options.boundaries })
+  );
   // One logical fact, one finding: a type losing every member is the story,
   // not seven bullets. The members fold in after they lent it their verdict.
   const swallowed = new Set([...typeFold.swallowed, ...sliceFold.swallowed]);

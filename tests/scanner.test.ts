@@ -20,6 +20,40 @@ describe('the scanner reads every form of import', () => {
     expect(specifiers("export type { A } from 'reexport';")).toEqual(['reexport']);
   });
 
+  it('marks which clauses the compiler erases', () => {
+    const erased = (text: string): boolean => scanText(text).specifiers[0].typeOnly;
+
+    expect(erased("import type { A } from 'x';")).toBe(true);
+    expect(erased("import type A from 'x';")).toBe(true);
+    expect(erased("import type * as ns from 'x';")).toBe(true);
+    expect(erased("import { type A } from 'x';")).toBe(true);
+    expect(erased("import { type A, type B as C } from 'x';")).toBe(true);
+    expect(erased("export type { A } from 'x';")).toBe(true);
+    expect(erased("export { type A } from 'x';")).toBe(true);
+
+    // Anything the output still loads.
+    expect(erased("import { a } from 'x';")).toBe(false);
+    expect(erased("import { type A, b } from 'x';")).toBe(false);
+    expect(erased("import a, { type B } from 'x';")).toBe(false);
+    expect(erased("import * as ns from 'x';")).toBe(false);
+    expect(erased("import 'x';")).toBe(false);
+    expect(erased("export * from 'x';")).toBe(false);
+    expect(erased("const m = await import('x');")).toBe(false);
+    expect(erased("const m = require('x');")).toBe(false);
+  });
+
+  it('does not mistake a binding called `type` for the keyword', () => {
+    const erased = (text: string): boolean => scanText(text).specifiers[0].typeOnly;
+
+    // A default import named `type`, and the same name in braces.
+    expect(erased("import type from 'x';")).toBe(false);
+    expect(erased("import type, { a } from 'x';")).toBe(false);
+    expect(erased("import { type } from 'x';")).toBe(false);
+    expect(erased("import { type as alias } from 'x';")).toBe(false);
+    // Here `as` is the imported name, so this one is erased after all.
+    expect(erased("import { type as as alias } from 'x';")).toBe(true);
+  });
+
   it('re-exports', () => {
     expect(specifiers("export * from 'all';")).toEqual(['all']);
     expect(specifiers("export * as ns from 'star';")).toEqual(['star']);

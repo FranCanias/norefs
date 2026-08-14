@@ -142,6 +142,22 @@ describe('assignability constraints (zero-reference members stay when required)'
   });
 });
 
+describe('type-level reads (the type system reads it, the runtime never does)', () => {
+  it('a conditional-type filter reads the names it matches on, both sides', () => {
+    // `kind` and `channel` are named by a filter literal, so they stay on the
+    // filter and on the types it matches. The members beside them still go.
+    expect(reportedIn('conditional-filter.ts')).toEqual(['deadDay', 'deadTimestamp']);
+  });
+
+  it("a predicate's asserted literal reads the name it narrows", () => {
+    expect(reportedIn('predicate-literal.ts')).toEqual(['deadWeight']);
+  });
+
+  it('a written type argument reads the names its constraint requires', () => {
+    expect(reportedIn('constraint-argument.ts')).toEqual(['deadRank']);
+  });
+});
+
 describe('enum members', () => {
   it('reports members with no references', () => {
     expect(reportedIn('enum-basic.ts')).toEqual(['Dead']);

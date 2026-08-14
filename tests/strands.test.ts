@@ -2,6 +2,7 @@ import { Project } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { formatText } from '../src/engine/report';
+import type { Boundary } from '../src/types';
 
 /** A dead wrapper under /src whose handler lives in an entry file outside it. */
 function scopedProject(header = ''): Project {
@@ -502,5 +503,135 @@ describe('stranded far sides of dead bridge wrappers', () => {
     const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
     expect(wrapper?.verdict).toBe('dead');
     expect(wrapper?.strands).toBeUndefined();
+  });
+});
+
+/**
+ * A REST project: a client that fetches, a route table that registers, and an
+ * entry that imports both. The route table exports nothing — the way route
+ * tables are written — so it reaches the analysis only through a side-effect
+ * import.
+ */
+function restProject(clientBody: string, routes: string[]): Project {
+  const project = new Project({ useInMemoryFileSystem: true });
+  project.createSourceFile(
+    '/server.d.ts',
+    [
+      'interface Router {',
+      '  get(path: string, handler: () => void): void;',
+      '  post(path: string, handler: () => void): void;',
+      '}',
+      'declare const app: Router;',
+      'declare function fetch(input: string, init?: unknown): Promise<unknown>;',
+      '',
+    ].join('\n')
+  );
+  project.createSourceFile('/routes.ts', `${routes.join('\n')}\n`);
+  project.createSourceFile('/client.ts', clientBody);
+  project.createSourceFile(
+    '/index.ts',
+    ["import './routes';", "import { ApiClient } from './client';", 'new ApiClient().live();', ''].join('\n')
+  );
+  return project;
+}
+
+const CLIENT = [
+  'export class ApiClient {',
+  '  live(): Promise<unknown> {',
+  "    return fetch('/api/recipes');",
+  '  }',
+  '  gone(): Promise<unknown> {',
+  "    return fetch('/api/recipes/legacy', { method: 'POST' });",
+  '  }',
+  '}',
+  '',
+].join('\n');
+
+const REST: Boundary[] = [{ send: ['fetch'], handle: ['app.get', 'app.post'] }];
+
+describe('boundaries the project declares', () => {
+  it('pairs a dead fetch with the route it was the last sender of', () => {
+    const project = restProject(CLIENT, [
+      "app.get('/api/recipes', () => {});",
+      "app.post('/api/recipes/legacy', () => {});",
+    ]);
+    const findings = analyze(project, { boundaries: REST });
+    const gone = findings.find(f => f.name === 'gone');
+    expect(gone?.strands).toContain("far side of `'/api/recipes/legacy'`");
+    const stranded = findings.filter(f => f.kind === 'stranded');
+    expect(stranded.map(f => f.name)).toEqual(['/api/recipes/legacy']);
+    // The live route keeps its handler: `live` still sends to it.
+    expect(stranded[0].filePath).toBe('/routes.ts');
+  });
+
+  it('finds nothing without the declaration — the shape alone never pairs', () => {
+    // The whole point of the config key. `fetch` and `app.post` are ordinary
+    // library calls; no shape says one feeds the other.
+    const project = restProject(CLIENT, [
+      "app.get('/api/recipes', () => {});",
+      "app.post('/api/recipes/legacy', () => {});",
+    ]);
+    const findings = analyze(project);
+    expect(findings.filter(f => f.kind === 'stranded')).toEqual([]);
+    expect(findings.find(f => f.name === 'gone')?.strands).toBeUndefined();
+  });
+
+  it('a surviving sender of the same route strands nothing', () => {
+    const client = CLIENT.replace("'/api/recipes/legacy', { method: 'POST' }", "'/api/recipes'");
+    const project = restProject(client, ["app.get('/api/recipes', () => {});"]);
+    const findings = analyze(project, { boundaries: REST });
+    expect(findings.filter(f => f.kind === 'stranded')).toEqual([]);
+    expect(findings.find(f => f.name === 'gone')?.verdict).toBe('dead');
+  });
+
+  it('matches a template-literal fetch against a :param route, and names the route as written', () => {
+    const client = CLIENT.replace("'/api/recipes/legacy', { method: 'POST' }", `\`/api/audit/\${String(1)}/history\``);
+    const project = restProject(client, [
+      "app.get('/api/recipes', () => {});",
+      "app.get('/api/audit/:id/history', () => {});",
+    ]);
+    const findings = analyze(project, { boundaries: REST });
+    const stranded = findings.filter(f => f.kind === 'stranded');
+    // Matching cuts the route at its first hole; the report never does.
+    expect(stranded.map(f => f.name)).toEqual(['/api/audit/:id/history']);
+  });
+
+  it('keeps the list route apart from the item route under it', () => {
+    // The pair every REST API has. Matching a route by its static head alone
+    // would fold these into one channel, and the live sender of the list route
+    // would then hide the stranded handler of the item route.
+    const client = CLIENT.replace("'/api/recipes/legacy', { method: 'POST' }", `\`/api/recipes/\${String(1)}\``);
+    const project = restProject(client, [
+      "app.get('/api/recipes', () => {});",
+      "app.get('/api/recipes/:id', () => {});",
+    ]);
+    const findings = analyze(project, { boundaries: REST });
+    expect(findings.filter(f => f.kind === 'stranded').map(f => f.name)).toEqual(['/api/recipes/:id']);
+  });
+
+  it('does not pair across two boundaries that share a channel', () => {
+    const project = restProject(CLIENT, [
+      "app.get('/api/recipes', () => {});",
+      "app.post('/api/recipes/legacy', () => {});",
+    ]);
+    // `queue.push` sends nothing here, so the route has no declared sender at
+    // all and the dead fetch belongs to a boundary that registers elsewhere.
+    const findings = analyze(project, { boundaries: [{ send: ['queue.push'], handle: ['queue.on'] }] });
+    expect(findings.filter(f => f.kind === 'stranded')).toEqual([]);
+  });
+
+  it('matches a callee by its tail, so `app.get` covers `this.app.get`', () => {
+    const project = restProject(CLIENT, [
+      'class Server {',
+      '  app = app;',
+      '  routes(): void {',
+      "    this.app.get('/api/recipes', () => {});",
+      "    this.app.post('/api/recipes/legacy', () => {});",
+      '  }',
+      '}',
+      'new Server().routes();',
+    ]);
+    const findings = analyze(project, { boundaries: REST });
+    expect(findings.filter(f => f.kind === 'stranded').map(f => f.name)).toEqual(['/api/recipes/legacy']);
   });
 });

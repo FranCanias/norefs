@@ -1,3 +1,4 @@
+import './registered';
 import { chainFn } from './barrel';
 import type { UsedShape } from './exports';
 import { usedFn } from './exports';

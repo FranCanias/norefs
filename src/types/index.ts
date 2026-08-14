@@ -19,11 +19,29 @@ export type FindingKind =
   | 'dependency'
   /** An imported package no scanned package.json lists. */
   | 'unlisted'
+  /** A dependency listed in the section that does not match how it is used. */
+  | 'misplaced'
   /** A handler whose every sender this report deletes: dead once they go. */
   | 'stranded';
 
 /** The declaration keyword behind a type finding. */
 export type TypeKeyword = 'interface' | 'type' | 'enum';
+
+/**
+ * One way a channel leaves this program, named by the project that built it.
+ *
+ * norefs finds the Electron-shaped bridge on its own — a callee the project's
+ * own .d.ts declares. Every other boundary is a library's convention, and no
+ * shape says which library pairs `fetch` with `app.get` rather than running the
+ * handler itself. So the project says it: two lists of callee names, one that
+ * sends on a channel and one that registers a handler for it.
+ */
+export interface Boundary {
+  /** Callee names that send on a channel: `fetch`, `apiClient.request`. */
+  send: string[];
+  /** Callee names that register a handler for one: `app.get`, `socket.on`. */
+  handle: string[];
+}
 
 /**
  * The claim a finding makes, with its safety profile:
@@ -43,7 +61,12 @@ export interface Finding {
   column: number;
   /** The member, export, or file name. */
   name: string;
-  /** The owner description for members; the namespace name for ns findings; "interface" or "type" for empty-type findings. */
+  /**
+   * The owner description for members; the namespace name for ns findings;
+   * "interface" or "type" for empty-type findings; the manifest section —
+   * "dependencies" or "devDependencies" — for dependency and misplaced ones,
+   * which is what tells a fix where the entry it moves is written now.
+   */
   context: string;
   anonymous: boolean;
   /** True when the declaration has zero references anywhere, so --fix can remove it whole. */

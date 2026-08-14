@@ -28,7 +28,7 @@ describe('the syntax-only pipeline', () => {
 
   it('recognises which requests it can serve', () => {
     expect(isSyntaxOnly(['file'])).toBe(true);
-    expect(isSyntaxOnly(['file', 'dependency', 'unlisted'])).toBe(true);
+    expect(isSyntaxOnly(['file', 'dependency', 'unlisted', 'misplaced'])).toBe(true);
     expect(isSyntaxOnly(['file', 'member'])).toBe(false);
     expect(isSyntaxOnly(['export'])).toBe(false);
     // No restriction means every kind, and most kinds need the checker.
