@@ -113,7 +113,7 @@ loosely invented no entry point, which was the risk worth checking. See
 
 - **Members of a const object are checked, like an enum's.** `const Timeouts = {
   … } as const` is the enum modern TypeScript writes, and
-  `Timeouts.DIAGRAM_UPDATE_DELAY` was provably dead while norefs said nothing —
+  `Timeouts.CHART_UPDATE_DELAY` was provably dead while norefs said nothing —
   not with `--anon`, not scoped to the file. The member pass read type
   declarations, and this is a value; the export pass saw `Timeouts` imported and
   stopped at the binding. Nobody asked about the members.

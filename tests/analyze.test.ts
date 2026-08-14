@@ -193,7 +193,7 @@ describe('enum members', () => {
 describe('const object members', () => {
   it('reports a member of an `as const` object that nothing reads', () => {
     // The enum modern TypeScript writes, and the same question asked of it.
-    expect(reportedIn('const-object-basic.ts')).toEqual(['DIAGRAM_UPDATE_DELAY']);
+    expect(reportedIn('const-object-basic.ts')).toEqual(['CHART_UPDATE_DELAY']);
   });
 
   it('asks it of a plain const object too', () => {
