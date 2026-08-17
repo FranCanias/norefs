@@ -238,14 +238,22 @@ describe('--watch', () => {
     await project(async dir => {
       const watcher = spawn(process.execPath, [cli, '--watch'], { cwd: dir });
       let output = '';
-      const seen = (text: string, timeoutMs = 20_000): Promise<void> =>
+      // The child loads a whole TypeScript program before it prints anything,
+      // and on a shared runner it does that while every other test file loads
+      // one too. 20s was enough on a laptop and not on CI, where the first
+      // report had not arrived yet — a slow start, which reads exactly like a
+      // hang unless the message says whether the child is still alive.
+      const seen = (text: string, timeoutMs = 60_000): Promise<void> =>
         new Promise((resolve, reject) => {
           const check = (): void => {
             if (!output.includes(text)) return;
             clearTimeout(timer);
             resolve();
           };
-          const timer = setTimeout(() => reject(new Error(`never saw ${text} in:\n${output}`)), timeoutMs);
+          const timer = setTimeout(() => {
+            const state = watcher.exitCode === null ? 'still running' : `exited ${watcher.exitCode}`;
+            reject(new Error(`never saw ${text}; the watcher is ${state}. Output so far:\n${output}`));
+          }, timeoutMs);
           for (const stream of [watcher.stdout, watcher.stderr]) {
             stream.on('data', (chunk: Buffer) => {
               output += chunk.toString();
@@ -268,7 +276,7 @@ describe('--watch', () => {
         watcher.kill();
       }
     });
-  }, 40_000);
+  }, 150_000);
 
   it('refuses to combine with the flags that write', () => {
     project(dir => {

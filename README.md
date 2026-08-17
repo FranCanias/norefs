@@ -200,9 +200,10 @@ pnpm run typecheck  # tsc --noEmit, over src and tests both
 pnpm run format     # biome check --write
 ```
 
-norefs is developed on Node 22.4 or newer — the floor `engines` promises and CI
-tests. [CONTRIBUTING.md](CONTRIBUTING.md) covers how the suite is organized, how
-a release happens, and the writing rules the code and docs follow.
+norefs runs on Node 22.4 — the floor `engines` promises, and CI builds and runs
+the binary there. Developing it needs 22.12, which is what Vitest needs.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers how the suite is organized, how a
+release happens, and the writing rules the code and docs follow.
 
 ## License
 

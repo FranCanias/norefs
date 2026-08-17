@@ -15,11 +15,15 @@ pnpm run format     # biome check --write, the writing half of `check`
 pnpm run coverage   # the suite, with a coverage summary
 ```
 
-Node 22.4 or newer. That floor is not arbitrary: the CLI parses `--no-*` flags
-with `parseArgs({ allowNegative: true })`, which landed in 22.4. CI runs the
-floor and the current release, so a change that needs something newer fails
-there rather than in a user's terminal. `.nvmrc` pins 24 for local work — an
-untested Node version is a bad place to debug from.
+Node 22.4 or newer to *use* norefs. That floor is not arbitrary: the CLI parses
+`--no-*` flags with `parseArgs({ allowNegative: true })`, which landed in 22.4.
+
+Node 22.12 or newer to *develop* it. Vitest pulls vite and rolldown, and both
+require 22.12 — so the suite cannot run on the floor it promises. CI keeps the
+two apart: the suite runs on 22.12 and 24, and a separate job builds on 22.4
+and runs the binary there, which is the promise `engines` actually makes.
+`.nvmrc` pins 24 for local work — an untested Node version is a bad place to
+debug from.
 
 Every script here is portable: `build` cleans and chmods through Node rather
 than `rm -rf` and `chmod`, which do not exist on Windows. CI runs on Linux only,

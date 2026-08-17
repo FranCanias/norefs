@@ -24,9 +24,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floor the engines field promises, and the current release. A
-        # promise nobody tests is not a promise.
-        node-version: ['22.4', '24']
+        # Vitest 4 pulls vite and rolldown, and both require Node 22.12 or
+        # newer. That is the toolchain's floor, not the tool's — the `floor`
+        # job below is what checks the one `engines` promises.
+        node-version: ['22.12', '24']
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
@@ -42,6 +43,25 @@ jobs:
       # norefs over norefs: the smallest corpus entry, and the one that has to
       # stay at zero findings.
       - run: node dist/index.js
+
+  # A promise nobody tests is not a promise, and `engines` promises Node 22.4
+  # of the published CLI — not of the test runner, which needs 22.12. So the
+  # floor is checked the only way that means anything: the built binary runs
+  # there. `--no-explain` is a `parseArgs({ allowNegative: true })` flag, which
+  # is the whole reason the floor is 22.4 and not older.
+  floor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22.4'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: node dist/index.js --no-explain
 
   coverage:
     runs-on: ubuntu-latest
