@@ -65,6 +65,19 @@ Client and diffing them: the member-less run reported 89 module-level findings
 where the full run reported 88, and the extra one was the true answer arriving
 by accident. Both report 88 now. [docs/corpus.md](docs/corpus.md) has the run.
 
+**`--watch` is watching before it says it is.** The first report ended with
+`Watching for file changes`, and the watcher was installed after it. A save
+landing in that gap was lost for good: the run sat silent over the file it had
+just been asked to follow, and only a second save woke it. The window is
+sub-millisecond on an idle laptop, which is why it went unseen — and wide enough
+on a loaded machine that CI hit it on every run. The order is reversed now, so
+an edit during the first analysis queues a re-run instead of vanishing.
+
+CI is what found it, on the first day CI ran. It took a widened gap and a
+container to prove: with the old order and 1.5 seconds inserted before the
+watcher, the edit is lost every time; with the new order and the same 1.5
+seconds, it is caught every time.
+
 **A hand-edited baseline says what is wrong with it.** An entry missing a field
 used to fold into a key containing `undefined` and quietly match nothing. It is
 now the same loud error an unparseable baseline gets.

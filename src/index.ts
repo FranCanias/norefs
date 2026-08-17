@@ -422,11 +422,17 @@ function main(): void {
       }
       process.stderr.write('Watching for file changes. Press Ctrl-C to stop.\n');
     };
-    report();
+    // Watch first, report second. The report signs off with "Watching for file
+    // changes", and until the watcher exists that line promises more than the
+    // process is doing: a save landing in the gap is lost, and the run sits
+    // silent over a file it was asked to follow. The gap is too narrow to see
+    // on a laptop and wide enough to miss an edit on a loaded machine. An edit
+    // during the first analysis now queues a re-run instead of vanishing.
     watchProject(project(), tsConfigPaths, () => {
       if (process.stdout.isTTY) process.stdout.write('\x1Bc');
       report();
     });
+    report();
     return;
   }
 
