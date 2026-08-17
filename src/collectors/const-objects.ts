@@ -1,10 +1,9 @@
 import type { ObjectLiteralExpression, SourceFile, VariableDeclaration } from 'ts-morph';
 import { SyntaxKind, VariableDeclarationKind } from 'ts-morph';
-import type { Candidate } from './candidate';
+import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { isKeyofTargeted } from './dynamic-usage';
 import { valueUsesStayLocal } from './escape';
-import type { CollectContext } from './index';
 
 /**
  * Members of a const object literal: `const Timeouts = { … } as const`.

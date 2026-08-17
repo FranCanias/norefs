@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { firstLine } from './messages';
 import type { Boundary } from './types';
 
 /**
@@ -67,7 +68,7 @@ export function loadConfig(dir: string): Config {
   try {
     raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (error) {
-    throw new Error(`${CONFIG_FILE} is not valid JSON: ${(error as Error).message}`);
+    throw new Error(`${CONFIG_FILE} is not valid JSON: ${firstLine(error)}`);
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new Error(`${CONFIG_FILE} must be a JSON object`);

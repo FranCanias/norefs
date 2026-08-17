@@ -1,7 +1,7 @@
 import type { CallExpression, Node, Project, ts } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { isInside } from '../lookup/reference-index';
 import type { Boundary, Finding } from '../types';
-import { isInside } from './reference-index';
 import { formatLocation, hasAmbientCallee, location } from './verdicts';
 
 /**

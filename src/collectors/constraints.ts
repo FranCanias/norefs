@@ -72,16 +72,8 @@ function constrainOverride(member: Node, name: string, heritage: Type[], index: 
 function collectPredicateConstraints(sourceFile: SourceFile, index: ConstraintIndex): void {
   for (const predicate of sourceFile.getDescendantsOfKind(SyntaxKind.TypePredicate)) {
     const typeNode = predicate.getTypeNode();
-    if (!typeNode) continue;
-    const paramName = predicate.getParameterNameNode();
-    if (!paramName.isKind(SyntaxKind.Identifier)) continue;
-    const signature = predicate.getParent();
-    if (!('getParameters' in signature)) continue;
-    const param = (signature as { getParameters(): Array<{ getName(): string; getType(): Type }> })
-      .getParameters()
-      .find(p => p.getName() === paramName.getText());
-    if (!param) continue;
-    constrain(typeNode.getType(), param.getType(), index, 0);
+    const narrowed = predicateParameterType(predicate);
+    if (typeNode && narrowed) constrain(typeNode.getType(), narrowed, index, 0);
   }
 }
 

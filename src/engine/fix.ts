@@ -9,12 +9,16 @@ import type {
   VariableDeclaration,
 } from 'ts-morph';
 import { Node as NodeGuards, SyntaxKind, ts } from 'ts-morph';
+import { findReferencesAsNodes } from '../lookup/references';
+import { firstLine } from '../messages';
 import type { Finding } from '../types';
 import { declarationNameNode } from './modules';
-import { findReferencesAsNodes } from './references';
 
 /** Nothing to skip while walking a file for uses. */
 const NO_NODES: ReadonlySet<ts.Node> = new Set();
+
+/** How many times orphan cleanup re-runs before it settles for what it has. */
+const MAX_CLEANUP_ROUNDS = 5;
 
 interface FixResult {
   /** Paths of the files that changed. */
@@ -38,20 +42,6 @@ export interface CommentLocation {
   text: string;
 }
 
-/**
- * Fix the findings and save the touched files, gated by verdict.
- *
- * A `dead` or `over-exported` finding auto-fixes: an export with zero
- * references anywhere is removed whole, together with any import/export
- * specifiers that forward it; an over-exported declaration only loses the
- * export keyword; a dead member is deleted (a parameter property only loses
- * its modifiers and stays a plain parameter, so the constructor signature and
- * every call site keep working). A `write-only`, `contract`, or `shadowed`
- * member is a claim the analysis cannot prove — it needs `options.unsafe`.
- * Orphaned identifiers left behind in touched files (an import only the
- * removed code used) are cleaned up before saving. Unused files, namespace
- * findings, and emptied types are never touched.
- */
 /** True when --fix may act on this finding, given the unsafe opt-in. */
 export function isFixable(finding: Finding, unsafe: boolean): boolean {
   // package.json entries are edited as text, outside the verified campaign —
@@ -113,12 +103,20 @@ export class UnappliedFix extends Error {
   }
 }
 
-/** The first line of whatever was thrown — a ts-morph error carries a whole dump. */
-function firstLine(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.split('\n')[0].trim();
-}
-
+/**
+ * Fix the findings and save the touched files, gated by verdict.
+ *
+ * A `dead` or `over-exported` finding auto-fixes: an export with zero
+ * references anywhere is removed whole, together with any import/export
+ * specifiers that forward it; an over-exported declaration only loses the
+ * export keyword; a dead member is deleted (a parameter property only loses
+ * its modifiers and stays a plain parameter, so the constructor signature and
+ * every call site keep working). A `write-only`, `contract`, or `shadowed`
+ * member is a claim the analysis cannot prove — it needs `options.unsafe`.
+ * Orphaned identifiers left behind in touched files (an import only the
+ * removed code used) are cleaned up before saving. Unused files, namespace
+ * findings, and emptied types are never touched.
+ */
 export function applyFixes(findings: Finding[], options: { save?: boolean; unsafe?: boolean } = {}): FixResult {
   const fixable = findings.filter(f => isFixable(f, options.unsafe ?? false));
   let skipped = findings.length - fixable.length;
@@ -597,7 +595,7 @@ function removeDeclaration(decl: Node, kept: Set<Node>): void {
  * files are stable.
  */
 function cleanUpOrphans(files: Set<SourceFile>, kept: Set<Node>): void {
-  for (let round = 0; round < 5; round++) {
+  for (let round = 0; round < MAX_CLEANUP_ROUNDS; round++) {
     const removals: Array<() => void> = [];
     for (const file of files) {
       collectUnusedImports(file, removals);

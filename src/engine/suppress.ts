@@ -1,12 +1,6 @@
 import type { Node, SourceFile } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
-
-/** `// norefs-ignore` (with an optional reason after it) suppresses one finding. */
-const LINE_MARK = /\/[/*]\s*norefs-ignore(?!-)/;
-/** `// norefs-ignore-block` suppresses a declaration and everything inside it. */
-const BLOCK_MARK = /\/[/*]\s*norefs-ignore-block\b/;
-/** `// norefs-ignore-file` before the first statement suppresses every finding in the file. */
-const FILE_MARK = /\/[/*]\s*norefs-ignore-file\b/;
+import { hasBlockMark, hasFileMark, hasLineMark } from './marks';
 
 const lineCache = new WeakMap<SourceFile, { text: string; lines: string[]; blocks: boolean }>();
 
@@ -28,7 +22,7 @@ export function isNodeSuppressed(nameNode: Node): boolean {
   const above = lines[line - 2] ?? '';
   // The line above only counts when it is a standalone comment; a trailing
   // comment there suppresses that line, not this one.
-  if (LINE_MARK.test(lines[line - 1] ?? '') || (/^\s*\/[/*]/.test(above) && LINE_MARK.test(above))) return true;
+  if (hasLineMark(lines[line - 1] ?? '') || (/^\s*\/[/*]/.test(above) && hasLineMark(above))) return true;
   return blocks && isInsideIgnoredBlock(nameNode, sourceFile, lines);
 }
 
@@ -43,8 +37,8 @@ export function isNodeSuppressed(nameNode: Node): boolean {
 function isInsideIgnoredBlock(node: Node, sourceFile: SourceFile, lines: string[]): boolean {
   for (let owner: Node | undefined = node; owner && !owner.isKind(SyntaxKind.SourceFile); owner = owner.getParent()) {
     const { line } = sourceFile.getLineAndColumnAtPos(owner.getStart());
-    if (BLOCK_MARK.test(lines[line - 1] ?? '')) return true;
-    if (owner.getLeadingCommentRanges().some(range => BLOCK_MARK.test(range.getText()))) return true;
+    if (hasBlockMark(lines[line - 1] ?? '')) return true;
+    if (owner.getLeadingCommentRanges().some(range => hasBlockMark(range.getText()))) return true;
   }
   return false;
 }
@@ -54,7 +48,7 @@ export function isFileSuppressed(sourceFile: SourceFile): boolean {
   const text = sourceFile.getFullText();
   const firstStatement = sourceFile.getStatements()[0];
   const header = firstStatement ? text.slice(0, firstStatement.getStart()) : text;
-  return FILE_MARK.test(header);
+  return hasFileMark(header);
 }
 
 /** Cached line split, invalidated when --fix rewrites the file. */
@@ -62,7 +56,7 @@ function linesOf(sourceFile: SourceFile): { lines: string[]; blocks: boolean } {
   const text = sourceFile.getFullText();
   const cached = lineCache.get(sourceFile);
   if (cached && cached.text === text) return cached;
-  const entry = { text, lines: text.split('\n'), blocks: BLOCK_MARK.test(text) };
+  const entry = { text, lines: text.split('\n'), blocks: hasBlockMark(text) };
   lineCache.set(sourceFile, entry);
   return entry;
 }

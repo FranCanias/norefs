@@ -1,27 +1,15 @@
-import type { Node, Project, SourceFile } from 'ts-morph';
-import type { Candidate } from './candidate';
+import type { Project, SourceFile } from 'ts-morph';
+import type { Candidate, CollectContext } from './candidate';
 import { collectClassCandidates } from './classes';
 import { collectConstObjectCandidates } from './const-objects';
-import type { ConstraintIndex } from './constraints';
 import { buildConstraintIndex } from './constraints';
-import type { DynamicConsumptionIndex } from './dynamic-index';
 import { buildDynamicConsumptionIndex } from './dynamic-index';
 import { collectEnumCandidates } from './enums';
 import { collectInterfaceCandidates } from './interfaces';
 import { collectReturnedObjectCandidates } from './returned-objects';
 import { collectTypeLiteralCandidates } from './type-literals';
 
-export type { Candidate } from './candidate';
-
-export interface CollectContext {
-  dynamic: DynamicConsumptionIndex;
-  /** Member names each declaration must keep to satisfy declared assignability constraints. */
-  constrained: ConstraintIndex;
-  /** Cache for isKeyofTargeted, which costs a find-references call per declaration. */
-  keyofTargeted: Map<Node, boolean>;
-  /** Cache for classEscapesTracking, which recurses into derived classes. */
-  classEscapes: Map<Node, boolean>;
-}
+export type { Candidate, CollectContext } from './candidate';
 
 const collectors: Array<(sourceFile: SourceFile, ctx: CollectContext) => Candidate[]> = [
   collectInterfaceCandidates,

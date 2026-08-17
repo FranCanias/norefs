@@ -1,10 +1,9 @@
 import type { EnumDeclaration, SourceFile } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
-import { findReferencesAsNodes } from '../engine/references';
-import type { Candidate } from './candidate';
+import { findReferencesAsNodes } from '../lookup/references';
+import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { isKeyofTargeted } from './dynamic-usage';
-import type { CollectContext } from './index';
 
 export function collectEnumCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
   const candidates: Candidate[] = [];

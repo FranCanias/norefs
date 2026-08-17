@@ -9,13 +9,12 @@ import type {
   Type,
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
-import { findReferencesAsNodes } from '../engine/references';
-import type { Candidate } from './candidate';
+import { findReferencesAsNodes } from '../lookup/references';
+import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { mergeNames } from './constraints';
 import { isKeyofTargeted } from './dynamic-usage';
 import { callableEscapes, getCallableNameNode } from './escape';
-import type { CollectContext } from './index';
 
 export function collectClassCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
   const candidates: Candidate[] = [];
@@ -152,8 +151,11 @@ function allowedTypeSymbols(cls: ClassDeclaration, out = new Set<TsSymbol>()): S
   return out;
 }
 
+/** How far into a union or intersection the check unwraps a type. */
+const MAX_TYPE_DEPTH = 3;
+
 function typeIsAllowed(type: Type, allowed: Set<TsSymbol>, depth = 0): boolean {
-  if (depth > 3) return false;
+  if (depth > MAX_TYPE_DEPTH) return false;
   if (type.isUnion()) {
     return type
       .getUnionTypes()

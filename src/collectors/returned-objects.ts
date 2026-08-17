@@ -8,10 +8,9 @@ import type {
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { describeFunctionName } from '../engine/describe';
-import type { Candidate } from './candidate';
+import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { callableEscapes, getCallableNameNode } from './escape';
-import type { CollectContext } from './index';
 
 type FunctionLike = FunctionDeclaration | ArrowFunction | FunctionExpression;
 

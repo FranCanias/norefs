@@ -1,5 +1,18 @@
 import type { Node, PropertyNamedNode } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import type { ConstraintIndex } from './constraints';
+import type { DynamicConsumptionIndex } from './dynamic-index';
+
+/** What every collector reads: the project-wide indexes, and the caches they share. */
+export interface CollectContext {
+  dynamic: DynamicConsumptionIndex;
+  /** Member names each declaration must keep to satisfy declared assignability constraints. */
+  constrained: ConstraintIndex;
+  /** Cache for isKeyofTargeted, which costs a find-references call per declaration. */
+  keyofTargeted: Map<Node, boolean>;
+  /** Cache for classEscapesTracking, which recurses into derived classes. */
+  classEscapes: Map<Node, boolean>;
+}
 
 export interface Candidate {
   member: PropertyNamedNode & Node;

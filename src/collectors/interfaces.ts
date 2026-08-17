@@ -1,9 +1,8 @@
 import type { SourceFile } from 'ts-morph';
-import type { Candidate } from './candidate';
+import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { mergeNames } from './constraints';
 import { isKeyofTargeted } from './dynamic-usage';
-import type { CollectContext } from './index';
 
 export function collectInterfaceCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
   const candidates: Candidate[] = [];

@@ -1,7 +1,7 @@
 import type { Node } from 'ts-morph';
 import { Project, SyntaxKind } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
-import { findReferencesAsNodes } from '../src/engine/references';
+import { findReferencesAsNodes } from '../src/lookup/references';
 
 function projectOf(files: Record<string, string>): Project {
   const project = new Project({ useInMemoryFileSystem: true });

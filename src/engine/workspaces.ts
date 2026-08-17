@@ -91,12 +91,14 @@ function declaredPatterns(
  * called `build` or `dist` is still a package, and the declaration is what says
  * which directories count — guessing from names here would drop a real one.
  */
+const MAX_PACKAGE_DEPTH = 5;
+
 function packageDirectories(rootDir: string, fileSystem: ReadOnlyFileSystem): string[] {
   const found: string[] = [];
   const walk = (dir: string, depth: number): void => {
     // No real layout buries a package this deep, and a cap means a surprising
     // tree costs a bounded walk rather than an unbounded one.
-    if (depth > 5) return;
+    if (depth > MAX_PACKAGE_DEPTH) return;
     for (const entry of fileSystem.readDir(dir)) {
       if (!entry.isDirectory) continue;
       const name = path.basename(entry.path);

@@ -1207,8 +1207,24 @@ function safely<T>(read: () => T): T | undefined {
 
 const indexes = new WeakMap<Project, ReferenceIndex>();
 
+/**
+ * The private ts-morph member `wrap` calls, checked once before the first
+ * query. It is the one place a ts-morph upgrade can break this index, and a
+ * cast fails deep inside a walk — hours in, with a message about `undefined`.
+ * Asked here, the same break says its own name before any work starts.
+ */
+function checkWrappingApi(project: Project): void {
+  const sourceFile = project.getSourceFiles()[0] as Partial<WrappingSourceFile> | undefined;
+  if (sourceFile && typeof sourceFile._getNodeFromCompilerNode !== 'function') {
+    throw new Error(
+      'this ts-morph release no longer exposes SourceFile._getNodeFromCompilerNode, which the reference index needs'
+    );
+  }
+}
+
 /** Build the index this run needs and hand it to every later query. */
 export function buildReferenceIndex(project: Project, options: IndexOptions): ReferenceIndex {
+  checkWrappingApi(project);
   const built = new ReferenceIndex(project, options);
   indexes.set(project, built);
   return built;

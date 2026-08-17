@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { firstLine } from './messages';
 import type { Finding, FindingKind } from './types';
 
 const FILE_NAME = 'norefs-baseline.json';
@@ -57,12 +58,18 @@ export function applyBaseline(findings: Finding[], cwd: string): BaselineResult 
   try {
     entries = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (error) {
-    throw new Error(`${FILE_NAME} is not valid JSON: ${(error as Error).message}`);
+    throw new Error(`${FILE_NAME} is not valid JSON: ${firstLine(error)}`);
   }
   if (!Array.isArray(entries)) throw new Error(`${FILE_NAME} must be a JSON array`);
 
   const remaining = new Map<string, number>();
-  for (const entry of entries as BaselineEntry[]) {
+  for (const [index, entry] of entries.entries()) {
+    // A hand-edited entry missing a field would key on `undefined` and quietly
+    // match nothing — the file would look applied and suppress nothing. It says
+    // so instead, in the same voice as a file that is not JSON at all.
+    if (!isBaselineEntry(entry)) {
+      throw new Error(`${FILE_NAME} entry ${index + 1} needs a kind, filePath, name, and context`);
+    }
     const key = entryKey(entry.kind, entry.filePath, entry.name, entry.context);
     remaining.set(key, (remaining.get(key) ?? 0) + (entry.count ?? 1));
   }
@@ -83,6 +90,14 @@ export function applyBaseline(findings: Finding[], cwd: string): BaselineResult 
   let stale = 0;
   for (const left of remaining.values()) stale += left;
   return { fresh, matched: matchedFindings.length, matchedFindings, stale };
+}
+
+/** Every field the key is built from is a string, and a count is a count. */
+function isBaselineEntry(entry: unknown): entry is BaselineEntry {
+  if (entry === null || typeof entry !== 'object') return false;
+  const record = entry as Record<string, unknown>;
+  const strings = ['kind', 'filePath', 'name', 'context'].every(field => typeof record[field] === 'string');
+  return strings && (record.count === undefined || typeof record.count === 'number');
 }
 
 function entryKey(kind: string, filePath: string, name: string, context: string): string {

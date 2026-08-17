@@ -1,6 +1,6 @@
 import type { CallExpression, Identifier, Node, PropertyDeclaration, PropertySignature } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
-import { findReferencesAsNodes } from '../engine/references';
+import { findReferencesAsNodes } from '../lookup/references';
 
 /**
  * Conservative escape analysis shared by the collectors. A value "stays local"

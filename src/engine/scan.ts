@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { hasBlockMark, hasFileMark, hasLineMark } from './marks';
 
 /** A module specifier as it stands in the source. */
 export interface Specifier {
@@ -411,41 +412,12 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
 }
 
 /**
- * `norefs-ignore` or `norefs-ignore-block` after a comment opener, and not the
- * `-file` form. The kinds this pipeline reports — a file, a dependency, an
- * import — have nothing nested inside them, so the block form reaches exactly
- * as far as the line form here, and the two pipelines agree on every line.
+ * `norefs-ignore` or `norefs-ignore-block` on this line. The kinds this
+ * pipeline reports — a file, a dependency, an import — have nothing nested
+ * inside them, so the block form reaches exactly as far as the line form here.
  */
-function hasLineMark(line: string): boolean {
-  const mark = 'norefs-ignore';
-  const block = '-block';
-  for (let i = 0; i + 1 < line.length; i++) {
-    if (line[i] !== '/' || (line[i + 1] !== '/' && line[i + 1] !== '*')) continue;
-    let j = i + 2;
-    while (j < line.length && isSpace(line[j])) j++;
-    if (line.slice(j, j + mark.length) !== mark) continue;
-    let end = j + mark.length;
-    if (line.slice(end, end + block.length) === block) end += block.length;
-    const after = line[end];
-    if (after !== undefined && (after === '-' || isIdentPart(after))) continue;
-    return true;
-  }
-  return false;
-}
-
-/** `norefs-ignore-file` after a comment opener, as a whole word. */
-function hasFileMark(text: string): boolean {
-  const mark = 'norefs-ignore-file';
-  for (let i = 0; i + 1 < text.length; i++) {
-    if (text[i] !== '/' || (text[i + 1] !== '/' && text[i + 1] !== '*')) continue;
-    let j = i + 2;
-    while (j < text.length && isSpace(text[j])) j++;
-    if (text.slice(j, j + mark.length) !== mark) continue;
-    const after = text[j + mark.length];
-    if (after !== undefined && isIdentPart(after)) continue;
-    return true;
-  }
-  return false;
+function isSuppressedLine(line: string): boolean {
+  return hasLineMark(line) || hasBlockMark(line);
 }
 
 /** True when nothing but whitespace stands before the comment opening the line. */
@@ -471,7 +443,7 @@ export function scanText(text: string): FileScan {
     const start = lineStarts[line];
     const end = Math.max(start, line + 1 < lineStarts.length ? lineStarts[line + 1] - 1 : text.length);
     const content = text.slice(start, end);
-    if (hasLineMark(content)) suppressedLines.push(line + 1);
+    if (isSuppressedLine(content)) suppressedLines.push(line + 1);
     if (opensWithComment(content)) commentLines.push(line + 1);
   }
 

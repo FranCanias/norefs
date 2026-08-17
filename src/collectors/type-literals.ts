@@ -1,7 +1,7 @@
 import type { Node, ParameterDeclaration, SourceFile, TypeLiteralNode } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { describeTypeLiteralContext } from '../engine/describe';
-import type { Candidate } from './candidate';
+import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { mergeNames } from './constraints';
 import { isKeyofTargeted } from './dynamic-usage';
@@ -12,7 +12,6 @@ import {
   propertyValueStaysLocal,
   valueUsesStayLocal,
 } from './escape';
-import type { CollectContext } from './index';
 
 export function collectTypeLiteralCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
   const candidates: Candidate[] = [];

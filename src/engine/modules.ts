@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type {
   ExportDeclaration,
   Identifier,
@@ -8,6 +9,7 @@ import type {
   SourceFile,
 } from 'ts-morph';
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
+import { findReferencesAsNodes } from '../lookup/references';
 import type { Boundary, Finding, FindingKind, TypeKeyword } from '../types';
 import type { DependencyUse } from './dependencies';
 import { analyzeDependencies } from './dependencies';
@@ -16,7 +18,6 @@ import { hostFileSystem } from './file-system';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
-import { findReferencesAsNodes } from './references';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 import { configReader } from './tool-configs';
 
@@ -69,14 +70,24 @@ export interface ModuleOptions {
  * has always used it. Asking it for the specifiers the type system dropped is
  * what makes the two runs agree.
  */
-function importedFiles(sourceFile: SourceFile, project: Project, byPath: Map<string, SourceFile>): SourceFile[] {
+function importedFiles(
+  sourceFile: SourceFile,
+  project: Project,
+  byPath: Map<string, SourceFile>,
+  packages: PackageConfig[]
+): SourceFile[] {
   const targets = sourceFile.getReferencedSourceFiles().filter(target => !target.isDeclarationFile());
+  // The options of the package owning the importing file, exactly as the
+  // project used when it loaded: a run spanning several tsconfigs resolves
+  // each package's `paths` with that package's own options, and a fallback
+  // that reached for the first tsconfig's could call a live file dead.
+  const options = optionsForDir(packages, path.dirname(sourceFile.getFilePath())) ?? project.getCompilerOptions();
   for (const declaration of sourceFile.getImportDeclarations()) {
     if (declaration.getModuleSpecifierSourceFile()) continue;
     const resolved = ts.resolveModuleName(
       declaration.getModuleSpecifierValue(),
       sourceFile.getFilePath(),
-      project.getCompilerOptions(),
+      options,
       project.getModuleResolutionHost()
     ).resolvedModule;
     const target = resolved && byPath.get(resolved.resolvedFileName);
@@ -114,7 +125,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
         isFileSuppressed(sourceFile)
       );
     },
-    sourceFile => importedFiles(sourceFile, project, byPath)
+    sourceFile => importedFiles(sourceFile, project, byPath, options.packages ?? [])
   );
   const namespaceConsumers = findNamespaceConsumers(project);
 

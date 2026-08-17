@@ -1,9 +1,9 @@
 import path from 'node:path';
 import type { InterfaceDeclaration, Node, Project, SourceFile, TypeAliasDeclaration, TypeNode } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { referenceIndex } from '../lookup/reference-index';
+import { findReferencesAsNodes } from '../lookup/references';
 import type { Finding, Verdict } from '../types';
-import { referenceIndex } from './reference-index';
-import { findReferencesAsNodes } from './references';
 
 /**
  * Turn the single "unused" label into a verdict per finding.

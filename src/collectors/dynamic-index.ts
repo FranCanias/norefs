@@ -16,6 +16,9 @@ export interface DynamicConsumptionIndex {
 
 const OBJECT_KEY_CONSUMERS = new Set(['keys', 'values', 'entries', 'getOwnPropertyNames', 'assign']);
 
+/** How far into a union, intersection, or array the walk unwraps a type. */
+const MAX_TYPE_DEPTH = 3;
+
 export function buildDynamicConsumptionIndex(project: Project): DynamicConsumptionIndex {
   const suppressed = new Set<Node>();
   const probed = new Map<Node, Set<string>>();
@@ -75,7 +78,7 @@ function addProbe(type: Type, name: string, probed: Map<Node, Set<string>>): voi
 }
 
 function addTypeDeclarations(type: Type, out: Set<Node>, depth = 0): void {
-  if (depth > 3) return;
+  if (depth > MAX_TYPE_DEPTH) return;
   if (type.isUnion()) {
     for (const part of type.getUnionTypes()) addTypeDeclarations(part, out, depth + 1);
     return;

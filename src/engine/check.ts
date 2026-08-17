@@ -1,6 +1,6 @@
 import type { PropertyNamedNode, SourceFile } from 'ts-morph';
-import { referenceIndex } from './reference-index';
-import { findReferencesAsNodes } from './references';
+import { referenceIndex } from '../lookup/reference-index';
+import { findReferencesAsNodes } from '../lookup/references';
 
 type MemberUsage = 'used' | 'unused' | 'test-only';
 

@@ -1,6 +1,6 @@
 import type { Identifier } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
-import { findReferencesAsNodes } from '../engine/references';
+import { findReferencesAsNodes } from '../lookup/references';
 
 /**
  * True when `keyof T` or `keyof typeof T` appears anywhere for this name. That
