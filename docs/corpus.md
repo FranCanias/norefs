@@ -121,7 +121,7 @@ the only direction it can carry.
 zod was not re-run; nothing in this release touches the workspace handling that
 run exercises.
 
-## apollo-client (2026-08-17, unreleased, tsconfig.json)
+## apollo-client (2026-08-17, v0.8.0, tsconfig.json)
 
 **141 findings: 33 dead, 27 over-exported, 1 write-only, 64 test-only, 2
 unlisted dependencies, 14 misplaced — in 12.4 seconds** over 541 files. The

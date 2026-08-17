@@ -4,7 +4,25 @@ norefs follows [semver](https://semver.org). Before 1.0.0, minor versions
 (0.x.0) may change output formats, flag semantics, and verdicts; patch
 versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 
-## Unreleased
+## 0.8.0 — 2026-08-17
+
+A release about the machinery around the analysis. An audit went over the
+repository — CI, packaging, lint configuration, the layering — and found the
+gaps were not in what norefs decides but in what nothing was checking. The test
+suite had no type gate. The formatter never ran in CI. Four fixture trees were
+linted under the very rule they exist to break.
+
+None of that would reach a user, except that the same pass produced this
+release's one real fix. Giving the speed page a source anyone can re-run meant
+running two configurations of norefs over a 541-file repository and diffing the
+reports. They disagreed by one finding, and the finding was false: a dynamic
+import destructured on the spot leaves no reference on the export, so norefs
+called it dead. Both configurations were blind to it. The full one had stayed
+quiet by accident, which is not the same as being right.
+
+That is what a guard rail is for, and it is the argument for every other change
+here. The rest of the release answers bad input: three paths that used to end in
+a stack trace or a silent success now say what is wrong and exit 2.
 
 **Node 22.4 is the floor.** `engines` said `>=20` and the CLI passed
 `allowNegative: true` to `parseArgs`, an option that landed in 22.4 — so on
@@ -70,10 +88,9 @@ The test suite was never type-checked: `tsc` read `src` only, and a third of the
 codebase had no type gate. Formatting and import order were never checked: CI
 ran `biome lint`, the linter alone, where `biome ci` runs the formatter and the
 assists over the same tree and reaches the JSON the linter skips. The Biome
-exemption for fixture directories
-named five of the nine by hand, so four fixture trees — whose whole job is to
-hold code nothing uses — were linted with `noUnusedVariables: error`; a pattern
-now covers every one. `ci.yml` declared no `permissions`, no `concurrency`, and
+exemption for fixture directories named five of the nine by hand, so four
+fixture trees — whose whole job is to hold code nothing uses — were linted with
+`noUnusedVariables: error`; a pattern now covers every one. `ci.yml` declared no `permissions`, no `concurrency`, and
 no `timeout-minutes`, so a fork's pull request could inherit a write-scoped
 token and a hung child process could run for GitHub's default six hours. Every
 action is pinned to a commit SHA, and Dependabot moves them. A weekly security
