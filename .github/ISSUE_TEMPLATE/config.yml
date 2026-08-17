@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/FranCanias/norefs/security/advisories/new
+    about: Report privately through a security advisory, not a public issue.
+  - name: How a check decides
+    url: https://github.com/FranCanias/norefs/blob/main/docs/checks.md
+    about: What each check reports, and what it deliberately does not.

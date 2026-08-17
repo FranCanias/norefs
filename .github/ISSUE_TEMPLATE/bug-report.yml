@@ -1,0 +1,53 @@
+name: Bug report
+description: norefs crashed, hung, wrote the wrong thing, or a flag did not do what it says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a finding that is simply wrong, use **Wrong finding** instead — it
+        asks for what that case needs.
+  - type: input
+    id: command
+    attributes:
+      label: The command you ran
+      placeholder: norefs --fix --verify-command "vitest run"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: The output
+      description: Everything norefs printed, including any stack trace.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: project
+    attributes:
+      label: The project it ran on
+      description: >
+        Whatever matters here — a monorepo or not, the tsconfig it ran against,
+        your `norefs.config.json`, anything unusual about the layout.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: norefs version
+      description: '`npm ls norefs`, or the line in your package.json'
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Node version and operating system
+      placeholder: Node 24.2.0, macOS 15
+    validations:
+      required: true

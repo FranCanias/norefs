@@ -1,0 +1,60 @@
+name: Wrong finding
+description: norefs reported code that is alive, or stayed quiet about code that is dead.
+labels: [finding]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A finding that is wrong is the most valuable report this project gets.
+        Every one of them becomes a fixture in `tests/fixtures/`.
+  - type: dropdown
+    id: direction
+    attributes:
+      label: Which way is it wrong?
+      options:
+        - Reported, but the code is used
+        - Not reported, but the code is dead
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: The smallest code that shows it
+      description: >
+        Two files beat a repository. Include the declaration and whatever uses
+        it — that link is the thing norefs missed or invented.
+      render: typescript
+      placeholder: |
+        // recipes.ts
+        export interface Recipe {
+          title: string;
+          servings: number; // reported unused
+        }
+
+        // menu.ts
+        import type { Recipe } from './recipes';
+        export const scale = (r: Recipe) => r.servings * 2;
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: What norefs printed
+      description: The finding line, with its verdict and evidence.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: The command you ran
+      placeholder: norefs -p tsconfig.json --only members
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: norefs version
+      description: '`npm ls norefs`, or the line in your package.json'
+    validations:
+      required: true
