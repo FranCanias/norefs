@@ -20,7 +20,21 @@ jobs:
           node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
+      # A release tag that disagrees with package.json republishes the old
+      # version. npm rejects the duplicate, but the rejection explains nothing
+      # — so the mismatch says its own name here instead.
+      - name: Check the tag matches package.json
+        run: |
+          node -e '
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            const { version } = require("./package.json");
+            if (tag !== version) {
+              console.error(`error: release tag ${tag} does not match package.json version ${version}`);
+              process.exit(1);
+            }
+          '
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm typecheck
       - run: pnpm test
       - run: npm publish
