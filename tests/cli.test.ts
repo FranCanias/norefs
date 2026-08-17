@@ -243,7 +243,17 @@ describe('--watch', () => {
       // one too. 20s was enough on a laptop and not on CI, where the first
       // report had not arrived yet — a slow start, which reads exactly like a
       // hang unless the message says whether the child is still alive.
-      const seen = (text: string, timeoutMs = 60_000): Promise<void> =>
+      // What this platform's recursive watch actually reports. The suite fails
+      // on Linux under Node 24 and passes under 22.12, with the watcher alive
+      // and silent — which is what a changed path norefs cannot match its
+      // loaded files against looks like. Recording the payload here says so
+      // outright instead of leaving the next reader to guess.
+      const events: string[] = [];
+      const probe = fs.watch(dir, { recursive: true }, (event, fileName) => {
+        events.push(`${event} ${JSON.stringify(fileName)}`);
+      });
+
+      const seen = (phase: string, text: string, timeoutMs = 60_000): Promise<void> =>
         new Promise((resolve, reject) => {
           const check = (): void => {
             if (!output.includes(text)) return;
@@ -252,7 +262,13 @@ describe('--watch', () => {
           };
           const timer = setTimeout(() => {
             const state = watcher.exitCode === null ? 'still running' : `exited ${watcher.exitCode}`;
-            reject(new Error(`never saw ${text}; the watcher is ${state}. Output so far:\n${output}`));
+            reject(
+              new Error(
+                `${phase}: never saw ${text}; the watcher is ${state}.\n` +
+                  `This platform reported: ${events.join(', ') || '(no watch events)'}\n` +
+                  `Output so far:\n${output}`
+              )
+            );
           }, timeoutMs);
           for (const stream of [watcher.stdout, watcher.stderr]) {
             stream.on('data', (chunk: Buffer) => {
@@ -264,15 +280,16 @@ describe('--watch', () => {
         });
 
       try {
-        await seen('Watching for file changes');
+        await seen('first report', 'Watching for file changes');
         expect(output).toContain('`dead`');
 
         output = '';
         fs.writeFileSync(path.join(dir, 'src/lib.ts'), "export const helper = (): string => 'ok';\n");
         // The re-run reports the file it just watched change.
-        await seen('Watching for file changes');
+        await seen('re-run after an edit', 'Watching for file changes');
         expect(output).not.toContain('`dead`');
       } finally {
+        probe.close();
         watcher.kill();
       }
     });
