@@ -1,4 +1,10 @@
 node_modules
 dist
+*.tsbuildinfo
 .DS_Store
 .claude
+
+# What a norefs run at the root writes.
+norefs-baseline.json
+norefs-findings.md
+norefs-findings.json

@@ -2,16 +2,18 @@
   "name": "norefs",
   "version": "0.7.0",
   "description": "Find unused files, exports, and type/object members in a TypeScript project.",
+  "type": "commonjs",
   "bin": {
     "norefs": "dist/index.js"
   },
   "files": [
     "dist",
     "docs",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "CONTRIBUTING.md"
   ],
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
+    "build": "rm -rf dist && tsc && chmod +x dist/index.js",
     "lint": "biome lint .",
     "typecheck": "tsc --noEmit",
     "format": "biome format --write .",
@@ -38,7 +40,7 @@
     "url": "https://github.com/FranCanias/norefs/issues"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.4"
   },
   "packageManager": "pnpm@10.33.0",
   "devDependencies": {

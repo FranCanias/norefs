@@ -50,9 +50,14 @@
       "**/node_modules": true,
       "**/dist": true
     },
+    // The parents VS Code's own defaults use: package.json owns the manifest
+    // neighbours, tsconfig.json owns its variants and build state, README.md
+    // owns the rest of the top-level prose.
     "explorer.fileNesting.enabled": true,
     "explorer.fileNesting.patterns": {
-      "norefs.code-workspace": "pnpm-lock.yaml, pnpm-workspace.yaml, .npmrc, biome.json, .gitignore, .gitattributes, vitest.config.ts, README.md, tsconfig.json, *.tsbuildinfo, package.json"
+      "package.json": "pnpm-lock.yaml, pnpm-workspace.yaml, .npmrc, biome.json, vitest.config.*, .editorconfig, .gitattributes, .gitignore, *.code-workspace",
+      "tsconfig.json": "tsconfig.*.json, *.tsbuildinfo",
+      "README.md": "AUDIT.md, CHANGELOG.md, CONTRIBUTING.md, LICENSE"
     },
 
     // pnpm is the package manager for this repo (pnpm-lock.yaml / pnpm-workspace.yaml).
