@@ -18,7 +18,14 @@ function published(): Set<string> {
   // On Windows npm is a .cmd, which execFile cannot start by its bare name.
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   const output = execFileSync(npm, ['pack', '--dry-run', '--json'], { cwd: root, encoding: 'utf8' });
-  const [tarball] = JSON.parse(output) as Array<{ files: Array<{ path: string }> }>;
+  type Tarball = { files: Array<{ path: string }> };
+  const answer = JSON.parse(output) as Tarball[] | Record<string, Tarball>;
+  // npm 10 answers with an array of tarballs; npm 12 keys them by package name.
+  // The publish workflow installs npm@latest on purpose — provenance needs a
+  // recent one — so this suite meets whichever npm the runner image and that
+  // upgrade land on, and must not care which.
+  const [tarball] = Array.isArray(answer) ? answer : Object.values(answer);
+  if (!tarball?.files) throw new Error(`npm pack --json answered a shape this test does not know:\n${output}`);
   return new Set(tarball.files.map(file => file.path));
 }
 
