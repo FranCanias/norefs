@@ -5,9 +5,19 @@ import { describe, expect, it } from 'vitest';
 
 const root = path.resolve(__dirname, '..');
 
-/** The files npm would publish, asked of npm rather than re-derived from `files`. */
+/**
+ * The files npm would publish, asked of npm rather than re-derived from `files`.
+ *
+ * This is also why no lifecycle script may rebuild `dist`. `npm pack` runs
+ * `prepare` — and runs it even under `--ignore-scripts` — so a `prepare` here
+ * would wipe `dist` under the suites that spawn the binary, and write its own
+ * output into the JSON this parses. The build belongs to `prepublishOnly`,
+ * which `npm pack` leaves alone.
+ */
 function published(): Set<string> {
-  const output = execFileSync('npm', ['pack', '--dry-run', '--json'], { cwd: root, encoding: 'utf8' });
+  // On Windows npm is a .cmd, which execFile cannot start by its bare name.
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const output = execFileSync(npm, ['pack', '--dry-run', '--json'], { cwd: root, encoding: 'utf8' });
   const [tarball] = JSON.parse(output) as Array<{ files: Array<{ path: string }> }>;
   return new Set(tarball.files.map(file => file.path));
 }
@@ -66,5 +76,18 @@ describe('the published package', () => {
     expect(files.has('docs/flags.md')).toBe(true);
     expect(files.has('CHANGELOG.md')).toBe(true);
     expect(files.has('README.md')).toBe(true);
+  });
+
+  it('declares itself a CLI and nothing more', () => {
+    // The build once emitted 48 declaration files, 13% of the tarball, that
+    // nothing could import: no `main`, no `exports`, no `types` to reach them
+    // through. Either the manifest publishes an API or the build stops
+    // pretending there is one. This pins which way that was decided.
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    expect(manifest.bin).toEqual({ norefs: 'dist/index.js' });
+    for (const field of ['main', 'exports', 'types', 'typings', 'module']) {
+      expect(manifest[field], `package.json declares ${field}, so it promises an API`).toBeUndefined();
+    }
+    expect([...published()].filter(file => file.endsWith('.d.ts'))).toEqual([]);
   });
 });

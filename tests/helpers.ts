@@ -89,12 +89,6 @@ export function runCli(cwd: string, ...args: string[]): CliRun {
   return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
 }
 
-/** Build the binary the CLI tests spawn. */
-export function buildCli(): void {
-  const build = spawnSync('npm', ['run', 'build'], { cwd: root, encoding: 'utf8' });
-  if (build.status !== 0) throw new Error(`build failed: ${build.stderr}`);
-}
-
 /** A tsconfig that compiles every .ts file beside it — what most fixtures need. */
 export const TSCONFIG = JSON.stringify({
   compilerOptions: { target: 'ES2022', module: 'ESNext', moduleResolution: 'bundler', strict: true, noEmit: true },

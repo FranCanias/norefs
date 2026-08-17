@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { CliRun } from './helpers';
-import { buildCli, inProject, root, runCli, withTempDir, writeFiles } from './helpers';
+import { inProject, root, runCli, withTempDir, writeFiles } from './helpers';
 
 /**
  * The release probe. Every other test calls the engine; this one runs the
@@ -32,8 +32,6 @@ function treeHash(): string {
   walk(repo);
   return hash.digest('hex');
 }
-
-beforeAll(buildCli, 60_000);
 
 describe('the binary, on the exhibit repository', () => {
   it('reports the exhibits and exits 1, as the flag reference says', () => {

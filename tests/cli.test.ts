@@ -1,8 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
-import { buildCli, cli, inProject, runCli, TSCONFIG } from './helpers';
+import { describe, expect, it } from 'vitest';
+import { cli, inProject, runCli, TSCONFIG } from './helpers';
 
 /**
  * The flags at the layer that wires them.
@@ -28,8 +28,6 @@ const PROJECT: Record<string, string> = {
 function project<T>(body: (dir: string) => T): T {
   return inProject('norefs-cli-', PROJECT, body);
 }
-
-beforeAll(buildCli, 60_000);
 
 describe('argument errors', () => {
   it('answers an unknown flag with a usage error, not a stack trace', () => {

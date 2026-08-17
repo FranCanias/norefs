@@ -1,3 +1,5 @@
 # Auto detect text files and perform LF normalization
-* text=auto
+# eol=lf keeps the working tree LF on Windows too: the suite compares file bytes
+# and fixture trees, and a CRLF checkout would fail those for no reason.
+* text=auto eol=lf
 pnpm-lock.yaml linguist-generated=true -diff

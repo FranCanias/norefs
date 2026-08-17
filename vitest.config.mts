@@ -8,7 +8,17 @@ import { defineConfig } from 'vitest/config';
 // letting a genuine hang run for minutes.
 export default defineConfig({
   test: {
+    globalSetup: ['./tests/global-setup.ts'],
     testTimeout: 30_000,
     hookTimeout: 60_000,
+    // Reported, never gated. The number's job is to name the source files no
+    // test reaches; a threshold would only invite tests written to raise it.
+    // It reads low on purpose: cli.test.ts and smoke.test.ts spawn the built
+    // binary, and a child process is outside this instrumentation.
+    coverage: {
+      provider: 'v8',
+      reporter: ['text-summary', 'text'],
+      include: ['src/**/*.ts'],
+    },
   },
 });
