@@ -1,16 +1,9 @@
-import { Project } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
-import { analyze } from '../src/engine/analyze';
-
-function findingsOf(files: Record<string, string>) {
-  const project = new Project({ useInMemoryFileSystem: true });
-  for (const [filePath, text] of Object.entries(files)) project.createSourceFile(filePath, text);
-  return analyze(project);
-}
+import { analyzeFiles } from './helpers';
 
 describe('suppression comments', () => {
   it('suppresses a member with a comment on the line above or at the end of the line', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': [
         'interface User {',
         '  name: string;',
@@ -29,7 +22,7 @@ describe('suppression comments', () => {
   });
 
   it('suppresses an export finding but still analyzes its members', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': "import { used } from './lib';\nused();\n",
       '/lib.ts': [
         '// norefs-ignore: consumers arrive next release',
@@ -45,7 +38,7 @@ describe('suppression comments', () => {
 
   it('suppresses every member of a declaration marked norefs-ignore-block', () => {
     // The reason the mark exists: five flagged members, one comment.
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': [
         '// norefs-ignore-block: wire format, kept in sync by hand',
         'interface Payload {',
@@ -69,7 +62,7 @@ describe('suppression comments', () => {
   });
 
   it('reads the block mark above or below a doc comment, and on the line itself', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': [
         '/** The wire format. */',
         '// norefs-ignore-block',
@@ -96,7 +89,7 @@ describe('suppression comments', () => {
   });
 
   it('stops the block mark at the declaration it covers', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': [
         'interface Covered {',
         '  // norefs-ignore-block',
@@ -116,7 +109,7 @@ describe('suppression comments', () => {
   it('suppresses an export and its members together with the block mark', () => {
     // The line form deliberately keeps looking inside a suppressed export.
     // The block form is the one that does not.
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': "import { used } from './lib';\nused();\n",
       '/lib.ts': [
         '// norefs-ignore-block: consumers arrive next release',
@@ -133,7 +126,7 @@ describe('suppression comments', () => {
   it('covers every declaration that holds findings', () => {
     // docs/configuration.md names these shapes, so the docs are tested.
     const entry = { '/index.ts': "import { go } from './lib';\ngo();\n" };
-    const clean = (lib: string) => findingsOf({ ...entry, '/lib.ts': lib });
+    const clean = (lib: string) => analyzeFiles({ ...entry, '/lib.ts': lib });
 
     expect(
       clean(
@@ -171,7 +164,7 @@ describe('suppression comments', () => {
     // The dead-slice producer: its members fold into one `empty-type` finding,
     // and the fold has nothing left to make once they are suppressed.
     expect(
-      findingsOf({
+      analyzeFiles({
         '/main.ts': [
           '// norefs-ignore-block',
           'function computeColors() {',
@@ -188,7 +181,7 @@ describe('suppression comments', () => {
   });
 
   it('does not let norefs-ignore-block act as a plain line suppression elsewhere', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': [
         'interface User {',
         '  // norefs-ignore-block',
@@ -206,7 +199,7 @@ describe('suppression comments', () => {
   });
 
   it('suppresses everything in a file marked norefs-ignore-file', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': 'export const keep = 1;\n',
       '/orphan.ts': '// norefs-ignore-file: generated\nexport const gone = 1;\n',
     });
@@ -214,7 +207,7 @@ describe('suppression comments', () => {
   });
 
   it('ignores a norefs-ignore-file comment that is not in the file header', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': 'export const keep = 1;\n',
       '/orphan.ts': 'export const gone = 1;\n// norefs-ignore-file\n',
     });
@@ -222,7 +215,7 @@ describe('suppression comments', () => {
   });
 
   it('does not let norefs-ignore-file act as a line suppression', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': [
         'interface User {',
         '  name: string;',

@@ -1,11 +1,14 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { initConfig, loadConfig } from '../src/config';
+import { tempDirs } from './helpers';
+
+const dirs = tempDirs('norefs-config-');
+afterEach(dirs.removeAll);
 
 function dirWith(content?: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-config-'));
+  const dir = dirs.make();
   if (content !== undefined) fs.writeFileSync(path.join(dir, 'norefs.config.json'), content);
   return dir;
 }

@@ -1,0 +1,16 @@
+{
+  "name": "agreement",
+  "private": true,
+  "dependencies": {
+    "runtime-dep": "1.0.0",
+    "type-dep": "1.0.0",
+    "mixed-dep": "1.0.0",
+    "value-in-braces-dep": "1.0.0",
+    "side-effect-dep": "1.0.0",
+    "star-dep": "1.0.0",
+    "dynamic-dep": "1.0.0",
+    "star-export-dep": "1.0.0",
+    "type-export-dep": "1.0.0",
+    "unused-dep": "1.0.0"
+  }
+}

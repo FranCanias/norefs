@@ -1,16 +1,19 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { applyBaseline, writeBaseline } from '../src/baseline';
 import type { Finding, FindingKind } from '../src/types';
+import { tempDirs } from './helpers';
 
 function make(cwd: string, kind: FindingKind, relativePath: string, name: string, line = 1): Finding {
   return { kind, filePath: path.join(cwd, relativePath), line, column: 1, name, context: '', anonymous: false };
 }
 
+const dirs = tempDirs('norefs-baseline-');
+afterEach(dirs.removeAll);
+
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-baseline-'));
+  return dirs.make();
 }
 
 describe('baseline', () => {

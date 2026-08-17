@@ -1,16 +1,9 @@
-import { Project } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
-import { analyze } from '../src/engine/analyze';
-
-function findingsOf(source: string) {
-  const project = new Project({ useInMemoryFileSystem: true });
-  project.createSourceFile('/main.ts', source);
-  return analyze(project);
-}
+import { analyzeSource } from './helpers';
 
 describe('empty-owner findings', () => {
   it('reports an interface that becomes empty when all its members are unused', () => {
-    const findings = findingsOf(
+    const findings = analyzeSource(
       [
         'interface Zone {',
         '  dead1: number;',
@@ -29,7 +22,7 @@ describe('empty-owner findings', () => {
   });
 
   it('reports a type alias that becomes empty', () => {
-    const findings = findingsOf(
+    const findings = analyzeSource(
       [
         'type Options = {',
         '  verbose: boolean;',
@@ -46,7 +39,7 @@ describe('empty-owner findings', () => {
   });
 
   it('stays silent when some member is used', () => {
-    const findings = findingsOf(
+    const findings = analyzeSource(
       [
         'interface Partial1 {',
         '  used: number;',
@@ -62,12 +55,14 @@ describe('empty-owner findings', () => {
   });
 
   it('stays silent when nothing references the type', () => {
-    const findings = findingsOf(['interface Ghost {', '  dead: number;', '}', 'export const keep = 1;', ''].join('\n'));
+    const findings = analyzeSource(
+      ['interface Ghost {', '  dead: number;', '}', 'export const keep = 1;', ''].join('\n')
+    );
     expect(findings.map(f => [f.kind, f.name])).toEqual([['member', 'dead']]);
   });
 
   it('stays silent for an interface that extends another', () => {
-    const findings = findingsOf(
+    const findings = analyzeSource(
       [
         'interface Base {',
         '  kept: number;',

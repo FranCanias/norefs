@@ -1,9 +1,9 @@
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
+import type { CliRun } from './helpers';
+import { buildCli, inProject, root, runCli, withTempDir, writeFiles } from './helpers';
 
 /**
  * The release probe. Every other test calls the engine; this one runs the
@@ -12,14 +12,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
  * handle. 0.4.0 shipped a headline feature that had never completed a run
  * against the example in its own release notes. This is the run.
  */
-const root = path.resolve(__dirname, '..');
-const cli = path.join(root, 'dist', 'index.js');
 const repo = path.join(root, 'tests', 'exhibit-repo');
 const tsconfig = path.relative(root, path.join(repo, 'tsconfig.json'));
 
-function norefs(...args: string[]): { status: number; stdout: string; stderr: string } {
-  const run = spawnSync(process.execPath, [cli, '-p', tsconfig, ...args], { cwd: root, encoding: 'utf8' });
-  return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
+function norefs(...args: string[]) {
+  return runCli(root, '-p', tsconfig, ...args);
 }
 
 /** One hash over the fixture tree, so a run that promised to write nothing can be held to it. */
@@ -36,10 +33,7 @@ function treeHash(): string {
   return hash.digest('hex');
 }
 
-beforeAll(() => {
-  const build = spawnSync('npm', ['run', 'build'], { cwd: root, encoding: 'utf8' });
-  expect(build.status, build.stderr).toBe(0);
-}, 60_000);
+beforeAll(buildCli, 60_000);
 
 describe('the binary, on the exhibit repository', () => {
   it('reports the exhibits and exits 1, as the flag reference says', () => {
@@ -132,18 +126,10 @@ describe('the settings a project decides once', () => {
 
   /** A throwaway project with a config file beside its tsconfig. */
   function configured(config: Record<string, unknown>, ...args: string[]) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-config-run-'));
-    try {
-      for (const [name, text] of Object.entries(PROJECT)) {
-        fs.mkdirSync(path.join(dir, path.dirname(name)), { recursive: true });
-        fs.writeFileSync(path.join(dir, name), text);
-      }
+    return inProject('norefs-config-run-', PROJECT, dir => {
       fs.writeFileSync(path.join(dir, 'norefs.config.json'), JSON.stringify(config, null, 2));
-      const run = spawnSync(process.execPath, [cli, ...args], { cwd: dir, encoding: 'utf8' });
-      return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      return runCli(dir, ...args);
+    });
   }
 
   it('reads scope from the config file', () => {
@@ -223,18 +209,10 @@ describe('the shipping code path alone', () => {
   };
 
   function prod(config: Record<string, unknown>, ...args: string[]) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-production-'));
-    try {
-      for (const [name, text] of Object.entries(PROD)) {
-        fs.mkdirSync(path.join(dir, path.dirname(name)), { recursive: true });
-        fs.writeFileSync(path.join(dir, name), text);
-      }
+    return inProject('norefs-production-', PROD, dir => {
       fs.writeFileSync(path.join(dir, 'norefs.config.json'), JSON.stringify(config));
-      const run = spawnSync(process.execPath, [cli, ...args], { cwd: dir, encoding: 'utf8' });
-      return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      return runCli(dir, ...args);
+    });
   }
 
   it('labels what the tests hold up, and --production stops counting them', () => {
@@ -295,55 +273,50 @@ describe('the package.json a run can fix', () => {
     'src/app.test.ts': "import 'only-in-tests';\nexport const t = 1;\n",
   };
 
-  function deps(...args: string[]) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-deps-'));
-    for (const [name, text] of Object.entries(DEPS)) {
-      fs.mkdirSync(path.join(dir, path.dirname(name)), { recursive: true });
-      fs.writeFileSync(path.join(dir, name), text);
-    }
-    const run = spawnSync(process.execPath, [cli, ...args], { cwd: dir, encoding: 'utf8' });
-    return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr, dir };
+  /** Run in a throwaway copy, and hand the run and the directory to the body. */
+  function deps<T>(args: string[], body: (run: CliRun, dir: string) => T): T {
+    return inProject('norefs-deps-', DEPS, dir => body(runCli(dir, ...args), dir));
   }
 
   it('reads the scripts, so a tool nothing imports is not called dead', () => {
-    const run = deps('--only', 'dependencies,misplaced');
-    // `tsc` is typescript, and the build script has always said so.
-    expect(run.stdout).not.toContain('typescript');
-    expect(run.stdout).toContain('dead dependency `left-pad`');
-    expect(run.stdout).toContain('`runtime` is in devDependencies');
-    expect(run.stdout).toContain('`only-in-tests` is in dependencies');
-    fs.rmSync(run.dir, { recursive: true, force: true });
+    deps(['--only', 'dependencies,misplaced'], run => {
+      // `tsc` is typescript, and the build script has always said so.
+      expect(run.stdout).not.toContain('typescript');
+      expect(run.stdout).toContain('dead dependency `left-pad`');
+      expect(run.stdout).toContain('`runtime` is in devDependencies');
+      expect(run.stdout).toContain('`only-in-tests` is in dependencies');
+    });
   });
 
   it('leaves package.json alone under --fix, and says why', () => {
-    const run = deps('--fix', '--allow-dirty');
-    expect(fs.readFileSync(path.join(run.dir, 'package.json'), 'utf8')).toBe(DEPS['package.json']);
-    expect(run.stderr).toContain('package.json findings need --fix-unsafe');
-    fs.rmSync(run.dir, { recursive: true, force: true });
+    deps(['--fix', '--allow-dirty'], (run, dir) => {
+      expect(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).toBe(DEPS['package.json']);
+      expect(run.stderr).toContain('package.json findings need --fix-unsafe');
+    });
   });
 
   it('retires and relocates entries under --fix-unsafe, leaving valid JSON', () => {
-    const run = deps('--fix-unsafe', '--allow-dirty');
-    const after = JSON.parse(fs.readFileSync(path.join(run.dir, 'package.json'), 'utf8'));
-    expect(after.dependencies).toEqual({ runtime: '1.0.0' });
-    expect(after.devDependencies).toEqual({ 'only-in-tests': '1.0.0', typescript: '5.0.0' });
-    // The rest of the file is untouched, formatting included.
-    expect(after.scripts).toEqual({ build: 'tsc -p tsconfig.json' });
-    // No probe reads a manifest, and the run says so rather than implying cover.
-    expect(run.stderr).toContain('A type check cannot see');
-    expect(run.stderr).toContain('a package.json edit');
-    fs.rmSync(run.dir, { recursive: true, force: true });
+    deps(['--fix-unsafe', '--allow-dirty'], (run, dir) => {
+      const after = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+      expect(after.dependencies).toEqual({ runtime: '1.0.0' });
+      expect(after.devDependencies).toEqual({ 'only-in-tests': '1.0.0', typescript: '5.0.0' });
+      // The rest of the file is untouched, formatting included.
+      expect(after.scripts).toEqual({ build: 'tsc -p tsconfig.json' });
+      // No probe reads a manifest, and the run says so rather than implying cover.
+      expect(run.stderr).toContain('A type check cannot see');
+      expect(run.stderr).toContain('a package.json edit');
+    });
   });
 
   it('holds the manifest edits back when the command you supplied rejects them', () => {
     // The type check never reads package.json, so --verify-command is the only
     // probe that can judge these — and it gets the last word, on its own.
-    const run = deps('--fix-unsafe', '--allow-dirty', '--verify-command', 'grep -q left-pad package.json');
-    expect(fs.readFileSync(path.join(run.dir, 'package.json'), 'utf8')).toBe(DEPS['package.json']);
-    expect(run.stderr).toContain('Held back the package.json edits');
-    // The source fixes it verified are still applied: the two are separable.
-    expect(fs.readFileSync(path.join(run.dir, 'src/app.test.ts'), 'utf8')).not.toContain('export const t');
-    fs.rmSync(run.dir, { recursive: true, force: true });
+    deps(['--fix-unsafe', '--allow-dirty', '--verify-command', 'grep -q left-pad package.json'], (run, dir) => {
+      expect(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).toBe(DEPS['package.json']);
+      expect(run.stderr).toContain('Held back the package.json edits');
+      // The source fixes it verified are still applied: the two are separable.
+      expect(fs.readFileSync(path.join(dir, 'src/app.test.ts'), 'utf8')).not.toContain('export const t');
+    });
   });
 });
 
@@ -440,13 +413,7 @@ describe('an app whose build has two targets', () => {
   };
 
   function app(...args: string[]) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-app-'));
-    for (const [name, text] of Object.entries(APP)) {
-      fs.mkdirSync(path.join(dir, path.dirname(name)), { recursive: true });
-      fs.writeFileSync(path.join(dir, name), text);
-    }
-    const run = spawnSync(process.execPath, [cli, ...args], { cwd: dir, encoding: 'utf8' });
-    return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr, dir };
+    return inProject('norefs-app-', APP, dir => runCli(dir, ...args));
   }
 
   /** How many times a report says something. "And nothing else" is a count. */
@@ -463,7 +430,6 @@ describe('an app whose build has two targets', () => {
       'src/main.ts  —  package.json main',
       'src/Routes.web.tsx  —  a path named in vite.config.ts',
     ]);
-    fs.rmSync(run.dir, { recursive: true, force: true });
   });
 
   it('reports the one dead file and the one dead dependency, and nothing else', () => {
@@ -475,7 +441,6 @@ describe('an app whose build has two targets', () => {
     expect(run.stdout).toContain('dead file');
     // 0.6.0: "10 findings: 9 dead, 1 misplaced dependency", eight of them false.
     expect(run.stdout).toContain('2 findings: 2 dead');
-    fs.rmSync(run.dir, { recursive: true, force: true });
   });
 
   it('agrees with itself when the type checker is loaded', () => {
@@ -489,7 +454,6 @@ describe('an app whose build has two targets', () => {
     expect(count(run.stdout, /dead file/g)).toBe(1);
     expect(run.stdout).toContain('src/orphan.ts');
     expect(run.stderr).not.toContain('do not resolve');
-    fs.rmSync(run.dir, { recursive: true, force: true });
   });
 });
 
@@ -497,8 +461,7 @@ describe('a monorepo that declares its own packages', () => {
   const workspace = path.join(root, 'tests', 'workspace-fixtures');
 
   function inWorkspace(...args: string[]) {
-    const run = spawnSync(process.execPath, [cli, ...args], { cwd: workspace, encoding: 'utf8' });
-    return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
+    return runCli(workspace, ...args);
   }
 
   it('analyzes every declared package with no --project flags at all', () => {
@@ -522,16 +485,13 @@ describe('a monorepo that declares its own packages', () => {
   });
 
   it('reports a missing tsconfig as a usage error, not a stack trace', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-no-tsconfig-'));
-    try {
-      fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"solo"}');
-      const run = spawnSync(process.execPath, [cli], { cwd: dir, encoding: 'utf8' });
+    withTempDir('norefs-no-tsconfig-', dir => {
+      writeFiles(dir, { 'package.json': '{"name":"solo"}' });
+      const run = runCli(dir);
       expect(run.status).toBe(2);
       expect(run.stderr).toContain('error: no tsconfig at tsconfig.json');
       expect(run.stderr).not.toMatch(/^\s+at /m);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    });
   });
 });
 
@@ -573,18 +533,10 @@ describe('a boundary the project declares', () => {
   };
 
   function rest(config: Record<string, unknown>) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-boundary-'));
-    try {
-      for (const [name, text] of Object.entries(REST)) {
-        fs.mkdirSync(path.join(dir, path.dirname(name)), { recursive: true });
-        fs.writeFileSync(path.join(dir, name), text);
-      }
+    return inProject('norefs-boundary-', REST, dir => {
       fs.writeFileSync(path.join(dir, 'norefs.config.json'), JSON.stringify(config));
-      const run = spawnSync(process.execPath, [cli], { cwd: dir, encoding: 'utf8' });
-      return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      return runCli(dir);
+    });
   }
 
   it('pairs a dead sender with its route, and names the route as written', () => {

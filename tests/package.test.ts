@@ -37,6 +37,30 @@ describe('the published package', () => {
     }
   });
 
+  it('documents the same set of flags in all three places that list them', () => {
+    // Flag descriptions live three times: the README table, the HELP string,
+    // and docs/flags.md. Links and exit codes have tests; the flag lists did
+    // not, and every doc drift the 0.7.0 audit found was in one of these.
+    const flagsIn = (text: string): Set<string> => new Set(text.match(/--[a-z][a-z-]*/g) ?? []);
+    // The negations are forms of the flags they negate, and `--only` names
+    // kinds rather than flags; neither is a flag of its own.
+    const drop = new Set(['--no-verify', '--no-anon', '--no-explain', '--no-production']);
+    const flags = (text: string): string[] => [...flagsIn(text)].filter(flag => !drop.has(flag)).sort();
+
+    const help = fs.readFileSync(path.join(root, 'src/index.ts'), 'utf8');
+    const helpText = help.slice(help.indexOf('Options:'), help.indexOf('Configuration:'));
+    const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+    const readmeTable = readme.slice(readme.indexOf('| Option |'), readme.indexOf('`norefs` exits with code'));
+    const reference = fs.readFileSync(path.join(root, 'docs/flags.md'), 'utf8');
+
+    expect(flags(readmeTable)).toEqual(flags(helpText));
+    // The reference covers the combinations too, so it is a superset of neither
+    // list's absence: every documented flag has to appear there.
+    for (const flag of flags(helpText)) {
+      expect(reference.includes(flag), `docs/flags.md never mentions ${flag}`).toBe(true);
+    }
+  });
+
   it('ships the flag reference the exit codes are documented in', () => {
     const files = published();
     expect(files.has('docs/flags.md')).toBe(true);

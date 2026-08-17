@@ -1,16 +1,9 @@
-import { Project } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
-import { analyze } from '../src/engine/analyze';
-
-function findingsOf(files: Record<string, string>) {
-  const project = new Project({ useInMemoryFileSystem: true });
-  for (const [filePath, text] of Object.entries(files)) project.createSourceFile(filePath, text);
-  return analyze(project);
-}
+import { analyzeFiles } from './helpers';
 
 describe('reachability-based unused files', () => {
   it('reports a dead import cycle even though the files reference each other', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': 'export const keep = 1;\n',
       '/a.ts': "import { b } from './b';\nexport function a(): number {\n  return b();\n}\n",
       '/b.ts': "import { a } from './a';\nexport function b(): number {\n  return a();\n}\n",
@@ -22,7 +15,7 @@ describe('reachability-based unused files', () => {
   });
 
   it('reports a file whose only importers are themselves unreachable', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': 'export const keep = 1;\n',
       '/dead.ts': "import { shared } from './shared';\nexport const value = shared;\n",
       '/shared.ts': 'export const shared = 1;\n',
@@ -34,7 +27,7 @@ describe('reachability-based unused files', () => {
   });
 
   it('treats a norefs-ignore-file file as a root that keeps its imports alive', () => {
-    const findings = findingsOf({
+    const findings = analyzeFiles({
       '/main.ts': 'export const keep = 1;\n',
       '/kept.ts': "// norefs-ignore-file\nimport { dep } from './dep';\nexport const value = dep;\n",
       '/dep.ts': 'export const dep = 1;\n',

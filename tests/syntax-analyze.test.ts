@@ -26,6 +26,31 @@ describe('the syntax-only pipeline', () => {
     expect(lines(syntax)).toEqual(lines(full));
   });
 
+  it('agrees on a fixture that exercises every rule the two pipelines duplicate', () => {
+    // Type-only import detection and suppression-mark parsing each exist twice
+    // — once over a ts-morph AST, once over a token stream — and 0.6.0's
+    // changelog records a real bug from the two drifting apart. The fixture
+    // holds every clause shape and every mark, including the near misses.
+    const tsConfigPath = path.resolve(__dirname, 'agreement-fixtures', 'tsconfig.json');
+    const rootDir = path.dirname(tsConfigPath);
+    const packages = loadPackages([tsConfigPath]);
+    const options = { rootDirs: [rootDir], packages };
+
+    const full = analyze(loadProject([tsConfigPath]), options);
+    const syntax = analyzeSyntax([tsConfigPath], optionsForDir(packages, rootDir) ?? {}, options);
+
+    expect(lines(syntax)).toEqual(lines(full));
+    // And the fixture is not agreeing by being empty: the dead files it holds
+    // are reported, the suppressed ones are not.
+    const names = lines(full).map(line => line.slice(line.lastIndexOf(' ') + 1));
+    expect(names).toContain('dead.ts');
+    expect(names).toContain('near-miss.ts');
+    expect(names).not.toContain('ignored.ts');
+    expect(names).toContain('unused-dep');
+    expect(names).toContain('unlisted-dep');
+    expect(names).not.toContain('ignored-unlisted-dep');
+  });
+
   it('recognises which requests it can serve', () => {
     expect(isSyntaxOnly(['file'])).toBe(true);
     expect(isSyntaxOnly(['file', 'dependency', 'unlisted', 'misplaced'])).toBe(true);

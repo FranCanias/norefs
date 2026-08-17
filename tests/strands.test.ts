@@ -4,151 +4,95 @@ import { analyze } from '../src/engine/analyze';
 import { formatText } from '../src/engine/report';
 import type { Boundary } from '../src/types';
 
-/** A dead wrapper under /src whose handler lives in an entry file outside it. */
-function scopedProject(header = ''): Project {
+/** The bridge every case here varies: one `invoke` channel API, plus these files. */
+function bridgeProject(files: Record<string, string>): Project {
   const project = new Project({ useInMemoryFileSystem: true });
   project.createSourceFile(
     '/bridge.d.ts',
-    ['interface Bridge {', '  invoke(channel: string): Promise<unknown>;', '}', 'declare const api: Bridge;', ''].join(
-      '\n'
-    )
-  );
-  project.createSourceFile(
-    '/src/app.ts',
     [
-      'class RecipeBox {',
-      '  loadRecipe(): Promise<unknown> {',
-      "    return api.invoke('recipeBox:loadRecipe');",
-      '  }',
-      '  ping(): void {}',
+      'interface Bridge {',
+      '  invoke(channel: string, payload?: unknown): Promise<unknown>;',
       '}',
-      'export const keep = () => new RecipeBox().ping();',
+      'declare const api: Bridge;',
       '',
     ].join('\n')
   );
-  project.createSourceFile(
-    '/main.ts',
-    [
-      `${header}import { keep } from './src/app';`,
-      'keep();',
-      'declare function handle(channel: string, listener: () => unknown): void;',
-      "handle('recipeBox:loadRecipe', () => 0);",
-      '',
-    ].join('\n')
-  );
+  for (const [filePath, text] of Object.entries(files)) project.createSourceFile(filePath, text);
   return project;
 }
 
-describe('stranded far sides of dead bridge wrappers', () => {
-  it('names the registration that shares the dead wrapper channel string', () => {
-    const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile(
-      '/bridge.d.ts',
-      [
-        'interface Bridge {',
-        '  invoke(channel: string, payload?: unknown): Promise<unknown>;',
-        '}',
-        'declare const api: Bridge;',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/app.ts',
-      [
-        'class RecipeBox {',
-        '  loadRecipe(): Promise<unknown> {',
-        "    return api.invoke('recipeBox:loadRecipe');",
-        '  }',
-        '  ping(): void {}',
-        '}',
-        'export const keep = () => new RecipeBox().ping();',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/index.ts',
-      [
-        "import { keep } from './app';",
-        'keep();',
-        'declare function handle(channel: string, listener: () => unknown): void;',
-        "handle('recipeBox:loadRecipe', () => 0);",
-        '',
-      ].join('\n')
-    );
-    const findings = analyze(project);
-    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
-    expect(wrapper?.verdict).toBe('dead');
-    expect(wrapper?.strands).toContain("'recipeBox:loadRecipe'");
-    expect(wrapper?.strands).toMatch(/index\.ts:4/);
-    // The pair rides in the default report, not only behind --explain.
-    expect(formatText(findings, '/')).toContain('strands the far side');
-  });
+/** The far side, as an entry file registers it. */
+const HANDLE = 'declare function handle(channel: string, listener: () => unknown): void;';
 
-  it('reports the far side as a finding of its own', () => {
-    // The note says the handler is about to become invisible. The finding is
-    // what makes it visible while it still can be: its own file, its own line.
-    const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile(
-      '/bridge.d.ts',
-      [
-        'interface Bridge {',
-        '  invoke(channel: string): Promise<unknown>;',
-        '}',
-        'declare const api: Bridge;',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/app.ts',
-      [
-        'class RecipeBox {',
-        '  loadRecipe(): Promise<unknown> {',
-        "    return api.invoke('recipeBox:loadRecipe');",
-        '  }',
-        '  ping(): void {}',
-        '}',
-        'export const keep = () => new RecipeBox().ping();',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/index.ts',
-      [
+/** A class with one dead bridge wrapper on `channel`, and one live method. */
+function deadWrapper(name: string, channel: string): string {
+  return [
+    'class RecipeBox {',
+    `  ${name}(): Promise<unknown> {`,
+    `    return api.invoke('${channel}');`,
+    '  }',
+    '  ping(): void {}',
+    '}',
+    'export const keep = () => new RecipeBox().ping();',
+    '',
+  ].join('\n');
+}
+
+/** A dead wrapper under /src whose handler lives in an entry file outside it. */
+function scopedProject(header = ''): Project {
+  return bridgeProject({
+    '/src/app.ts': deadWrapper('loadRecipe', 'recipeBox:loadRecipe'),
+    '/main.ts': [
+      `${header}import { keep } from './src/app';`,
+      'keep();',
+      HANDLE,
+      "handle('recipeBox:loadRecipe', () => 0);",
+      '',
+    ].join('\n'),
+  });
+}
+
+describe('stranded far sides of dead bridge wrappers', () => {
+  it('names the registration that shares the dead wrapper channel, and reports it', () => {
+    // The note tells the reader the handler is about to become invisible. The
+    // finding is what makes it visible while it still can be: its own file,
+    // its own line.
+    const project = bridgeProject({
+      '/app.ts': deadWrapper('loadRecipe', 'recipeBox:loadRecipe'),
+      '/index.ts': [
         "import { keep } from './app';",
         'keep();',
-        'declare function handle(channel: string, listener: () => unknown): void;',
+        HANDLE,
         "handle('recipeBox:loadRecipe', () => 0);",
         '',
-      ].join('\n')
-    );
+      ].join('\n'),
+    });
     const findings = analyze(project);
+
+    const found = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
+    expect(found?.verdict).toBe('dead');
+    expect(found?.strands).toContain("'recipeBox:loadRecipe'");
+    expect(found?.strands).toMatch(/index\.ts:4/);
+
     const stranded = findings.find(f => f.kind === 'stranded');
     expect(stranded?.name).toBe('recipeBox:loadRecipe');
     expect(stranded?.filePath).toBe('/index.ts');
     expect(stranded?.line).toBe(4);
     expect(stranded?.evidence).toContain('its only sender');
     expect(stranded?.evidence).toMatch(/`loadRecipe` at .*app\.ts:2/);
-    expect(formatText(findings, '/')).toContain('stranded handler');
+
+    // Both ride in the default report, not only behind --explain.
+    const report = formatText(findings, '/');
+    expect(report).toContain('strands the far side');
+    expect(report).toContain('stranded handler');
   });
 
   it('stays silent while another sender of the channel is alive', () => {
     // Deleting a dead wrapper strands nothing while a live one still sends
     // the same channel. The note is a claim about reachability, not about
     // who happens to be reported today.
-    const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile(
-      '/bridge.d.ts',
-      [
-        'interface Bridge {',
-        '  invoke(channel: string): Promise<unknown>;',
-        '}',
-        'declare const api: Bridge;',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/app.ts',
-      [
+    const project = bridgeProject({
+      '/app.ts': [
         'class RecipeBox {',
         '  loadRecipe(): Promise<unknown> {',
         "    return api.invoke('recipeBox:loadRecipe');",
@@ -158,19 +102,16 @@ describe('stranded far sides of dead bridge wrappers', () => {
         'export const keep = () => new RecipeBox().ping();',
         "export const reload = () => api.invoke('recipeBox:loadRecipe');",
         '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/index.ts',
-      [
+      ].join('\n'),
+      '/index.ts': [
         "import { keep, reload } from './app';",
         'keep();',
         'reload();',
-        'declare function handle(channel: string, listener: () => unknown): void;',
+        HANDLE,
         "handle('recipeBox:loadRecipe', () => 0);",
         '',
-      ].join('\n')
-    );
+      ].join('\n'),
+    });
     const findings = analyze(project);
     const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
     expect(wrapper?.verdict).toBe('dead');
@@ -181,20 +122,8 @@ describe('stranded far sides of dead bridge wrappers', () => {
   it('notes the far side of a wrapper the analysis could not call dead', () => {
     // A write-only wrapper is a wrapper a human may still delete. The note it
     // needs is the same one, and the strand rides on any reported verdict.
-    const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile(
-      '/bridge.d.ts',
-      [
-        'interface Bridge {',
-        '  invoke(channel: string): Promise<unknown>;',
-        '}',
-        'declare const api: Bridge;',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/app.ts',
-      [
+    const project = bridgeProject({
+      '/app.ts': [
         'class RecipeBox {',
         '  deleteRecipe(): Promise<unknown> {',
         "    return api.invoke('recipeBox:deleteRecipe');",
@@ -206,19 +135,16 @@ describe('stranded far sides of dead bridge wrappers', () => {
         'export const send = () => stash({ deleteRecipe });',
         'export const keep = () => new RecipeBox().ping();',
         '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/index.ts',
-      [
+      ].join('\n'),
+      '/index.ts': [
         "import { send, keep } from './app';",
         'send();',
         'keep();',
-        'declare function handle(channel: string, listener: () => unknown): void;',
+        HANDLE,
         "handle('recipeBox:deleteRecipe', () => 0);",
         '',
-      ].join('\n')
-    );
+      ].join('\n'),
+    });
     const findings = analyze(project);
     const wrapper = findings.find(f => f.kind === 'member' && f.name === 'deleteRecipe');
     expect(wrapper?.verdict).toBe('write-only');
@@ -230,20 +156,8 @@ describe('stranded far sides of dead bridge wrappers', () => {
     // The 0.4.0 review's exhibit. `RecipeBoxService` is over-exported: the
     // fix removes a keyword and deletes nothing, so `saveRecipe` still sends
     // on every channel and no handler is stranded. Reported is not dying.
-    const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile(
-      '/bridge.d.ts',
-      [
-        'interface Bridge {',
-        '  invoke(channel: string, payload?: unknown): Promise<unknown>;',
-        '}',
-        'declare const api: Bridge;',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/service.ts',
-      [
+    const project = bridgeProject({
+      '/service.ts': [
         'export class RecipeBoxService {',
         '  saveRecipe(recipe: unknown): Promise<unknown> {',
         "    return api.invoke('recipeBox:saveRecipe', recipe);",
@@ -251,18 +165,15 @@ describe('stranded far sides of dead bridge wrappers', () => {
         '}',
         'export const sidebar = () => new RecipeBoxService().saveRecipe(1);',
         '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/index.ts',
-      [
+      ].join('\n'),
+      '/index.ts': [
         "import { sidebar } from './service';",
         'sidebar();',
-        'declare function handle(channel: string, listener: () => unknown): void;',
+        HANDLE,
         "handle('recipeBox:saveRecipe', () => 0);",
         '',
-      ].join('\n')
-    );
+      ].join('\n'),
+    });
     const findings = analyze(project);
     const service = findings.find(f => f.name === 'RecipeBoxService');
     expect(service?.verdict).toBe('over-exported');
@@ -274,20 +185,8 @@ describe('stranded far sides of dead bridge wrappers', () => {
     // The other half of the same exhibit: one class, two channels, two fates.
     // `oldRecipe` is dead and strands its handler; `saveRecipe` has a live
     // caller and strands nothing. Flattening both into the class loses that.
-    const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile(
-      '/bridge.d.ts',
-      [
-        'interface Bridge {',
-        '  invoke(channel: string, payload?: unknown): Promise<unknown>;',
-        '}',
-        'declare const api: Bridge;',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/service.ts',
-      [
+    const project = bridgeProject({
+      '/service.ts': [
         'export class RecipeBoxService {',
         '  saveRecipe(recipe: unknown): Promise<unknown> {',
         "    return api.invoke('recipeBox:saveRecipe', recipe);",
@@ -298,19 +197,16 @@ describe('stranded far sides of dead bridge wrappers', () => {
         '}',
         'export const sidebar = () => new RecipeBoxService().saveRecipe(1);',
         '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/index.ts',
-      [
+      ].join('\n'),
+      '/index.ts': [
         "import { sidebar } from './service';",
         'sidebar();',
-        'declare function handle(channel: string, listener: () => unknown): void;',
+        HANDLE,
         "handle('recipeBox:saveRecipe', () => 0);",
         "handle('recipeBox:oldRecipe', () => 0);",
         '',
-      ].join('\n')
-    );
+      ].join('\n'),
+    });
     const findings = analyze(project);
     expect(findings.find(f => f.name === 'RecipeBoxService')?.verdict).toBe('over-exported');
     expect(findings.find(f => f.name === 'oldRecipe')?.strands).toContain("'recipeBox:oldRecipe'");
@@ -342,20 +238,8 @@ describe('stranded far sides of dead bridge wrappers', () => {
   });
 
   it('never treats a payload string as a channel', () => {
-    const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile(
-      '/bridge.d.ts',
-      [
-        'interface Bridge {',
-        '  invoke(channel: string, payload?: unknown): Promise<unknown>;',
-        '}',
-        'declare const api: Bridge;',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/app.ts',
-      [
+    const project = bridgeProject({
+      '/app.ts': [
         'class Settings {',
         '  save(): Promise<unknown> {',
         "    return api.invoke('config:save', 'defaultProfile');",
@@ -364,18 +248,15 @@ describe('stranded far sides of dead bridge wrappers', () => {
         '}',
         'export const keep = () => new Settings().ping();',
         '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/index.ts',
-      [
+      ].join('\n'),
+      '/index.ts': [
         "import { keep } from './app';",
         'keep();',
         'declare function t(key: string, fallback: string): string;',
         "t('defaultProfile', 'Default');",
         '',
-      ].join('\n')
-    );
+      ].join('\n'),
+    });
     const findings = analyze(project);
     const wrapper = findings.find(f => f.kind === 'member' && f.name === 'save');
     expect(wrapper?.verdict).toBe('dead');
@@ -385,20 +266,8 @@ describe('stranded far sides of dead bridge wrappers', () => {
   it('never cites another dead wrapper as the far side', () => {
     // A bridge call is a near side by definition. Two dead wrappers sharing
     // a channel with no registration anywhere must both stay silent.
-    const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile(
-      '/bridge.d.ts',
-      [
-        'interface Bridge {',
-        '  invoke(channel: string): Promise<unknown>;',
-        '}',
-        'declare const api: Bridge;',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/a.ts',
-      [
+    const project = bridgeProject({
+      '/a.ts': [
         'export class A {',
         '  load(): Promise<unknown> {',
         "    return api.invoke('d:load');",
@@ -406,11 +275,8 @@ describe('stranded far sides of dead bridge wrappers', () => {
         '  ping(): void {}',
         '}',
         '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/b.ts',
-      [
+      ].join('\n'),
+      '/b.ts': [
         'export class B {',
         '  reload(): Promise<unknown> {',
         "    return api.invoke('d:load');",
@@ -418,12 +284,15 @@ describe('stranded far sides of dead bridge wrappers', () => {
         '  ping(): void {}',
         '}',
         '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/index.ts',
-      ["import { A } from './a';", "import { B } from './b';", 'new A().ping();', 'new B().ping();', ''].join('\n')
-    );
+      ].join('\n'),
+      '/index.ts': [
+        "import { A } from './a';",
+        "import { B } from './b';",
+        'new A().ping();',
+        'new B().ping();',
+        '',
+      ].join('\n'),
+    });
     const findings = analyze(project);
     for (const name of ['load', 'reload']) {
       const wrapper = findings.find(f => f.kind === 'member' && f.name === name);
@@ -433,20 +302,8 @@ describe('stranded far sides of dead bridge wrappers', () => {
   });
 
   it('carries the note onto the empty-type finding when the whole wrapper dies', () => {
-    const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile(
-      '/bridge.d.ts',
-      [
-        'interface Bridge {',
-        '  invoke(channel: string, payload?: unknown): Promise<unknown>;',
-        '}',
-        'declare const api: Bridge;',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/app.ts',
-      [
+    const project = bridgeProject({
+      '/app.ts': [
         'const useRecipeIpc = () => ({',
         "  loadRecipe: () => api.invoke('recipeBox:loadRecipe'),",
         '});',
@@ -454,18 +311,15 @@ describe('stranded far sides of dead bridge wrappers', () => {
         '  useRecipeIpc();',
         '};',
         '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/index.ts',
-      [
+      ].join('\n'),
+      '/index.ts': [
         "import { keep } from './app';",
         'keep();',
-        'declare function handle(channel: string, listener: () => unknown): void;',
+        HANDLE,
         "handle('recipeBox:loadRecipe', () => 0);",
         '',
-      ].join('\n')
-    );
+      ].join('\n'),
+    });
     const findings = analyze(project);
     const folded = findings.find(f => f.kind === 'empty-type' && f.name === 'useRecipeIpc');
     expect(folded).toBeDefined();
@@ -474,31 +328,10 @@ describe('stranded far sides of dead bridge wrappers', () => {
   });
 
   it('stays silent when the channel string never reappears', () => {
-    const project = new Project({ useInMemoryFileSystem: true });
-    project.createSourceFile(
-      '/bridge.d.ts',
-      [
-        'interface Bridge {',
-        '  invoke(channel: string): Promise<unknown>;',
-        '}',
-        'declare const api: Bridge;',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile(
-      '/app.ts',
-      [
-        'class RecipeBox {',
-        '  loadRecipe(): Promise<unknown> {',
-        "    return api.invoke('recipeBox:loadRecipe');",
-        '  }',
-        '  ping(): void {}',
-        '}',
-        'export const keep = () => new RecipeBox().ping();',
-        '',
-      ].join('\n')
-    );
-    project.createSourceFile('/index.ts', "import { keep } from './app';\nkeep();\n");
+    const project = bridgeProject({
+      '/app.ts': deadWrapper('loadRecipe', 'recipeBox:loadRecipe'),
+      '/index.ts': "import { keep } from './app';\nkeep();\n",
+    });
     const findings = analyze(project);
     const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
     expect(wrapper?.verdict).toBe('dead');

@@ -9,5 +9,5 @@
     "esModuleInterop": true,
     "types": ["node"]
   },
-  "include": ["analyze.test.ts", "diagnostics.test.ts", "../src/**/*", "*.test.ts"]
+  "include": ["analyze.test.ts", "diagnostics.test.ts", "../src/**/*", "*.test.ts", "helpers.ts"]
 }
