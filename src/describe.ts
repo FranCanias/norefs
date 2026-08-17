@@ -1,6 +1,9 @@
 import type { Node } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 
+// Naming, not policy. It decides nothing about what is dead, which is why both
+// engine/ and collectors/ can read it without either layer sitting on the other.
+
 interface Described {
   label: string;
   anonymous: boolean;

@@ -1,6 +1,6 @@
 import type { Node, ParameterDeclaration, SourceFile, TypeLiteralNode } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
-import { describeTypeLiteralContext } from '../engine/describe';
+import { describeTypeLiteralContext } from '../describe';
 import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { mergeNames } from './constraints';

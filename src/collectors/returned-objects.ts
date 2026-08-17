@@ -7,7 +7,7 @@ import type {
   SourceFile,
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
-import { describeFunctionName } from '../engine/describe';
+import { describeFunctionName } from '../describe';
 import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { callableEscapes, getCallableNameNode } from './escape';
