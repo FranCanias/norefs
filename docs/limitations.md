@@ -6,6 +6,7 @@ The test suite verifies that the reference check resolves all of these — none 
 
 - dot access (`v.prop`) and string-literal element access (`v['prop']`)
 - destructuring, in parameters and in bodies
+- a dynamic import destructured on the spot: `const { plate } = await import('./recipes')`, and the same pattern in the callback `import('./recipes').then(({ plate }) => …)` hands the module to
 - spreads, into both same-typed and fresh object types
 - mapped types (`Partial<T>`, `Pick<T, 'k'>`) and interface inheritance
 - usage from other files, quoted property names, implementing class members

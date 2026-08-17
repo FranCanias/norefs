@@ -85,3 +85,24 @@ describe('exports in used namespace', () => {
     expect(findings.find(f => f.name === 'dead')?.context).toBe('Config');
   });
 });
+
+describe('exports a dynamic import destructures', () => {
+  // `const { plated } = await import('./lazy')` uses `plated`, and the binding
+  // it creates is a symbol of its own — so nothing about the occurrence says
+  // which export it names. The exports were reported dead, which is the one
+  // mistake this analysis does not make. The link is the module the pattern
+  // reads, and it is in the expression, so no member analysis is needed to
+  // follow it.
+  it('counts the awaited form, renamed bindings included', () => {
+    expect(reportedIn('lazy.ts')).not.toContainEqual(['export', 'plated']);
+    expect(reportedIn('lazy.ts')).not.toContainEqual(['type', 'Course']);
+  });
+
+  it('counts the form `then` hands the namespace to', () => {
+    expect(reportedIn('lazy.ts')).not.toContainEqual(['export', 'poured']);
+  });
+
+  it('still reports an export in that module nobody destructures', () => {
+    expect(reportedIn('lazy.ts')).toEqual([['export', 'lazyDead']]);
+  });
+});

@@ -121,6 +121,36 @@ the only direction it can carry.
 zod was not re-run; nothing in this release touches the workspace handling that
 run exercises.
 
+## apollo-client (2026-08-17, unreleased, tsconfig.json)
+
+**141 findings: 33 dead, 27 over-exported, 1 write-only, 64 test-only, 2
+unlisted dependencies, 14 misplaced — in 12.4 seconds** over 541 files. The
+largest repository in the corpus, and the source the speed table now cites:
+[Speed](speed.md) records the same clone under three `--only` settings, so the
+numbers on that page are a command rather than a memory.
+
+The run was made to answer one question — whether pruning kinds changes the
+answers — and the first answer was no. Asked for everything, norefs reported 88
+module-level findings; asked for the same kinds without members, 89.
+
+The extra one was a false positive, and the disagreement was the only reason
+anybody saw it: `FoodCategory`, exported by a test fixture and consumed in
+`types.test.ts` as `const { FoodCategory } = await import(…)`. A dynamic import
+destructured on the spot leaves the binding as a symbol of its own, so no
+reference lands on the export. Both runs were blind to it. The full run stayed
+quiet only because a member run files occurrences under every symbol they could
+stand for, and a same-named enum in a sibling fixture absorbed it — silence for
+the wrong reason, which is not silence at all.
+
+The index reads that pattern now. It asks the syntax first, so a run that wants
+no member findings pays nothing for the answer, and both runs report the same 88.
+The one `FoodCategory` still on the report is the other one, in
+`local-resolvers.ts`, where every reference really does sit inside its own file.
+
+The 64 test-only findings are the verdict earning its keep at scale: production
+code with references, all of them in tests. Nothing in that bucket is auto-fixed,
+because deleting it means deleting its tests.
+
 ## The exhibit repository (since 0.5.0)
 
 The five reviews of this tool are themselves a corpus. Every exhibit they
@@ -137,13 +167,14 @@ first to run a release's features.
 
 ## What the corpus says so far
 
-- **Speed**: two libraries and an application, each analyzed member-deep in
-  single-digit seconds.
-- **Precision**: no confirmed false "dead" verdict from the reference
-  analysis on any repo. Boundary rules (public API, harness files, workspace
-  manifests) decide what is in scope; inside that scope, the spot-checked
-  findings have held — and the one near-miss sat behind the unresolved-import
-  warning the report itself led with.
+- **Speed**: three libraries and an application, each analyzed member-deep in
+  single-digit seconds — except the 541-file one, at 12.4.
+- **Precision**: no standing false "dead" verdict from the reference analysis on
+  any repo. apollo-client produced one — a dynamic import destructured on the
+  spot — and it is fixed rather than documented. Boundary rules (public API,
+  harness files, workspace manifests) decide what is in scope; inside that
+  scope, the spot-checked findings have held, and the one near-miss sat behind
+  the unresolved-import warning the report itself led with.
 - **The verdicts earn their keep**: shadowed, write-only, and test-only
   findings arrive pre-triaged with evidence where any other tool would print
   a flat "unused".

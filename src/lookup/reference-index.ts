@@ -21,6 +21,29 @@ import { ts } from 'ts-morph';
  * stand for, and each query looks under every symbol its target can stand for.
  * Filing a node too widely costs a finding; filing it too narrowly would call
  * used code unused, so every uncertain case files wider.
+ *
+ * It is the longest file here, so a map of it. Build runs in four passes, and
+ * the banners below mark them in that order:
+ *
+ * 1. **indexing** — one walk per file collects every identifier, records the
+ *    names the project declares, and queues the contextual sites. Later passes
+ *    over those queues fill the buckets: plain occurrences first, then
+ *    contextual ones, then spreads. Nothing resolves during the walk, because
+ *    the name sets have to be complete first — and they are what lets most
+ *    occurrences be skipped rather than resolved.
+ * 2. **declared contextual types** — the answer to "which member does this
+ *    object-literal property write?", read off the callee's declared
+ *    signatures instead of asked of the checker. This is the pass that keeps
+ *    a member run affordable, and the one that falls back when a shape is not
+ *    covered.
+ * 3. **symbol widening** — the aliases, union constituents, and base-type
+ *    members a declaration can also be reached through. Both filing and
+ *    querying go through it, which is why an alias never hides a use.
+ * 4. **wrapping** — ts-morph wrappers, built only for the nodes a query
+ *    returns.
+ *
+ * Below the class sit the small predicates each pass leans on, then the two
+ * entry points: `buildReferenceIndex`, and the cached `referenceIndex`.
  */
 interface IndexOptions {
   /**
@@ -198,6 +221,33 @@ class ReferenceIndex {
       const value = this.checker.getShorthandAssignmentValueSymbol(parent);
       if (value) this.fileUnder(value, node);
     }
+
+    this.fileDestructuredImport(node);
+  }
+
+  /**
+   * The export a dynamic import destructured on the spot names.
+   *
+   * `const { plate } = await import('./recipes')` uses `plate`, and nothing
+   * about the occurrence says so: the binding is a symbol of its own, and the
+   * link to the declaration lives in the module the pattern reads. Without
+   * this the export is reported dead — a false positive, the one kind of
+   * mistake this analysis does not make.
+   *
+   * Reading the pattern's type is a checker question, so `destructuredImport`
+   * asks the syntax first and this runs only where the answer is an
+   * `import()`. That is why it sits here rather than behind the member gate:
+   * it costs a run that asks for no member findings nothing at all.
+   */
+  private fileDestructuredImport(node: ts.Node): void {
+    const element = node.parent;
+    if (!ts.isBindingElement(element)) return;
+    // `{ plate }` names the export through `name`, `{ plate: dish }` through
+    // `propertyName`. The other one is the local binding, which names nothing.
+    if ((element.propertyName ?? element.name) !== node) return;
+    if (!destructuredImport(element.parent)) return;
+    const module = safely(() => this.checker.getTypeAtLocation(element.parent));
+    this.fileProperties(module ? [module] : [], node);
   }
 
   private fileUnder(symbol: ts.Symbol, node: ts.Node): void {
@@ -1055,6 +1105,32 @@ function isConcreteKnowledge(types: ts.Type[]): boolean {
     types.length > 0 &&
     types.every(type => partsOf(type).every(part => (part.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) === 0))
   );
+}
+
+/**
+ * True when this binding pattern destructures a dynamic import.
+ *
+ * Two shapes reach the module that way: `const { plate } = await import(…)`,
+ * where the pattern is the variable's own, and `import(…).then(({ plate }) => …)`,
+ * where it is the callback's parameter. Binding the module first —
+ * `const box = await import(…)`, then `box.plate` — needs nothing here: the
+ * property access is an ordinary reference.
+ */
+function destructuredImport(pattern: ts.Node): boolean {
+  if (!ts.isObjectBindingPattern(pattern)) return false;
+  const owner = pattern.parent;
+  if (ts.isVariableDeclaration(owner)) return isImportCall(owner.initializer);
+  if (!ts.isParameter(owner) || !ts.isFunctionLike(owner.parent)) return false;
+  const call = owner.parent.parent;
+  if (!call || !ts.isCallExpression(call) || !ts.isPropertyAccessExpression(call.expression)) return false;
+  return call.expression.name.text === 'then' && isImportCall(call.expression.expression);
+}
+
+/** `import('…')`, through an `await` when there is one. */
+function isImportCall(expression: ts.Node | undefined): boolean {
+  if (!expression) return false;
+  const inner = ts.isAwaitExpression(expression) ? expression.expression : expression;
+  return ts.isCallExpression(inner) && inner.expression.kind === ts.SyntaxKind.ImportKeyword;
 }
 
 /** The object literal a write site sits in: its type owns the written property. */

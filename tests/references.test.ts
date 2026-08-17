@@ -82,3 +82,61 @@ describe('findReferencesAsNodes', () => {
     expect(locations(findReferencesAsNodes(deep))).toEqual(['main.ts:1', 'main.ts:2']);
   });
 });
+
+describe('a dynamic import destructured on the spot', () => {
+  // The binding a pattern creates is a symbol of its own, so the occurrence
+  // says nothing about the export it names. The module the pattern reads is
+  // the link, and it sits in the expression — a syntax question first, so a
+  // run that asks for no member findings pays nothing for the answer.
+  const kitchen = 'export const plate = 1;\nexport const bowl = 2;\n';
+
+  it('is a reference to the export, awaited', () => {
+    const project = projectOf({
+      '/kitchen.ts': kitchen,
+      '/menu.ts':
+        'export async function serve(): Promise<number> {\n  const { plate } = await import("./kitchen");\n  return plate;\n}\n',
+    });
+    const plate = project.getSourceFileOrThrow('/kitchen.ts').getVariableDeclarationOrThrow('plate');
+
+    // The pattern, and only the pattern. `plate` on line 3 is the local
+    // binding, which is a symbol of its own — and one reference is all the
+    // export check asks for.
+    expect(locations(findReferencesAsNodes(plate.getNameNode()))).toEqual(['menu.ts:2']);
+  });
+
+  it('is a reference to the export through the name it is renamed to', () => {
+    const project = projectOf({
+      '/kitchen.ts': kitchen,
+      '/menu.ts':
+        'export async function serve(): Promise<number> {\n  const { plate: dish } = await import("./kitchen");\n  return dish;\n}\n',
+    });
+    const plate = project.getSourceFileOrThrow('/kitchen.ts').getVariableDeclarationOrThrow('plate');
+
+    // The local name is the binding's own; only `plate` names the export.
+    expect(locations(findReferencesAsNodes(plate.getNameNode()))).toEqual(['menu.ts:2']);
+  });
+
+  it('is a reference to the export in the callback `then` hands the namespace to', () => {
+    const project = projectOf({
+      '/kitchen.ts': kitchen,
+      '/menu.ts':
+        'export function serve(): Promise<number> {\n  return import("./kitchen").then(({ bowl }) => bowl);\n}\n',
+    });
+    const bowl = project.getSourceFileOrThrow('/kitchen.ts').getVariableDeclarationOrThrow('bowl');
+
+    expect(locations(findReferencesAsNodes(bowl.getNameNode()))).toEqual(['menu.ts:2']);
+  });
+
+  it('leaves an ordinary destructuring alone', () => {
+    // Same syntax, no module behind it: `plate` here is a property of a local
+    // object, and crediting the export would be a reference that never happened.
+    const project = projectOf({
+      '/kitchen.ts': kitchen,
+      '/menu.ts':
+        'const tray = { plate: 9 };\nexport const serve = (): number => {\n  const { plate } = tray;\n  return plate;\n};\n',
+    });
+    const plate = project.getSourceFileOrThrow('/kitchen.ts').getVariableDeclarationOrThrow('plate');
+
+    expect(locations(findReferencesAsNodes(plate.getNameNode()))).toEqual([]);
+  });
+});

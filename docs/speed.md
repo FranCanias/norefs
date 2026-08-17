@@ -20,16 +20,31 @@ pay for it either:
 norefs --only files,exports,types,ns-exports,ns-types,dependencies,unlisted
 ```
 
-On a 338-file application:
+On a 541-file library:
 
 | run | time | memory |
 | --- | --- | --- |
-| everything | 4.7 s | 1.0 GB |
-| everything but members | 1.8 s | 630 MB |
-| files and dependencies only | 0.21 s | 190 MB |
+| everything | 12.6 s | 1.5 GB |
+| everything but members | 4.2 s | 1.0 GB |
+| files and dependencies only | 0.33 s | 188 MB |
+
+Re-run it yourself. The repository is Apollo Client at commit `54084bc`, cloned
+on 2026-08-17, and the numbers are the best of three runs on an Apple M3 with
+8 GB, Node 23.4.0:
+
+```sh
+git clone --depth 1 https://github.com/apollographql/apollo-client
+cd apollo-client && npm install --ignore-scripts
+/usr/bin/time -l norefs -p tsconfig.json
+```
+
+Absolute times belong to that machine. The ratio is the point, and it is what
+holds across repositories: the member pass is most of a full run.
 
 The findings are the same either way — the kinds you ask for change the work
-done, not the answers.
+done, not the answers. That is a claim with a probe behind it: on the run
+above, the full report and the member-less one name the same 88 module-level
+findings, and `tests/kinds.test.ts` asks the same question of every fixture.
 
 For the checks that do need references, norefs indexes the whole project once —
 one pass over every identifier, each filed under the declaration it names —
