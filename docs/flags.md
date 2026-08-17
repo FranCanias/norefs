@@ -1,8 +1,10 @@
 # What each flag does to your working tree
 
-`norefs` has one flag that writes source files — `--fix` — and seven that
-change what it writes, when it writes, or whether it writes at all. This page
-says exactly what each one does to the tree, and what the combinations do.
+`norefs` has one flag that writes source files — `--fix` — and eight that
+change what it writes, when it writes, or whether it writes at all:
+`--fix-unsafe`, `--dry-run`, `--no-verify`, `--verify-command`, `--allow-dirty`,
+`--baseline`, `--ratchet`, and `--export`. This page says exactly what each one
+does to the tree, and what the combinations do.
 
 One rule holds everywhere: **nothing reaches disk unless it verified.** Every
 fix is applied to an in-memory copy of the project first. The files on disk
@@ -24,8 +26,9 @@ no opinion about a dependency list. So those edits need `--fix-unsafe`, and
 | `norefs init` | `norefs.config.json`, and never over an existing one. Never touches source |
 
 Everything else — `--dry-run`, `--no-verify`, `--verify-command`,
-`--allow-dirty`, `--scope`, `--only`, `--entry`, `--watch`, `--explain`,
-`--anon`, `--production`, `--reporter` — writes no file of its own.
+`--allow-dirty`, `--project`, `--scope`, `--only`, `--entry`, `--watch`,
+`--explain`, `--anon`, `--production`, `--reporter`, `--help` — writes no file
+of its own.
 
 ## Which flags belong in norefs.config.json
 
@@ -38,7 +41,7 @@ running — and that is a decision per run.
 |---|---|
 | `-p/--project`, `--entry`, `--only`, `--scope` | `--fix`, `--fix-unsafe` |
 | `--reporter`, `--anon`, `--explain`, `--production` | `--baseline`, `--ratchet` |
-| `ignore`, `ignoreDependencies`, `boundaries` (no flag) | `--export`, `--dry-run`, `--watch` |
+| `ignore`, `ignoreDependencies`, `boundaries` (no flag) | `--dry-run`, `--export`, `--watch` |
 
 A flag passed on the run wins over the file, except `--entry`, which merges.
 `--no-anon`, `--no-explain` and `--no-production` are how a run says no to a
@@ -61,7 +64,12 @@ rather than what a run finds, so they stay with the action and are flags only.
    re-analyzed and fixed again until nothing new appears — five passes at most.
 5. **The probe.** By default the type checker runs and its errors are compared
    against the pre-fix inventory. `--verify-command` runs after that, on the
-   candidate text, and must exit 0.
+   candidate text, and must exit 0. An external command reads from disk, so
+   that one step writes the candidate text into your real files and puts the
+   originals back before the verdict — the only moment unverified text is on
+   disk. The pre-probe contents go to `norefs-restore-<pid>.json` in the
+   system temp directory first and are deleted once the originals are back, so
+   a run killed inside the window can still be undone by hand.
 6. **Bisection.** A red probe rolls the whole campaign back and bisects the
    first pass to the fix that broke it. That fix is held back with the error it
    would have introduced, and the loop tries again without it. A fix the editor

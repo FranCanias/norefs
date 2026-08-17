@@ -1,5 +1,9 @@
 # norefs
 
+[![npm](https://img.shields.io/npm/v/norefs.svg)](https://www.npmjs.com/package/norefs)
+[![CI](https://github.com/FranCanias/norefs/actions/workflows/ci.yml/badge.svg)](https://github.com/FranCanias/norefs/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/norefs.svg)](LICENSE)
+
 Find unused files, exports, and type/object members in a TypeScript project.
 
 Most dead-code tools stop at the declaration boundary: an interface counts as "used" even when half its members are dead. `norefs` checks both levels. It finds unused files, unused exports, and unused exported types — and then looks inside the types that *are* used, including objects returned from functions (exported or not) and objects used as React component props.
@@ -10,7 +14,7 @@ Most dead-code tools stop at the declaration boundary: an interface counts as "u
 
 The **module-level pass** works on the import graph. It finds unused files, unused exports and exported types (a declaration used only inside its own file is *over-exported*: the fix is to drop the keyword, not the code), stranded handlers (a handler whose every sender this report deletes), and three dependency problems: unused, unlisted, and misplaced `package.json` entries.
 
-The **member pass** looks inside the types that survive: interfaces, type aliases and inline object types (React props included), enums, const objects, classes, and object literals returned from functions. For each member it asks TypeScript's own "find all references" whether anything reads it.
+The **member pass** looks inside the types that survive: interfaces, type aliases and inline object types (React props included), enums, const objects, classes, and object literals returned from functions. For each member it asks norefs' own project-wide reference index whether anything reads it.
 
 Every finding carries a **verdict** — the claim it makes, with its safety profile: `dead`, `over-exported`, `write-only`, `contract`, `shadowed`, or `test-only`. `--fix` applies only the first two; each of the others prints its evidence and waits for `--fix-unsafe` or your judgment.
 
@@ -30,7 +34,8 @@ Or run it without installing:
 npx norefs
 ```
 
-Then run `norefs` from any project with a `tsconfig.json`.
+Then run `norefs` from any project with a `tsconfig.json`. norefs needs Node 22.4
+or newer.
 
 ## Usage
 
@@ -55,7 +60,7 @@ norefs entries   # list every entry point and what named it
 | `--allow-dirty` | Let `--fix` write into a tree with uncommitted changes; by default it refuses, so the fixes stay separable from your own edits |
 | `--export <md\|json>` | Also write findings to `norefs-findings.md` or `norefs-findings.json` in the current directory |
 | `--fix` | Apply the fixes the verdicts prove safe: `dead` code is removed, `over-exported` declarations lose the `export` keyword |
-| `--fix-unsafe` | Also apply `write-only`, `contract`, and `shadowed` findings (implies `--fix`); a proven write-only member goes with the writes that prove it, and a write no single edit can retire keeps the whole finding |
+| `--fix-unsafe` | Also apply `write-only`, `contract`, and `shadowed` findings, and edit `package.json` (implies `--fix`); a proven write-only member goes with the writes that prove it, and a write no single edit can retire keeps the whole finding |
 | `--dry-run` | With `--fix`: print the would-be changes as a unified diff without writing any file |
 | `--watch` | Re-run on save: keep the loaded project in memory, refresh the changed files, and report again |
 | `--production` | Ask the stricter question — what is left standing if the tests were not there at all? Never combines with `--fix` — see [Production mode](docs/checks.md#production-mode) |
@@ -101,7 +106,7 @@ norefs --baseline        # writes norefs-baseline.json; commit it
 norefs                   # from now on: exit 1 only for findings not in the baseline
 ```
 
-The baseline matches findings by kind, file, and name — not by line — so ordinary edits do not break it. When findings are actually removed, norefs tells you the baseline has stale entries; run `--baseline` again to refresh it, or run with `--ratchet` and norefs drops the stale entries itself — the baseline becomes a one-way ratchet whose count only decreases. `--fix` also skips baselined findings, so it only removes new dead code.
+The baseline matches findings by kind, file, name, and context — the interface a member belongs to, the `package.json` section an entry sits in — but never by line, so ordinary edits do not break it. When findings are actually removed, norefs tells you the baseline has stale entries; run `--baseline` again to refresh it, or run with `--ratchet` and norefs drops the stale entries itself — the baseline becomes a one-way ratchet whose count only decreases. `--fix` also skips baselined findings, so it only removes new dead code.
 
 Two reporters are made for CI:
 
@@ -111,6 +116,27 @@ Two reporters are made for CI:
 ### Fixing automatically
 
 `norefs --fix` prints the findings, then applies the ones whose verdict proves them safe. Every fix happens in memory first: norefs type-checks the fixed project, holds back any fix that breaks the build, and saves only what verifies — disk never sees an unverified edit. `norefs --fix --dry-run` prints the diff without touching anything; `--fix-unsafe` also applies the evidence-backed verdicts, and `--verify-command "npm test"` makes your own suite the judge. The full contract — what a fix removes, cleans up, refuses, and points out — is [docs/fixing.md](docs/fixing.md).
+
+### When norefs is wrong
+
+A finding you disagree with has four answers, in the order worth trying:
+
+1. **The finding is right about the code, wrong about you** — an export kept
+   for API symmetry, a type read by reflection. Suppress it where it lives:
+   [Suppressing findings](docs/configuration.md#suppressing-findings).
+2. **The file should never have been reported** — it is an entry point norefs
+   could not read from the build. Run `norefs entries` to see every entry point
+   and what named each one, then add the missing one with `--entry` or the
+   `entry` config key: [Entry points](docs/configuration.md#entry-points).
+3. **A dependency is used in a way no import shows** — a script, a tool config,
+   a peer. [Dependencies](docs/dependencies.md) says what counts as use, and
+   `ignoreDependencies` covers the rest.
+4. **The analysis cannot see it at all** — a dynamic read, an unresolved
+   import, a boundary the types do not cross. [Limitations](docs/limitations.md)
+   names each blind spot, and `--explain` prints the evidence chain behind any
+   finding so you can see which one you are holding.
+
+A wrong finding that fits none of these is a bug worth reporting.
 
 ### Example
 
@@ -163,11 +189,16 @@ Adding a new source of candidates (JSX-spread props, …) means adding one file 
 
 ```sh
 pnpm install
-pnpm run build   # compile to dist/
-pnpm test        # vitest fixture suite (tests/fixtures covers one usage pattern per file)
-pnpm run lint    # biome lint
-pnpm run format  # biome format --write
+pnpm run build      # compile to dist/
+pnpm test           # vitest suite (tests/fixtures covers one usage pattern per file)
+pnpm run lint       # biome lint
+pnpm run typecheck  # tsc --noEmit
+pnpm run format     # biome format --write
 ```
+
+norefs is developed on Node 22.4 or newer — the floor `engines` promises and CI
+tests. [CONTRIBUTING.md](CONTRIBUTING.md) covers how the suite is organized, how
+a release happens, and the writing rules the code and docs follow.
 
 ## License
 

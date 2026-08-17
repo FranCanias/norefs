@@ -4,6 +4,46 @@ norefs follows [semver](https://semver.org). Before 1.0.0, minor versions
 (0.x.0) may change output formats, flag semantics, and verdicts; patch
 versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 
+## Unreleased
+
+**Node 22.4 is the floor.** `engines` said `>=20` and the CLI passed
+`allowNegative: true` to `parseArgs`, an option that landed in 22.4 — so on
+Node 20 every documented `--no-*` flag was an unknown option, and an unknown
+option was a stack trace. Both halves are fixed: the floor now says what the
+code needs, and CI runs the floor and the current release rather than one
+version nobody promised.
+
+**An unknown flag is a usage error, not a crash.** `norefs --bogus` printed a
+Node stack trace and exited 1, while every other bad input got a tidy `error: …`
+and exit 2. It now gets the tidy line and exit 2.
+
+**A `--scope` or `--entry` path that does not exist stops the run.** A typo
+filtered every finding out and the run reported success with nothing to show —
+the same silent-success failure the unreadable-tsconfig check was added to
+close.
+
+**Side-effect imports resolve with their own package's options.** In a run
+spanning several tsconfigs, the fallback resolver for `import './x'` used the
+first tsconfig's compiler options, so a file reached only through a package's
+own `paths` alias could be reported dead. It uses the options of the package
+that owns the importing file, exactly as the project did when it loaded.
+
+**A hand-edited baseline says what is wrong with it.** An entry missing a field
+used to fold into a key containing `undefined` and quietly match nothing. It is
+now the same loud error an unparseable baseline gets.
+
+**The `--verify-command` probe leaves a way back.** The probe writes candidate
+text into the real files for the length of one command and restores it in a
+`finally`. The pre-probe contents now go to `norefs-restore-<pid>.json` in the
+temp directory first, so a run killed inside that window can still be undone.
+`docs/flags.md` documents the window.
+
+Internal, with no change to any output: the fix campaign moved out of `main()`
+into `engine/fix-campaign.ts`, the reference index moved to its own `lookup/`
+layer under both `engine/` and `collectors/`, and the suppression marks both
+pipelines read are now one implementation with a fixture that runs every rule
+through both.
+
 ## 0.7.0 — 2026-08-14
 
 A release about being wrong. Every change here answers a false positive somebody

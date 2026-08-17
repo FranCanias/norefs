@@ -20,7 +20,7 @@ Put a `norefs.config.json` next to where you run `norefs`, and CI and teammates 
 }
 ```
 
-The file holds **settings** — what shapes the analysis and the report. Those are true of a project every time it is analyzed, so they belong in a file everyone shares. It never holds an **action**: `--fix`, `--baseline`, `--dry-run`, `--export` and `--watch` each write something, and what a run does to your working tree is a decision you make at the moment you make it. An action key in the config file is an error, not a silent surprise.
+The file holds **settings** — what shapes the analysis and the report. Those are true of a project every time it is analyzed, so they belong in a file everyone shares. It never holds an **action**: `--fix`, `--fix-unsafe`, `--baseline`, `--ratchet`, `--dry-run`, `--export` and `--watch` each write something, and what a run does to your working tree is a decision you make at the moment you make it. An action key in the config file is an error, not a silent surprise.
 
 `norefs init` writes the file for you, with every key present and set to its default:
 
@@ -42,7 +42,7 @@ The file holds **settings** — what shapes the analysis and the report. Those a
 
 Fill in the keys you need and delete the rest — an empty array means the default: no extra entry points, nothing ignored, every kind reported. An empty `scope` is the whole project. `init` never overwrites an existing config.
 
-All keys are optional. `project` also accepts an array of tsconfig paths for a monorepo. `entry` merges with `--entry`; for every other key, a flag passed on the run wins over the file. `--no-anon` and `--no-explain` are how a run says no to a project that said yes. `ignore` takes globs, matched against paths relative to the current directory (and absolute paths). Ignored files produce no findings, but their contents still count as usage of other code. `ignoreDependencies` takes package names or globs the dependency checks never report. `boundaries` is described below.
+All keys are optional. `project` also accepts an array of tsconfig paths for a monorepo. `entry` merges with `--entry`; for every other key, a flag passed on the run wins over the file. `--no-anon`, `--no-explain` and `--no-production` are how a run says no to a project that said yes. `ignore` takes globs, matched against paths relative to the current directory (and absolute paths). Ignored files produce no findings, but their contents still count as usage of other code. `ignoreDependencies` takes package names or globs the dependency checks never report. `boundaries` is described below.
 
 ## Boundaries
 

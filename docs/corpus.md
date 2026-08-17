@@ -6,6 +6,12 @@ only its own fixtures. Each run is a shallow clone, `npm install
 no ignore lists. This file records the results and doubles as a regression
 log: rerun the repos, compare the counts, explain every jump.
 
+Every heading carries the date of its run and the release it ran on, and the
+counts under it are the counts **that** release printed on **that** clone. A
+later release re-runs the repo and reports the difference in its own section.
+So the numbers on this page are a history, not a snapshot: compare within a
+section, never across two.
+
 ## Method
 
 - Clone at depth 1, note the date.
@@ -14,7 +20,7 @@ log: rerun the repos, compare the counts, explain every jump.
   report says more than its size.
 - Spot-check the biggest per-file buckets by hand before believing them.
 
-## hono (2026-08-13, tsconfig.build.json)
+## hono (2026-08-13, pre-0.4.0, tsconfig.build.json)
 
 **195 findings: 104 dead, 79 over-exported, 10 write-only, 1 likely
 contract, 1 shadowed — in ~2 seconds** over a library with 76 published
@@ -29,7 +35,7 @@ lambda adapter declares but never reads (`src/adapter/aws-lambda/types.ts`),
 handler types exported but consumed nowhere else, and one structurally
 duplicated type the shadowed verdict pins with file and line.
 
-## zod (2026-08-13, packages/zod/tsconfig.json)
+## zod (2026-08-13, pre-0.4.0, packages/zod/tsconfig.json)
 
 **43 findings: 23 dead, 16 over-exported, 1 likely contract, 3 test-only —
 in ~4 seconds**, running inside a workspace package of a monorepo (81 with
@@ -49,7 +55,7 @@ re-exports count as public API whole. What remains is the interesting part:
 zod's v3 legacy helpers carry genuinely unreferenced members, exactly the
 layer a years-old, heavily maintained codebase would accumulate.
 
-## inshellisense (2026-08-13, application-shaped)
+## inshellisense (2026-08-13, pre-0.4.0, application-shaped)
 
 **43 findings: 24 dead, 19 over-exported — in ~2 seconds** on Microsoft's
 terminal-autocomplete CLI, the corpus's first application (entries come from
@@ -66,7 +72,7 @@ unresolved specifier poisons, is exactly the finding that warning brackets.
 Making verdicts soften automatically inside the blast radius of an
 unresolved import is the follow-up this run argues for.
 
-## norefs on norefs (2026-08-13)
+## norefs on norefs (2026-08-13, pre-0.4.0)
 
 **No unused code found.** The tool runs clean on its own codebase because it
 is kept that way: `norefs --fix` fixed its own 12 findings in one verified
@@ -81,7 +87,7 @@ scoped to the program by definition, so this is precisely the gap
 Both exports now carry a `norefs-ignore` with the reason, which is the
 designed answer for consumers beyond the program's horizon.
 
-## The 0.7.0 re-run (2026-08-14)
+## The 0.7.0 re-run (2026-08-14, v0.7.0)
 
 0.7.0 changed what counts as a dependency in use and what counts as an entry
 point, so both are claims a real repository has to check. The two repos below
