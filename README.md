@@ -174,10 +174,14 @@ src/recipes/RecipeBox.ts
 src/
   index.ts      CLI entry point
   config.ts     norefs.config.json loading and `norefs init`
+  baseline.ts   norefs-baseline.json
+  describe.ts   the human-readable labels every layer prints
+  messages.ts   one error-to-line helper, shared by every layer
   engine/       project loading, the module-level checks (files, exports, namespaces, dependencies),
-                the project-wide reference index, what the build writes down (entry points,
-                tool configs, workspaces), the syntax-only pipeline and its scanner,
-                suppression comments, human-readable labels, orchestration, output formatting
+                what the build writes down (entry points, tool configs, workspaces), the
+                syntax-only pipeline and its scanner, suppression comments, the fix campaign,
+                orchestration, output formatting
+  lookup/       the project-wide reference index and its query API
   collectors/   one file per source of candidate members (interfaces, type literals, returned objects, enums, const objects, classes)
   filters/      post-collection filters (e.g. the anonymous-findings gate)
   types/        shared types
@@ -191,9 +195,9 @@ Adding a new source of candidates (JSX-spread props, …) means adding one file 
 pnpm install
 pnpm run build      # compile to dist/
 pnpm test           # vitest suite (tests/fixtures covers one usage pattern per file)
-pnpm run lint       # biome lint
-pnpm run typecheck  # tsc --noEmit
-pnpm run format     # biome format --write
+pnpm run check      # biome ci: lint, formatting, and import order
+pnpm run typecheck  # tsc --noEmit, over src and tests both
+pnpm run format     # biome check --write
 ```
 
 norefs is developed on Node 22.4 or newer — the floor `engines` promises and CI

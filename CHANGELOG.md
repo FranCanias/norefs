@@ -28,6 +28,25 @@ first tsconfig's compiler options, so a file reached only through a package's
 own `paths` alias could be reported dead. It uses the options of the package
 that owns the importing file, exactly as the project did when it loaded.
 
+**A dynamic import destructured on the spot counts as usage.**
+`const { plate } = await import('./recipes')` uses `plate`, and nothing about
+the occurrence said so: the pattern creates a symbol of its own, and no
+reference ever landed on the export. norefs reported it dead — a false
+positive, the one mistake this analysis does not make. The same held for the
+callback `import('./recipes').then(({ plate }) => …)` hands the module to.
+Binding the module first was always read correctly, and still is.
+
+The link is the module the pattern reads, and it sits right there in the
+expression. The index asks the syntax first and only then the checker, so this
+costs a run that wants no member findings nothing at all — which is why it is
+not behind the member gate, where the answer would have been unavailable to the
+runs that need it most.
+
+It was found by running two configurations of the same release over Apollo
+Client and diffing them: the member-less run reported 89 module-level findings
+where the full run reported 88, and the extra one was the true answer arriving
+by accident. Both report 88 now. [docs/corpus.md](docs/corpus.md) has the run.
+
 **A hand-edited baseline says what is wrong with it.** An entry missing a field
 used to fold into a key containing `undefined` and quietly match nothing. It is
 now the same loud error an unparseable baseline gets.
@@ -43,6 +62,43 @@ into `engine/fix-campaign.ts`, the reference index moved to its own `lookup/`
 layer under both `engine/` and `collectors/`, and the suppression marks both
 pipelines read are now one implementation with a fixture that runs every rule
 through both.
+
+**Every promise this repository makes is now checked by a job that fails.** An
+audit found the gaps were not in the analysis but in the guard rails around it,
+and each one was free to close — the checks all passed the day they were added.
+The test suite was never type-checked: `tsc` read `src` only, and a third of the
+codebase had no type gate. Formatting and import order were never checked: CI
+ran `biome lint`, the linter alone, where `biome ci` runs the formatter and the
+assists over the same tree and reaches the JSON the linter skips. The Biome
+exemption for fixture directories
+named five of the nine by hand, so four fixture trees — whose whole job is to
+hold code nothing uses — were linted with `noUnusedVariables: error`; a pattern
+now covers every one. `ci.yml` declared no `permissions`, no `concurrency`, and
+no `timeout-minutes`, so a fork's pull request could inherit a write-scoped
+token and a hung child process could run for GitHub's default six hours. Every
+action is pinned to a commit SHA, and Dependabot moves them. A weekly security
+workflow runs CodeQL, `pnpm audit --prod`, and OpenSSF Scorecard. Coverage is
+reported, never gated.
+
+**The build runs on Windows.** It was `rm -rf dist && chmod +x`, neither of
+which exists there, so a Windows contributor could not build, could not run the
+two suites that spawn the binary, and could not publish. It cleans and chmods
+through Node now.
+
+**The build stopped emitting declarations nobody could import.** 48 `.d.ts`
+files, 13% of the tarball, reachable through no `main`, `exports`, or `types`.
+norefs is a CLI; the manifest said so and the build did not. A test now pins
+that decision, so the two cannot drift apart again.
+
+**One build, before the suite starts.** `cli.test.ts` and `smoke.test.ts` each
+built the binary in their own `beforeAll`, in separate worker processes — so one
+suite's build could delete `dist` while the other was spawning it. It is a
+`globalSetup` now, and it costs under a second.
+
+Also here: the release is one `pnpm run release patch` rather than four hand
+steps, `.nvmrc` puts local work on a Node version CI covers, `describe.ts` moved
+out of `engine/` because `collectors/` imported it upward, and the repository
+gained `SECURITY.md`, issue forms, and a pull request template.
 
 ## 0.7.0 — 2026-08-14
 

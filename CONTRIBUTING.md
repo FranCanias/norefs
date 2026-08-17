@@ -9,15 +9,35 @@ the suite is organized, how a release happens, and the rules the writing follows
 pnpm install
 pnpm run build      # compile to dist/
 pnpm test           # the whole suite
-pnpm run lint       # biome lint
-pnpm run typecheck  # tsc --noEmit
-pnpm run format     # biome format --write
+pnpm run check      # biome ci: lint, formatting, and import order, all read-only
+pnpm run typecheck  # tsc --noEmit, over src and tests both
+pnpm run format     # biome check --write, the writing half of `check`
+pnpm run coverage   # the suite, with a coverage summary
 ```
 
 Node 22.4 or newer. That floor is not arbitrary: the CLI parses `--no-*` flags
 with `parseArgs({ allowNegative: true })`, which landed in 22.4. CI runs the
 floor and the current release, so a change that needs something newer fails
-there rather than in a user's terminal.
+there rather than in a user's terminal. `.nvmrc` pins 24 for local work — an
+untested Node version is a bad place to debug from.
+
+Every script here is portable: `build` cleans and chmods through Node rather
+than `rm -rf` and `chmod`, which do not exist on Windows. CI runs on Linux only,
+so a Windows contributor is the one who finds out when that stops being true.
+Say so in an issue if it does.
+
+norefs is a CLI, and `package.json` says only that: `bin`, no `main`, no
+`exports`, no `types`. The build emits no declaration files, because nothing
+can import them. If that ever changes, the manifest changes with it — a
+published API is a promise, and it needs the fields that state it.
+
+Install it from npm, not from a git URL. There is no `prepare` script, so a git
+install would fetch a package whose `bin` points at a `dist/` nobody built. The
+reason is a real one, not an oversight: `npm pack` runs `prepare`, and runs it
+even under `--ignore-scripts`, so a `prepare` that rebuilds `dist` deletes the
+binary out from under `cli.test.ts` and `smoke.test.ts` while they spawn it.
+The build belongs to `prepublishOnly`, and to an explicit step in the publish
+workflow.
 
 The package is CommonJS, on purpose and in writing: `"type": "commonjs"` in
 `package.json`, `module: "nodenext"` in the tsconfig. A CLI is started by a
@@ -36,6 +56,7 @@ src/
   index.ts      the CLI: parse, route, format. It holds no analysis policy
   config.ts     norefs.config.json and `norefs init`
   baseline.ts   norefs-baseline.json
+  describe.ts   the labels a finding prints. Naming, never policy
   messages.ts   one error-to-line helper, shared by every layer
   engine/       the analysis and the fix campaign
   lookup/       the project-wide reference index and its query API — the layer
@@ -45,10 +66,15 @@ src/
   types/        shared types
 ```
 
-Two rules keep the layering honest: `lookup/` never imports from `engine/`, and
-`index.ts` never decides anything the engine could decide. When a CLI block
-starts growing policy, it belongs in `engine/` — that is how
-`engine/fix-campaign.ts` came to exist.
+Two rules keep the layering honest: nothing below `engine/` imports from it —
+not `lookup/`, not `collectors/` — and `index.ts` never decides anything the
+engine could decide. When a CLI block starts growing policy, it belongs in
+`engine/` — that is how `engine/fix-campaign.ts` came to exist.
+
+`describe.ts` sits at the root for the first rule. It is pure labeling, and it
+lived in `engine/` until the collectors needed it and imported upward. Naming
+belongs to no layer, so it now sits beside `messages.ts`, where both can read it
+without inverting anything.
 
 ## The test suite
 
@@ -71,11 +97,24 @@ One behaviour per test, and the assertion names the behaviour. Beyond that:
 - **A new check needs a corpus note.** `docs/corpus.md` is the regression log:
   re-run the repos, compare the counts, explain every jump.
 
+The whole suite is about 20 seconds of wall clock, most of it spawning the
+binary. While you work on the analysis, run the part that answers you fastest:
+
+```sh
+pnpm test tests/analyze.test.ts     # one file
+pnpm test analyze members verdicts  # a few, by name
+```
+
+Two files need `pnpm run build` first, because they spawn `dist/index.js`:
+`cli.test.ts` and `smoke.test.ts` — the latter is where the `exhibit-repo` run
+lives. Every other file analyzes in memory. Run the whole suite before you
+push; CI runs it on both Node versions and will not be gentler.
+
 ## Adding a check
 
 A new source of candidate members is one file in `src/collectors/`, registered
 in `src/collectors/index.ts`. A new filter extends `src/filters/index.ts`. A new
-finding kind needs its name in `src/types/`, its label in `engine/describe.ts`,
+finding kind needs its name in `src/types/`, its label in `engine/report.ts`,
 its `--only` name in `filters/`, and a row in `docs/checks.md`.
 
 Every heuristic states, in place, why its failure mode can only hide a finding
@@ -90,11 +129,17 @@ three agree on the set. The prose still has to be updated by hand, in all three.
 ## Releasing
 
 1. Update `CHANGELOG.md`. Entries are an engineering narrative with falsifiable
-   claims: what changed, why, and what was checked rather than assumed.
-2. Bump `version` in `package.json`, commit, and tag `vX.Y.Z`.
+   claims: what changed, why, and what was checked rather than assumed. Commit
+   it.
+2. `pnpm run release patch` — or `minor`, or `major`. It bumps `package.json`,
+   commits, tags `vX.Y.Z`, and pushes the commit with its tag. Three hand steps
+   that had to agree, now one.
 3. Publish a GitHub release for the tag. The publish workflow checks the tag
-   matches `package.json`, runs lint, typecheck, and tests, and publishes to npm
+   matches `package.json`, runs the checks, builds, and publishes to npm
    through OIDC trusted publishing — no token anywhere.
+
+Nothing heavier than that script: changesets and release-please are machinery
+for a repository with more packages or more maintainers than this one has.
 
 ## Writing style
 
