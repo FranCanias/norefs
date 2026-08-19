@@ -8,6 +8,13 @@ import { defineConfig } from 'vitest/config';
 // letting a genuine hang run for minutes.
 export default defineConfig({
   test: {
+    // Only the suite's own files: a stray *.test.ts inside a fixture directory
+    // must never be collected as a test.
+    include: ['tests/*.test.ts'],
+    // Pinned, not defaulted: ts-morph holds gigabytes per worker and several
+    // suites spawn child processes — a future default flip to threads would
+    // break both quietly.
+    pool: 'forks',
     globalSetup: ['./tests/global-setup.ts'],
     testTimeout: 30_000,
     hookTimeout: 60_000,
@@ -19,6 +26,10 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text-summary', 'text'],
       include: ['src/**/*.ts'],
+      // Excluded so the number means what the comment above says: types/ has
+      // no statements to cover, and the bin shim and compile cache run only
+      // inside spawned children, which V8 coverage cannot see.
+      exclude: ['src/types/**', 'src/index.ts', 'src/compile-cache.ts'],
     },
   },
 });

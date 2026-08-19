@@ -2,6 +2,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ReadOnlyFileSystem } from '../src/engine/file-system';
 import { findWorkspace } from '../src/engine/workspaces';
+import { fixture } from './helpers';
 
 /** A repository as a flat map of paths to contents. Directories are implied. */
 function repo(files: Record<string, string>): ReadOnlyFileSystem {
@@ -138,7 +139,7 @@ describe('the packages a workspace declares', () => {
 
 describe('a real monorepo on disk', () => {
   it('turns the declaration into the projects a run analyzes', () => {
-    const dir = path.resolve('tests/workspace-fixtures');
+    const dir = fixture('workspace-fixtures');
     const workspace = findWorkspace(dir);
     expect(workspace?.source).toBe('pnpm-workspace.yaml');
     expect(workspace?.tsConfigPaths.map(p => path.relative(dir, p))).toEqual([

@@ -4,6 +4,7 @@ import { Project } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { analyzeSyntax, listEntryPoints } from '../src/engine/syntax-analyze';
+import { fixture } from './helpers';
 
 function findingsOf(manifest: object, files: Record<string, string>, compilerOptions: CompilerOptions = {}) {
   const project = new Project({ useInMemoryFileSystem: true, compilerOptions });
@@ -158,7 +159,7 @@ describe('entry points the build declares', () => {
       {},
       {},
       {
-        '/vitest.config.ts': "import { probe } from './helpers';\nexport default { setupFiles: [probe] };\n",
+        '/vitest.config.ts': "import { fixture, probe } from './helpers';\nexport default { setupFiles: [probe] };\n",
         '/helpers.ts': 'export const probe = 1;\nexport const unusedProbe = 2;\n',
       }
     );
@@ -248,7 +249,7 @@ describe('entry points the build declares', () => {
 });
 
 describe('a real project on disk', () => {
-  const dir = path.resolve('tests/entry-fixtures');
+  const dir = fixture('entry-fixtures');
   const tsConfig = path.join(dir, 'tsconfig.json');
 
   it('names every entry point and what declared it', () => {

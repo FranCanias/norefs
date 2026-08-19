@@ -10,6 +10,19 @@ import type { Finding } from '../src/types';
 export const root = path.resolve(__dirname, '..');
 export const cli = path.join(root, 'dist', 'index.js');
 
+/** A fixture path under tests/, anchored to this file — an IDE runner's cwd is not the repo root. */
+export function fixture(...parts: string[]): string {
+  return path.join(__dirname, ...parts);
+}
+
+/**
+ * mkdtemp with symlinks resolved: macOS's os.tmpdir() is a symlink, and the
+ * engine compares real paths, so an unresolved dir fails every path equality.
+ */
+export function makeTempDir(prefix: string): string {
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+}
+
 /** Analyze these files in an in-memory project. Paths are absolute, as ts-morph wants them. */
 export function analyzeFiles(files: Record<string, string>, options: Parameters<typeof analyze>[1] = {}): Finding[] {
   const project = new Project({ useInMemoryFileSystem: true });
@@ -27,7 +40,7 @@ export function analyzeSource(source: string): Finding[] {
  * fails mid-body is the case a trailing `rmSync` misses.
  */
 export function withTempDir<T>(prefix: string, body: (dir: string) => T): T {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = makeTempDir(prefix);
   const remove = (): void => fs.rmSync(dir, { recursive: true, force: true });
   let result: T;
   try {
@@ -51,7 +64,7 @@ export function tempDirs(prefix: string): { make(): string; removeAll(): void } 
   const made: string[] = [];
   return {
     make: () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+      const dir = makeTempDir(prefix);
       made.push(dir);
       return dir;
     },
@@ -83,10 +96,30 @@ export interface CliRun {
   stderr: string;
 }
 
-/** Run the built binary in this directory. */
+/**
+ * Run the built binary in this directory.
+ *
+ * The timeout exists because a wedged binary blocks the worker synchronously —
+ * vitest's own timeout cannot interrupt spawnSync — and should fail the one
+ * test that spawned it, with a story. The buffer is raised because a report
+ * past spawnSync's 1 MB default would truncate into a confusing assertion
+ * failure. A spawn that never finished throws here, centrally, instead of
+ * surfacing as `status: -1` somewhere downstream.
+ */
 export function runCli(cwd: string, ...args: string[]): CliRun {
-  const run = spawnSync(process.execPath, [cli, ...args], { cwd, encoding: 'utf8' });
-  return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
+  const run = spawnSync(process.execPath, [cli, ...args], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 60_000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (run.error || run.status === null) {
+    throw new Error(
+      `norefs ${args.join(' ')} did not finish: ${run.error?.message ?? `killed by ${run.signal ?? 'a signal'}`}\n` +
+        `stdout:\n${run.stdout}\nstderr:\n${run.stderr}`
+    );
+  }
+  return { status: run.status, stdout: run.stdout, stderr: run.stderr };
 }
 
 /** A tsconfig that compiles every .ts file beside it — what most fixtures need. */

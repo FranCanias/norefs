@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { loadProject } from '../src/engine/project';
 import type { Finding } from '../src/types';
+import { fixture } from './helpers';
 
-const rootDir = path.resolve('tests/module-fixtures');
+const rootDir = fixture('module-fixtures');
 const project = loadProject([path.join(rootDir, 'tsconfig.json')]);
 const findings = analyze(project, { rootDirs: [rootDir] });
 
