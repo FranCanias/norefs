@@ -1,4 +1,4 @@
-import type { Node, PropertyNamedNode } from 'ts-morph';
+import type { Identifier, Node, PropertyNamedNode } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import type { ConstraintIndex } from './constraints';
 import type { DynamicConsumptionIndex } from './dynamic-index';
@@ -8,8 +8,12 @@ export interface CollectContext {
   dynamic: DynamicConsumptionIndex;
   /** Member names each declaration must keep to satisfy declared assignability constraints. */
   constrained: ConstraintIndex;
-  /** Cache for isKeyofTargeted, which costs a find-references call per declaration. */
-  keyofTargeted: Map<Node, boolean>;
+  /**
+   * Memoized `isKeyofTargeted`, keyed by declaration. A miss costs a
+   * find-references call, and several collectors ask about the same
+   * declaration — the method is the cache, so no collector can bypass it.
+   */
+  isKeyofTargeted(declaration: Node, nameNode: Identifier): boolean;
   /** Cache for classEscapesTracking, which recurses into derived classes. */
   classEscapes: Map<Node, boolean>;
 }

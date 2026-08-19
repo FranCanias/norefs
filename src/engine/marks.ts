@@ -8,6 +8,8 @@
  * only decides how far a mark reaches.
  */
 
+import { isSpace, isWordPart } from './text';
+
 const LINE = 'norefs-ignore';
 const BLOCK = 'norefs-ignore-block';
 const FILE = 'norefs-ignore-file';
@@ -44,14 +46,4 @@ function hasMark(text: string, mark: string): boolean {
     return true;
   }
   return false;
-}
-
-function isSpace(c: string): boolean {
-  return c === ' ' || c === '\t' || c === '\v' || c === '\f' || c === '\r' || c === '\n';
-}
-
-function isWordPart(c: string): boolean {
-  return (
-    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c === '_' || c === '$' || c > '\x7f'
-  );
 }

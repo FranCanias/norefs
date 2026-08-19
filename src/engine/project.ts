@@ -45,9 +45,9 @@ export function pathAliasPatterns(packages: PackageConfig[], fallback: ts.Compil
 export function loadProject(tsConfigFilePaths: string[]): Project {
   const [first, ...rest] = tsConfigFilePaths;
   const project = new Project({
-    tsConfigFilePath: first,
+    ...(first === undefined ? {} : { tsConfigFilePath: first }),
     skipFileDependencyResolution: true,
-    resolutionHost: rest.length > 0 ? perPackageResolution(loadPackages(tsConfigFilePaths)) : undefined,
+    ...(rest.length > 0 ? { resolutionHost: perPackageResolution(loadPackages(tsConfigFilePaths)) } : {}),
   });
   for (const tsConfigFilePath of rest) {
     project.addSourceFilesFromTsConfig(tsConfigFilePath);

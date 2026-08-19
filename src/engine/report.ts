@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { structuredPatch } from 'diff';
-import type { Finding } from '../types';
+import type { Finding, MemberFinding, TypeKeyword } from '../types';
 
 function describeFinding(finding: Finding): string {
   switch (finding.kind) {
@@ -49,7 +49,7 @@ function describeFinding(finding: Finding): string {
   }
 }
 
-function memberClaim(finding: Finding): string {
+function memberClaim(finding: { verdict?: string | undefined }): string {
   switch (finding.verdict) {
     case 'write-only':
       return 'write-only';
@@ -62,7 +62,7 @@ function memberClaim(finding: Finding): string {
   }
 }
 
-function describeMember(finding: Finding): string {
+function describeMember(finding: MemberFinding): string {
   const subject = `property \`${finding.name}\` in ${finding.context}`;
   switch (finding.verdict) {
     case 'write-only':
@@ -79,11 +79,11 @@ function describeMember(finding: Finding): string {
 }
 
 /** The far side of a dead bridge wrapper rides along, whatever the reporter. */
-function strandNote(finding: Finding): string {
+function strandNote(finding: { strands?: string | undefined }): string {
   return finding.strands ? ` — ${finding.strands}` : '';
 }
 
-function typeNoun(finding: Finding): string {
+function typeNoun(finding: { typeKind?: TypeKeyword | undefined }): string {
   return finding.typeKind ?? 'type';
 }
 
@@ -239,12 +239,12 @@ export function formatJson(findings: Finding[], cwd: string): string {
       name: f.name,
       context: f.context,
       anonymous: f.anonymous,
-      dead: f.dead,
-      typeKind: f.typeKind,
+      dead: 'dead' in f ? f.dead : undefined,
+      typeKind: 'typeKind' in f ? f.typeKind : undefined,
       verdict: f.verdict,
       evidence: f.evidence,
-      swallowed: f.swallowed,
-      strands: f.strands,
+      swallowed: 'swallowed' in f ? f.swallowed : undefined,
+      strands: 'strands' in f ? f.strands : undefined,
     })),
     null,
     2

@@ -46,7 +46,7 @@ export function reachableFiles<File>(
   const queue = files.filter(isRoot);
   const reachable = new Set<File>(queue);
   for (let head = 0; head < queue.length; head++) {
-    for (const target of importsOf(queue[head])) {
+    for (const target of importsOf(queue[head]!)) {
       if (reachable.has(target)) continue;
       reachable.add(target);
       queue.push(target);
@@ -57,8 +57,9 @@ export function reachableFiles<File>(
 
 /** The deepest directory holding every one of these files. */
 export function commonDirectory(filePaths: string[]): string {
-  if (filePaths.length === 0) return '/';
-  let prefix = path.dirname(filePaths[0]).split('/');
+  const [first] = filePaths;
+  if (first === undefined) return '/';
+  let prefix = path.dirname(first).split('/');
   for (const filePath of filePaths.slice(1)) {
     const segments = path.dirname(filePath).split('/');
     let i = 0;

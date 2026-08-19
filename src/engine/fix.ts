@@ -11,8 +11,24 @@ import type {
 import { Node as NodeGuards, SyntaxKind, ts } from 'ts-morph';
 import { findReferencesAsNodes } from '../lookup/references';
 import { firstLine } from '../messages';
-import type { Finding } from '../types';
+import type { ExportFinding, Finding, MemberFinding } from '../types';
 import { declarationNameNode } from './modules';
+
+/** The findings --fix edits through ts-morph: the kinds that carry a declaration node. */
+type CodeFixFinding = ExportFinding | MemberFinding;
+
+/** The write sites a fix must retire with its member. Only member findings carry them. */
+function writeSitesOf(finding: CodeFixFinding): Node[] {
+  return finding.kind === 'member' ? (finding.writeSites ?? []) : [];
+}
+
+/**
+ * ts-morph declares `remove()` per node class, not on `Node` — but every node
+ * a fix deletes (statements, members, properties, comment nodes) has one.
+ */
+function removeNode(node: Node): void {
+  (node as unknown as { remove(): void }).remove();
+}
 
 /** Nothing to skip while walking a file for uses. */
 const NO_NODES: ReadonlySet<ts.Node> = new Set();
@@ -65,6 +81,7 @@ export function isFixable(finding: Finding, unsafe: boolean): boolean {
  * deleting it would take live code with it.
  */
 export function unremovableWrites(finding: Finding): Node[] {
+  if (finding.kind !== 'member') return [];
   return (finding.writeSites ?? []).filter(site => !site.wasForgotten() && writeToRemove(site) === undefined);
 }
 
@@ -118,7 +135,11 @@ export class UnappliedFix extends Error {
  * findings, and emptied types are never touched.
  */
 export function applyFixes(findings: Finding[], options: { save?: boolean; unsafe?: boolean } = {}): FixResult {
-  const fixable = findings.filter(f => isFixable(f, options.unsafe ?? false));
+  // Dependency findings ride with --fix-unsafe but are edited as manifest
+  // text by the campaign, never here — only the node-carrying kinds remain.
+  const fixable = findings
+    .filter(f => isFixable(f, options.unsafe ?? false))
+    .filter((f): f is CodeFixFinding => f.kind === 'export' || f.kind === 'type' || f.kind === 'member');
   let skipped = findings.length - fixable.length;
 
   // The comments beside the properties these fixes delete come out first, as
@@ -130,9 +151,7 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
   // finding (an object literal inside a dead method) is still valid when its
   // turn comes.
   const sorted = [...fixable].sort((a, b) =>
-    a.filePath === b.filePath
-      ? (b.node?.getStart() ?? 0) - (a.node?.getStart() ?? 0)
-      : a.filePath.localeCompare(b.filePath)
+    a.filePath === b.filePath ? b.node.getStart() - a.node.getStart() : a.filePath.localeCompare(b.filePath)
   );
 
   // Every reference query runs before the first edit, while the analysis
@@ -141,7 +160,7 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
   // remove — and the ones an earlier fix did remove are skipped as forgotten.
   const specifiers = new Map<Finding, Array<ImportSpecifier | ExportSpecifier>>();
   for (const finding of sorted) {
-    if (finding.kind === 'member' || !finding.node) continue;
+    if (finding.kind === 'member') continue;
     const nameNode = declarationNameNode(finding.node);
     if (nameNode) specifiers.set(finding, danglingSpecifiers(nameNode));
   }
@@ -151,7 +170,6 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
   let fixed = 0;
   for (const finding of sorted) {
     const node = finding.node;
-    if (!node) continue;
     // An earlier fix already removed the very node this one is about: a write
     // site retired with its member can be a member of its own literal. The
     // finding is gone from the code, so it counts as fixed.
@@ -172,7 +190,7 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
       // it wrote survives the rollback.
       const reachable = new Set(touched);
       reachable.add(node.getSourceFile());
-      for (const site of finding.writeSites ?? []) if (!site.wasForgotten()) reachable.add(site.getSourceFile());
+      for (const site of writeSitesOf(finding)) if (!site.wasForgotten()) reachable.add(site.getSourceFile());
       for (const spec of specifiers.get(finding) ?? []) if (!spec.wasForgotten()) reachable.add(spec.getSourceFile());
       throw new UnappliedFix(
         finding,
@@ -221,7 +239,7 @@ interface Anchor {
  *
  * Returns the files it rewrote.
  */
-function stripTrailingComments(findings: Finding[]): SourceFile[] {
+function stripTrailingComments(findings: CodeFixFinding[]): SourceFile[] {
   const cuts = new Map<SourceFile, Array<[number, number]>>();
   for (const finding of findings) {
     for (const node of deletedNodes(finding)) {
@@ -234,12 +252,9 @@ function stripTrailingComments(findings: Finding[]): SourceFile[] {
   }
   if (cuts.size === 0) return [];
 
-  const anchors = new Map<Finding, { node?: Anchor; sites: Anchor[] }>();
+  const anchors = new Map<Finding, { node: Anchor; sites: Anchor[] }>();
   for (const finding of findings) {
-    anchors.set(finding, {
-      node: finding.node && anchorOf(finding.node),
-      sites: (finding.writeSites ?? []).map(anchorOf),
-    });
+    anchors.set(finding, { node: anchorOf(finding.node), sites: writeSitesOf(finding).map(anchorOf) });
   }
 
   for (const [sourceFile, ranges] of cuts) {
@@ -271,24 +286,22 @@ function stripTrailingComments(findings: Finding[]): SourceFile[] {
       }
       return node;
     };
-    if (anchored.node) finding.node = back(anchored.node);
-    if (finding.writeSites) finding.writeSites = anchored.sites.map(back);
+    finding.node = back(anchored.node);
+    if (finding.kind === 'member' && finding.writeSites) finding.writeSites = anchored.sites.map(back);
   }
   return [...cuts.keys()];
 }
 
 /** The nodes a fix deletes outright — the ones whose comments orphan. */
-function deletedNodes(finding: Finding): Node[] {
+function deletedNodes(finding: CodeFixFinding): Node[] {
   const nodes: Node[] = [];
-  for (const site of finding.writeSites ?? []) {
+  for (const site of writeSitesOf(finding)) {
     const write = writeToRemove(site);
     if (write) nodes.push(write);
   }
-  const node = finding.node;
-  if (!node) return nodes;
   // A parameter property keeps its parameter and loses only its modifiers; an
   // over-exported declaration keeps every line but the `export` keyword.
-  if (finding.kind === 'member' ? !node.isKind(SyntaxKind.Parameter) : finding.dead) nodes.push(node);
+  if (finding.kind === 'member' ? !finding.node.isKind(SyntaxKind.Parameter) : finding.dead) nodes.push(finding.node);
   return nodes;
 }
 
@@ -337,7 +350,8 @@ function commentLocations(kept: Set<Node>): CommentLocation[] {
     const sourceFile = node.getSourceFile();
     const range = node.getLeadingCommentRanges()[0];
     const line = range ? sourceFile.getLineAndColumnAtPos(range.getPos()).line : node.getStartLineNumber();
-    const text = (range ? range.getText() : node.getText()).split('\n')[0].trim();
+    const [firstLineOfText = ''] = (range ? range.getText() : node.getText()).split('\n');
+    const text = firstLineOfText.trim();
     locations.push({ filePath: sourceFile.getFilePath(), line, text });
   }
   return locations.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line);
@@ -349,7 +363,7 @@ function commentLocations(kept: Set<Node>): CommentLocation[] {
  * named type describes — the finding itself, made undetectable. The writes go
  * first: their nodes belong to other files that must be saved too.
  */
-function fixMember(finding: Finding, member: Node, kept: Set<Node>): SourceFile[] {
+function fixMember(finding: MemberFinding, member: Node, kept: Set<Node>): SourceFile[] {
   const changed = new Set<SourceFile>([member.getSourceFile()]);
   const sources: VariableDeclaration[] = [];
   const dependencies: ArrayLiteralExpression[] = [];
@@ -361,7 +375,7 @@ function fixMember(finding: Finding, member: Node, kept: Set<Node>): SourceFile[
     sources.push(...writtenLocals(write));
     dependencies.push(...dependencyArrays(write));
     removeLeadingComments(write, kept);
-    (write as unknown as { remove(): void }).remove();
+    removeNode(write);
   }
   removeOrphanedLocals(sources, dependencies, kept);
 
@@ -371,7 +385,7 @@ function fixMember(finding: Finding, member: Node, kept: Set<Node>): SourceFile[
     member.setScope(undefined);
   } else {
     removeLeadingComments(member, kept);
-    (member as unknown as { remove(): void }).remove();
+    removeNode(member);
   }
   return [...changed];
 }
@@ -484,6 +498,7 @@ function removeLeadingComments(node: Node, kept: Set<Node>): void {
   const comments: Node[] = [];
   while (index > 0) {
     const previous = siblings[index - 1];
+    if (!previous) break;
     const kind = previous.getKind();
     if (kind !== SyntaxKind.SingleLineCommentTrivia && kind !== SyntaxKind.MultiLineCommentTrivia) break;
     if (previous.getEndLineNumber() < above.getStartLineNumber() - 1) {
@@ -495,12 +510,12 @@ function removeLeadingComments(node: Node, kept: Set<Node>): void {
     index--;
   }
   for (const comment of comments) {
-    (comment as unknown as { remove(): void }).remove();
+    removeNode(comment);
   }
 }
 
 function fixExport(
-  finding: Finding,
+  finding: ExportFinding,
   decl: Node,
   specifiers: Array<ImportSpecifier | ExportSpecifier>,
   kept: Set<Node>
@@ -583,7 +598,7 @@ function removeDeclaration(decl: Node, kept: Set<Node>): void {
     }
   }
   removeLeadingComments(decl, kept);
-  (decl as unknown as { remove(): void }).remove();
+  removeNode(decl);
 }
 
 /**

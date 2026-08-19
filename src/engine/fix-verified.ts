@@ -10,7 +10,7 @@ interface HeldBack {
   /** The verification errors that appeared while this fix was applied. */
   errors: string[];
   /** True when the editor refused the edit, rather than the probe rejecting it. */
-  unapplied?: boolean;
+  unapplied?: boolean | undefined;
 }
 
 interface VerifiedFixOptions {
@@ -28,7 +28,7 @@ interface VerifiedFixOptions {
    * the files currently changed in memory. The seam --verify-command plugs
    * into.
    */
-  check?: (project: Project, dirtyFilePaths: string[]) => string[];
+  check?: ((project: Project, dirtyFilePaths: string[]) => string[]) | undefined;
   cwd: string;
   log: (line: string) => void;
 }
@@ -42,7 +42,7 @@ interface VerifiedFixResult {
   /** Comments the applied fixes left next to their edits, for a human to reread. */
   keptComments: CommentLocation[];
   /** Set when verification failed and no culprit could be isolated; the project is pristine. */
-  aborted?: string[];
+  aborted?: string[] | undefined;
 }
 
 const MAX_PASSES = 5;

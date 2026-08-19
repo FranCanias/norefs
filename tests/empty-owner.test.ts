@@ -17,8 +17,9 @@ describe('empty-owner findings', () => {
     );
     // The member findings fold into the one logical finding.
     expect(findings.map(f => [f.kind, f.name])).toEqual([['empty-type', 'Zone']]);
-    expect(findings[0].context).toBe('interface');
-    expect(findings[0].swallowed).toBe(2);
+    const emptied = findings.find(f => f.kind === 'empty-type');
+    expect(emptied?.context).toBe('interface');
+    expect(emptied?.swallowed).toBe(2);
   });
 
   it('reports a type alias that becomes empty', () => {
@@ -34,8 +35,9 @@ describe('empty-owner findings', () => {
       ].join('\n')
     );
     expect(findings.map(f => [f.kind, f.name])).toEqual([['empty-type', 'Options']]);
-    expect(findings[0].context).toBe('type');
-    expect(findings[0].swallowed).toBe(1);
+    const emptied = findings.find(f => f.kind === 'empty-type');
+    expect(emptied?.context).toBe('type');
+    expect(emptied?.swallowed).toBe(1);
   });
 
   it('stays silent when some member is used', () => {

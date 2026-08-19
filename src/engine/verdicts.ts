@@ -1,9 +1,9 @@
-import path from 'node:path';
 import type { InterfaceDeclaration, Node, Project, SourceFile, TypeAliasDeclaration, TypeNode } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { referenceIndex } from '../lookup/reference-index';
 import { findReferencesAsNodes } from '../lookup/references';
-import type { Finding, Verdict } from '../types';
+import type { Finding, MemberFinding, Verdict } from '../types';
+import { location } from './location';
 
 /**
  * Turn the single "unused" label into a verdict per finding.
@@ -33,7 +33,7 @@ export function assignVerdicts(
    */
   isDeadFile: (filePath: string) => boolean = () => false
 ): void {
-  const memberFindings = findings.filter(f => f.kind === 'member' && f.node && !f.verdict);
+  const memberFindings = findings.filter((f): f is MemberFinding => f.kind === 'member' && f.verdict === undefined);
   if (memberFindings.length === 0) {
     assignEmptyTypeVerdicts(findings);
     return;
@@ -44,7 +44,7 @@ export function assignVerdicts(
   const index = referenceIndex(project);
 
   for (const finding of memberFindings) {
-    const owner = namedTypeAncestor(finding.node as Node);
+    const owner = namedTypeAncestor(finding.node);
     const ownEvidence = owner ? boundary.get(owner) : undefined;
     // The twin candidates cost only map lookups — no reference queries — so
     // every one of them can be checked against the boundary. A read
@@ -128,31 +128,35 @@ function contractEvidence(
   return `its ${label} is the far side of a serialization boundary (${farEvidence}) — this declaration is the near side of the same contract`;
 }
 
-/** Up to three site locations, spelled out; past that, an honest count. */
+/** Up to three site locations, spelled out; past that, an honest count. Callers never pass an empty list. */
 function siteList(nodes: Node[], cwd: string): string {
   const locations = nodes.map(node => location(node, cwd));
-  if (locations.length === 1) return locations[0];
+  const last = locations[locations.length - 1] ?? '';
+  if (locations.length === 1) return last;
   if (locations.length <= 3) {
-    return `${locations.slice(0, -1).join(', ')} and ${locations[locations.length - 1]}`;
+    return `${locations.slice(0, -1).join(', ')} and ${last}`;
   }
   const rest = locations.length - 3;
-  return `${locations[0]}, ${locations[1]}, ${locations[2]} and ${rest} more ${rest === 1 ? 'site' : 'sites'}`;
+  return `${locations.slice(0, 3).join(', ')} and ${rest} more ${rest === 1 ? 'site' : 'sites'}`;
 }
 
-/** The most cautious verdict among an emptied type's own reported members. */
+/**
+ * The most cautious verdict among an emptied type's own reported members,
+ * matched by the member nodes the fold recorded — never by rendered labels.
+ */
 function assignEmptyTypeVerdicts(findings: Finding[]): void {
   const caution: Verdict[] = ['dead', 'write-only', 'shadowed', 'contract'];
+  const members = findings.filter((f): f is MemberFinding => f.kind === 'member');
   for (const finding of findings) {
     if (finding.kind !== 'empty-type') continue;
+    const owned = new Set(finding.members);
     let worst = 0;
-    for (const member of findings) {
-      if (member.kind !== 'member' || member.filePath !== finding.filePath) continue;
-      if (member.context.includes(`\`${finding.name}\``)) {
-        worst = Math.max(worst, caution.indexOf(member.verdict ?? 'dead'));
-        if (member.verdict && member.verdict !== 'dead' && !finding.evidence) finding.evidence = member.evidence;
-      }
+    for (const member of members) {
+      if (!owned.has(member.node)) continue;
+      worst = Math.max(worst, caution.indexOf(member.verdict ?? 'dead'));
+      if (member.verdict && member.verdict !== 'dead' && !finding.evidence) finding.evidence = member.evidence;
     }
-    finding.verdict = caution[worst];
+    finding.verdict = caution[worst] ?? 'dead';
   }
 }
 
@@ -509,15 +513,4 @@ function namedTypeAncestor(member: Node): Node | undefined {
         ancestor.isKind(SyntaxKind.EnumDeclaration) ||
         ancestor.isKind(SyntaxKind.ClassDeclaration)
     );
-}
-
-/** One canonical `relative/path:line` coordinate, shared by every reporter. */
-export function formatLocation(filePath: string, line: number, cwd: string): string {
-  return `${path.relative(cwd, filePath)}:${line}`;
-}
-
-export function location(node: Node, cwd: string): string {
-  const sourceFile = node.getSourceFile();
-  const { line } = sourceFile.getLineAndColumnAtPos(node.getStart());
-  return formatLocation(sourceFile.getFilePath(), line, cwd);
 }

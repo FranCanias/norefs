@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { cli, inProject, runCli, TSCONFIG } from './helpers';
@@ -193,15 +194,25 @@ describe('--export', () => {
     project(dir => {
       const run = runCli(dir, '--export', 'yaml');
       expect(run.status).toBe(2);
-      expect(run.stderr).toContain('--export must be "md" or "json"');
+      expect(run.stderr).toContain('--export must be one of md, json');
     });
   });
 });
 
 describe('the dirty-tree guard', () => {
-  /** A git repository with one uncommitted change in it. */
+  /**
+   * A git repository with one uncommitted change in it. The developer's global
+   * and system git config are shut out: a `commit.gpgsign = true` or a missing
+   * `user.*` out there would fail the commit silently, and the guard test
+   * would then pass against a tree that was never dirty for the right reason —
+   * which is why every command also has to answer 0.
+   */
   function dirtyRepo(dir: string): void {
-    const git = (...args: string[]) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull };
+    const git = (...args: string[]): void => {
+      const run = spawnSync('git', args, { cwd: dir, encoding: 'utf8', env });
+      expect(run.status, `git ${args[0]} failed: ${run.stderr}`).toBe(0);
+    };
     git('init', '-q');
     git('config', 'user.email', 'test@example.com');
     git('config', 'user.name', 'Test');
@@ -253,14 +264,26 @@ describe('--watch', () => {
         events.push(`${event} ${JSON.stringify(fileName)}`);
       });
 
+      // The streams are read once, here: a listener attached per wait would
+      // append every chunk once per waiter and corrupt the transcript.
+      const waiters = new Set<() => void>();
+      for (const stream of [watcher.stdout, watcher.stderr]) {
+        stream.on('data', (chunk: Buffer) => {
+          output += chunk.toString();
+          for (const check of [...waiters]) check();
+        });
+      }
+
       const seen = (phase: string, text: string, timeoutMs = 60_000): Promise<void> =>
         new Promise((resolve, reject) => {
           const check = (): void => {
             if (!output.includes(text)) return;
+            waiters.delete(check);
             clearTimeout(timer);
             resolve();
           };
           const timer = setTimeout(() => {
+            waiters.delete(check);
             const state = watcher.exitCode === null ? 'still running' : `exited ${watcher.exitCode}`;
             reject(
               new Error(
@@ -270,12 +293,7 @@ describe('--watch', () => {
               )
             );
           }, timeoutMs);
-          for (const stream of [watcher.stdout, watcher.stderr]) {
-            stream.on('data', (chunk: Buffer) => {
-              output += chunk.toString();
-              check();
-            });
-          }
+          waiters.add(check);
           check();
         });
 

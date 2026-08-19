@@ -8,8 +8,8 @@ import type { Finding } from '../types';
 import { isFixable, unremovableWrites } from './fix';
 import { editManifest, manifestEdits } from './fix-manifest';
 import { applyVerifiedFixes, findingKey } from './fix-verified';
+import { formatLocation } from './location';
 import { formatPatch } from './report';
-import { formatLocation } from './verdicts';
 
 interface CampaignOptions {
   project: Project;
@@ -22,7 +22,7 @@ interface CampaignOptions {
   /** Type-check the fixes before saving them. */
   verify: boolean;
   /** A command that must exit 0 for the fixes to count — the user's tests, say. */
-  command?: string;
+  command?: string | undefined;
   /** False for --dry-run: nothing is written and the diffs come back instead. */
   save: boolean;
   cwd: string;
@@ -32,7 +32,7 @@ interface CampaignOptions {
 
 interface CampaignResult {
   /** Verification failed and no single fix could be isolated; nothing changed. */
-  aborted?: string[];
+  aborted?: string[] | undefined;
   /** What the run has to tell the operator, in the order it happened. */
   notes: string[];
   /** Unified diffs of the would-be changes. Empty unless `save` was false. */
@@ -82,7 +82,7 @@ export function runFixCampaign(options: CampaignOptions): CampaignResult {
   // type check reaches — and a retired write takes a computation with it
   // that no type check weighs. Say so unless the user's own command also ran.
   const memberFixes = findings.some(f => f.kind === 'member' && isFixable(f, unsafe));
-  const writeFixes = findings.some(f => (f.writeSites?.length ?? 0) > 0 && isFixable(f, unsafe));
+  const writeFixes = findings.some(f => f.kind === 'member' && (f.writeSites?.length ?? 0) > 0 && isFixable(f, unsafe));
   const blindSpot = writeFixes
     ? 'runtime-only reads of a deleted member, and it does not weigh what the writes deleted with it were doing'
     : 'runtime-only reads of deleted members';
@@ -136,7 +136,8 @@ export function runFixCampaign(options: CampaignOptions): CampaignResult {
   // and gets no stranding warning.
   const held = new Set(result.heldBack.map(h => findingKey(h.finding, cwd)));
   for (const finding of findings) {
-    if (!finding.strands || !isFixable(finding, unsafe) || held.has(findingKey(finding, cwd))) continue;
+    if (!('strands' in finding) || finding.strands === undefined) continue;
+    if (!isFixable(finding, unsafe) || held.has(findingKey(finding, cwd))) continue;
     notes.push(`\`${finding.name}\`: ${finding.strands} — no analysis will flag it once the wrapper is gone`);
   }
 

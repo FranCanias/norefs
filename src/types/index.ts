@@ -1,29 +1,5 @@
 import type { Node } from 'ts-morph';
 
-export type FindingKind =
-  /** An unused member of an interface, type, object literal, enum, or class. */
-  | 'member'
-  /** A file no chain of imports from any entry point reaches. */
-  | 'file'
-  /** An exported value nothing imports or uses. */
-  | 'export'
-  /** An exported type nothing imports or uses. */
-  | 'type'
-  /** An unused export whose namespace (TS namespace or `import * as`) is used. */
-  | 'ns-export'
-  /** An unused exported type whose namespace is used. */
-  | 'ns-type'
-  /** A still-referenced type that becomes empty once its unused members go. */
-  | 'empty-type'
-  /** A package.json dependency no source file imports. */
-  | 'dependency'
-  /** An imported package no scanned package.json lists. */
-  | 'unlisted'
-  /** A dependency listed in the section that does not match how it is used. */
-  | 'misplaced'
-  /** A handler whose every sender this report deletes: dead once they go. */
-  | 'stranded';
-
 /** The declaration keyword behind a type finding. */
 export type TypeKeyword = 'interface' | 'type' | 'enum';
 
@@ -54,44 +30,110 @@ export interface Boundary {
  */
 export type Verdict = 'dead' | 'over-exported' | 'write-only' | 'contract' | 'shadowed' | 'test-only';
 
-export interface Finding {
-  kind: FindingKind;
+/** What every finding carries, whatever its kind. */
+interface FindingBase {
   filePath: string;
   line: number;
   column: number;
-  /** The member, export, or file name. */
+  /** The member, export, file, package, or channel name. */
   name: string;
-  /**
-   * The owner description for members; the namespace name for ns findings;
-   * "interface" or "type" for empty-type findings; the manifest section —
-   * "dependencies" or "devDependencies" — for dependency and misplaced ones,
-   * which is what tells a fix where the entry it moves is written now.
-   */
-  context: string;
   anonymous: boolean;
-  /** True when the declaration has zero references anywhere, so --fix can remove it whole. */
-  dead?: boolean;
-  /** Set on type and ns-type findings: the keyword of the declaration. */
-  typeKind?: TypeKeyword;
   /**
    * The claim this finding makes. Unset for `unlisted`, which claims a
    * manifest gap, and for `stranded`, which claims a reachability gap — code
    * that is alive today and dead the moment you apply the rest of the report.
    */
-  verdict?: Verdict;
-  /** Human-readable evidence behind a non-dead verdict: the twin that reads the member, the boundary the type crosses. */
-  evidence?: string;
-  /** On empty-type findings: how many member findings folded into this one. */
-  swallowed?: number;
+  verdict?: Verdict | undefined;
+  /** Human-readable evidence behind the verdict: the twin that reads the member, the boundary the type crosses. */
+  evidence?: string | undefined;
+}
+
+/** A file no chain of imports from any entry point reaches. */
+interface FileFinding extends FindingBase {
+  kind: 'file';
+  context: '';
+}
+
+/**
+ * An exported declaration nothing outside its own file uses. `type` and
+ * `ns-type` are the type declarations; `ns-export` and `ns-type` sit inside a
+ * namespace (TS namespace or `import * as`) that is itself used.
+ */
+export interface ExportFinding extends FindingBase {
+  kind: 'export' | 'type' | 'ns-export' | 'ns-type';
+  /** The namespace name for ns findings; empty for plain exports. */
+  context: string;
+  /** Zero references anywhere: --fix removes the declaration whole instead of de-exporting it. */
+  dead: boolean;
+  /** The keyword of the declaration, on type and ns-type findings. */
+  typeKind?: TypeKeyword | undefined;
+  /** The declaration behind the finding, kept so --fix can act on it. */
+  node: Node;
   /** On a reported bridge wrapper: where the far side of the shared channel string lives. */
-  strands?: string;
+  strands?: string | undefined;
+}
+
+/** An unused member of an interface, type, object literal, enum, or class. */
+export interface MemberFinding extends FindingBase {
+  kind: 'member';
+  /** The owner description: "type `Config`", "props of `render`". */
+  context: string;
+  /** The member declaration, kept so --fix can act on it. */
+  node: Node;
   /**
    * On a proven `write-only` member: the write sites the evidence cites. A fix
    * that deletes the member must delete these too — the value chain is the
    * finding, and a declaration removed without them leaves the writes running
    * into a shape no type describes.
    */
-  writeSites?: Node[];
-  /** The declaration behind the finding, kept so --fix can act on it. Unset for file findings. */
-  node?: Node;
+  writeSites?: Node[] | undefined;
+  /** On a reported bridge wrapper: where the far side of the shared channel string lives. */
+  strands?: string | undefined;
 }
+
+/** A still-referenced type that becomes empty once its unused members go. */
+export interface EmptyTypeFinding extends FindingBase {
+  kind: 'empty-type';
+  /** What kind of owner empties: a declaration, or a function's returned object. */
+  context: 'interface' | 'type' | 'returned object';
+  /** How many member findings folded into this one. */
+  swallowed: number;
+  /** The member nodes whose findings folded in, for verdict and strand inheritance. */
+  members: Node[];
+  /** On a reported bridge wrapper: where the far side of the shared channel string lives. */
+  strands?: string | undefined;
+}
+
+/**
+ * A dependency finding: `dependency` is listed and never used; `misplaced`
+ * is listed in the section that does not match how it is used.
+ */
+interface DependencyFinding extends FindingBase {
+  kind: 'dependency' | 'misplaced';
+  /** The manifest section the entry is written in now — what tells a fix where the entry it moves lives. */
+  context: 'dependencies' | 'devDependencies';
+}
+
+/** An imported package no scanned package.json lists. */
+interface UnlistedFinding extends FindingBase {
+  kind: 'unlisted';
+  context: '';
+}
+
+/** A handler whose every sender this report deletes: dead once they go. */
+interface StrandedFinding extends FindingBase {
+  kind: 'stranded';
+  /** The reported senders, named. */
+  context: string;
+}
+
+export type Finding =
+  | FileFinding
+  | ExportFinding
+  | MemberFinding
+  | EmptyTypeFinding
+  | DependencyFinding
+  | UnlistedFinding
+  | StrandedFinding;
+
+export type FindingKind = Finding['kind'];

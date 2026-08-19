@@ -1,8 +1,9 @@
 import type { CallExpression, Node, Project, ts } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { isInside } from '../lookup/reference-index';
-import type { Boundary, Finding } from '../types';
-import { formatLocation, hasAmbientCallee, location } from './verdicts';
+import type { Boundary, ExportFinding, Finding, MemberFinding } from '../types';
+import { formatLocation, location } from './location';
+import { hasAmbientCallee } from './verdicts';
 
 /**
  * A reported bridge wrapper has a far side. When a reported declaration sends
@@ -33,20 +34,22 @@ export function annotateStrandedChannels(
      * True when this far side deserves a finding of its own. The caller owns
      * that policy — a dead file or a suppressed one already tells the story.
      */
-    reportFarSide?: (node: Node) => boolean;
+    reportFarSide?: ((node: Node) => boolean) | undefined;
     /** Boundaries the project declared, each paired independently of the rest. */
-    boundaries?: Boundary[];
+    boundaries?: Boundary[] | undefined;
   } = {}
 ): Finding[] {
   const reportFarSide = options.reportFarSide ?? (() => true);
-  const candidates = findings.filter(f => f.node && (f.kind === 'member' || f.kind === 'export'));
+  const candidates = findings.filter(
+    (f): f is MemberFinding | ExportFinding => f.kind === 'member' || f.kind === 'export'
+  );
   if (candidates.length === 0) return [];
 
   const pairings: Pairing[] = [];
   for (const rule of [OWN_BRIDGE, ...(options.boundaries ?? []).map(declaredRule)]) {
-    const channels = new Map<Finding, string[]>();
+    const channels = new Map<Sender, string[]>();
     for (const finding of candidates) {
-      const names = channelsSentBy(finding.node as Node, rule);
+      const names = channelsSentBy(finding.node, rule);
       if (names.length > 0) channels.set(finding, names);
     }
     if (channels.size > 0) {
@@ -70,7 +73,7 @@ export function annotateStrandedChannels(
     for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
       const first = call.getArguments()[0];
       const channel = channelOf(first);
-      if (channel === undefined) continue;
+      if (first === undefined || channel === undefined) continue;
       for (const pairing of pairings) {
         if (!pairing.wanted.has(channel)) continue;
         if (pairing.rule.sends(call)) push(pairing.senders, channel, first);
@@ -85,11 +88,14 @@ export function annotateStrandedChannels(
   return stranded;
 }
 
+/** A finding a channel can be sent from: the kinds that carry a declaration node. */
+type Sender = MemberFinding | ExportFinding;
+
 /** A rule and everything the project scan found for it. */
 interface Pairing {
   rule: ChannelRule;
   /** The channels each reported declaration sends on. */
-  channels: Map<Finding, string[]>;
+  channels: Map<Sender, string[]>;
   wanted: Set<string>;
   senders: Map<string, Node[]>;
   farSides: Map<string, Node[]>;
@@ -132,7 +138,7 @@ function calleeMatches(call: CallExpression, names: string[]): boolean {
 
 function collectStrands(
   pairing: Pairing,
-  candidates: Finding[],
+  candidates: Sender[],
   cwd: string,
   reportFarSide: (node: Node) => boolean,
   reportedFar: Set<Node>,
@@ -149,8 +155,8 @@ function collectStrands(
    * *innermost* reported declaration around it. A class with five senders and
    * three fates is not one fate.
    */
-  const deletedSenders = (channel: string): Finding[] | undefined => {
-    const owners: Finding[] = [];
+  const deletedSenders = (channel: string): Sender[] | undefined => {
+    const owners: Sender[] = [];
     for (const sender of senders.get(channel) ?? []) {
       const owner = innermostOwner(candidates, sender);
       if (!owner || !deletesDeclaration(owner)) return undefined;
@@ -160,7 +166,7 @@ function collectStrands(
   };
 
   for (const [finding, names] of channels) {
-    const declaration = finding.node as Node;
+    const declaration = finding.node;
     for (const name of names) {
       const sending = deletedSenders(name);
       if (!sending) continue;
@@ -187,11 +193,11 @@ function collectStrands(
  * its own answers for the sender it holds; the class around it answers only
  * when nothing nearer does.
  */
-function innermostOwner(candidates: Finding[], sender: Node): Finding | undefined {
-  let owner: Finding | undefined;
+function innermostOwner(candidates: Sender[], sender: Node): Sender | undefined {
+  let owner: Sender | undefined;
   let inner: ts.Node | undefined;
   for (const candidate of candidates) {
-    const node = (candidate.node as Node).compilerNode;
+    const node = candidate.node.compilerNode;
     if (!isInside(sender.compilerNode, node)) continue;
     if (!inner || (node.pos >= inner.pos && node.end <= inner.end)) {
       owner = candidate;
@@ -215,7 +221,7 @@ function deletesDeclaration(finding: Finding): boolean {
  * handler is dead the moment the last sender goes, and this is the one report
  * that can still see it.
  */
-function strandedFinding(far: Node, channel: string, sending: Finding[], cwd: string): Finding {
+function strandedFinding(far: Node, channel: string, sending: Sender[], cwd: string): Finding {
   const sourceFile = far.getSourceFile();
   const { line, column } = sourceFile.getLineAndColumnAtPos(far.getStart());
   const named = sending

@@ -24,10 +24,10 @@ describe('dead-slice producer findings', () => {
     );
     const findings = analyze(project);
 
-    const slice = findings.find(f => f.kind === 'empty-type' && f.name === 'computeColors');
+    const slice = findings.find(f => f.kind === 'empty-type');
     expect(slice).toBeDefined();
     expect(slice?.context).toBe('returned object');
-    expect(slice?.swallowed).toBe(3);
+    expect(slice?.kind === 'empty-type' ? slice.swallowed : undefined).toBe(3);
     // The three property findings folded in.
     expect(findings.filter(f => f.kind === 'member')).toEqual([]);
   });
@@ -42,6 +42,6 @@ describe('dead-slice producer findings', () => {
     );
     const findings = analyze(project);
     expect(findings.map(f => [f.kind, f.name])).toEqual([['member', 'dead']]);
-    expect(findings[0].context).toContain('compute');
+    expect(findings[0]?.context).toContain('compute');
   });
 });

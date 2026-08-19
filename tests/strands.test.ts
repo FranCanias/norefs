@@ -2,7 +2,14 @@ import { Project } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { formatText } from '../src/engine/report';
-import type { Boundary } from '../src/types';
+import type { Boundary, EmptyTypeFinding, ExportFinding, Finding, MemberFinding } from '../src/types';
+
+/** Find a reported wrapper by name, narrowed to the kinds that carry a strand note. */
+function sender(findings: Finding[], name: string): MemberFinding | ExportFinding | undefined {
+  return findings.find(
+    (f): f is MemberFinding | ExportFinding => (f.kind === 'member' || f.kind === 'export') && f.name === name
+  );
+}
 
 /** The bridge every case here varies: one `invoke` channel API, plus these files. */
 function bridgeProject(files: Record<string, string>): Project {
@@ -69,7 +76,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
     });
     const findings = analyze(project);
 
-    const found = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
+    const found = sender(findings, 'loadRecipe');
     expect(found?.verdict).toBe('dead');
     expect(found?.strands).toContain("'recipeBox:loadRecipe'");
     expect(found?.strands).toMatch(/index\.ts:4/);
@@ -113,7 +120,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
       ].join('\n'),
     });
     const findings = analyze(project);
-    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
+    const wrapper = sender(findings, 'loadRecipe');
     expect(wrapper?.verdict).toBe('dead');
     expect(wrapper?.strands).toBeUndefined();
     expect(findings.some(f => f.kind === 'stranded')).toBe(false);
@@ -146,7 +153,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
       ].join('\n'),
     });
     const findings = analyze(project);
-    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'deleteRecipe');
+    const wrapper = sender(findings, 'deleteRecipe');
     expect(wrapper?.verdict).toBe('write-only');
     expect(wrapper?.strands).toContain("'recipeBox:deleteRecipe'");
     expect(findings.some(f => f.kind === 'stranded')).toBe(true);
@@ -175,7 +182,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
       ].join('\n'),
     });
     const findings = analyze(project);
-    const service = findings.find(f => f.name === 'RecipeBoxService');
+    const service = sender(findings, 'RecipeBoxService');
     expect(service?.verdict).toBe('over-exported');
     expect(service?.strands).toBeUndefined();
     expect(findings.some(f => f.kind === 'stranded')).toBe(false);
@@ -209,7 +216,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
     });
     const findings = analyze(project);
     expect(findings.find(f => f.name === 'RecipeBoxService')?.verdict).toBe('over-exported');
-    expect(findings.find(f => f.name === 'oldRecipe')?.strands).toContain("'recipeBox:oldRecipe'");
+    expect(sender(findings, 'oldRecipe')?.strands).toContain("'recipeBox:oldRecipe'");
     const stranded = findings.filter(f => f.kind === 'stranded');
     expect(stranded.map(f => f.name)).toEqual(['recipeBox:oldRecipe']);
     // The method holding the sender, named — not the class holding both fates.
@@ -225,7 +232,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
     const project = scopedProject();
     const scoped = analyze(project, { scopeDir: '/src' });
     expect(scoped.some(f => f.kind === 'stranded')).toBe(false);
-    expect(scoped.find(f => f.name === 'loadRecipe')?.strands).toMatch(/main\.ts:4/);
+    expect(sender(scoped, 'loadRecipe')?.strands).toMatch(/main\.ts:4/);
     // Unscoped, the same project reports it.
     expect(analyze(project).some(f => f.kind === 'stranded')).toBe(true);
   });
@@ -234,7 +241,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
     const project = scopedProject('// norefs-ignore-file\n');
     const findings = analyze(project);
     expect(findings.some(f => f.kind === 'stranded')).toBe(false);
-    expect(findings.find(f => f.name === 'loadRecipe')?.strands).toBeDefined();
+    expect(sender(findings, 'loadRecipe')?.strands).toBeDefined();
   });
 
   it('never treats a payload string as a channel', () => {
@@ -258,7 +265,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
       ].join('\n'),
     });
     const findings = analyze(project);
-    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'save');
+    const wrapper = sender(findings, 'save');
     expect(wrapper?.verdict).toBe('dead');
     expect(wrapper?.strands).toBeUndefined();
   });
@@ -295,7 +302,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
     });
     const findings = analyze(project);
     for (const name of ['load', 'reload']) {
-      const wrapper = findings.find(f => f.kind === 'member' && f.name === name);
+      const wrapper = sender(findings, name);
       expect(wrapper?.verdict).toBe('dead');
       expect(wrapper?.strands).toBeUndefined();
     }
@@ -321,7 +328,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
       ].join('\n'),
     });
     const findings = analyze(project);
-    const folded = findings.find(f => f.kind === 'empty-type' && f.name === 'useRecipeIpc');
+    const folded = findings.find((f): f is EmptyTypeFinding => f.kind === 'empty-type' && f.name === 'useRecipeIpc');
     expect(folded).toBeDefined();
     expect(folded?.strands).toContain("'recipeBox:loadRecipe'");
     expect(formatText(findings, '/')).toContain('strands the far side');
@@ -333,7 +340,7 @@ describe('stranded far sides of dead bridge wrappers', () => {
       '/index.ts': "import { keep } from './app';\nkeep();\n",
     });
     const findings = analyze(project);
-    const wrapper = findings.find(f => f.kind === 'member' && f.name === 'loadRecipe');
+    const wrapper = sender(findings, 'loadRecipe');
     expect(wrapper?.verdict).toBe('dead');
     expect(wrapper?.strands).toBeUndefined();
   });
@@ -389,12 +396,12 @@ describe('boundaries the project declares', () => {
       "app.post('/api/recipes/legacy', () => {});",
     ]);
     const findings = analyze(project, { boundaries: REST });
-    const gone = findings.find(f => f.name === 'gone');
+    const gone = sender(findings, 'gone');
     expect(gone?.strands).toContain("far side of `'/api/recipes/legacy'`");
     const stranded = findings.filter(f => f.kind === 'stranded');
     expect(stranded.map(f => f.name)).toEqual(['/api/recipes/legacy']);
     // The live route keeps its handler: `live` still sends to it.
-    expect(stranded[0].filePath).toBe('/routes.ts');
+    expect(stranded[0]?.filePath).toBe('/routes.ts');
   });
 
   it('finds nothing without the declaration — the shape alone never pairs', () => {
@@ -406,7 +413,7 @@ describe('boundaries the project declares', () => {
     ]);
     const findings = analyze(project);
     expect(findings.filter(f => f.kind === 'stranded')).toEqual([]);
-    expect(findings.find(f => f.name === 'gone')?.strands).toBeUndefined();
+    expect(sender(findings, 'gone')?.strands).toBeUndefined();
   });
 
   it('a surviving sender of the same route strands nothing', () => {

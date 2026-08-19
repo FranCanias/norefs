@@ -13,7 +13,6 @@ import { findReferencesAsNodes } from '../lookup/references';
 import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { mergeNames } from './constraints';
-import { isKeyofTargeted } from './dynamic-usage';
 import { callableEscapes, getCallableNameNode } from './escape';
 
 export function collectClassCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
@@ -24,12 +23,7 @@ export function collectClassCandidates(sourceFile: SourceFile, ctx: CollectConte
 
     const nameNode = cls.getNameNode();
     if (!nameNode) continue;
-    let targeted = ctx.keyofTargeted.get(cls);
-    if (targeted === undefined) {
-      targeted = isKeyofTargeted(nameNode);
-      ctx.keyofTargeted.set(cls, targeted);
-    }
-    if (targeted) continue;
+    if (ctx.isKeyofTargeted(cls, nameNode)) continue;
     if (classEscapesTracking(cls, ctx.classEscapes)) continue;
 
     const skip = mergeNames(ctx.dynamic.probed.get(cls), ctx.constrained.get(cls));

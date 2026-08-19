@@ -5,10 +5,10 @@ import type { Finding, FindingKind } from '../types';
 export interface FilterOptions {
   anonymous: boolean;
   /** Report only these kinds when set. */
-  only?: FindingKind[];
+  only?: FindingKind[] | undefined;
   /** Globs of file paths to drop findings from, relative to cwd. */
-  ignore?: string[];
-  cwd?: string;
+  ignore?: string[] | undefined;
+  cwd: string;
 }
 
 export function applyFilters(findings: Finding[], options: FilterOptions): Finding[] {
@@ -22,7 +22,7 @@ export function applyFilters(findings: Finding[], options: FilterOptions): Findi
 
 function isIgnored(filePath: string, options: FilterOptions): boolean {
   if (!options.ignore || options.ignore.length === 0) return false;
-  const relative = path.relative(options.cwd ?? process.cwd(), filePath);
+  const relative = path.relative(options.cwd, filePath);
   return options.ignore.some(
     glob => minimatch(relative, glob, { dot: true }) || minimatch(filePath, glob, { dot: true })
   );

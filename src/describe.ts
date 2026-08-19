@@ -5,35 +5,50 @@ import { SyntaxKind } from 'ts-morph';
 // engine/ and collectors/ can read it without either layer sitting on the other.
 
 interface Described {
+  /** The name with reporter markup: `` `load` ``, "the default export function". */
   label: string;
+  /** The bare name, for a finding's own `name` field — same text, no markup. */
+  name: string;
   anonymous: boolean;
+}
+
+function named(name: string): Described {
+  return { label: `\`${name}\``, name, anonymous: false };
+}
+
+function unnamed(name: string, anonymous: boolean): Described {
+  return { label: name, name, anonymous };
 }
 
 export function describeFunctionName(fn: Node): Described {
   if (fn.isKind(SyntaxKind.FunctionDeclaration)) {
     const name = fn.getName();
-    return name
-      ? { label: `\`${name}\``, anonymous: false }
-      : { label: 'the default export function', anonymous: false };
+    return name ? named(name) : unnamed('the default export function', false);
   }
   if (fn.isKind(SyntaxKind.MethodDeclaration)) {
     const name = fn.getNameNode();
     if (name.isKind(SyntaxKind.Identifier) || name.isKind(SyntaxKind.StringLiteral)) {
-      return { label: `\`${fn.getName()}\``, anonymous: false };
+      return named(fn.getName());
     }
-    return { label: 'an anonymous function', anonymous: true };
+    return unnamed('an anonymous function', true);
   }
   const parent = fn.getParent();
   if (parent?.isKind(SyntaxKind.VariableDeclaration)) {
-    return { label: `\`${parent.getName()}\``, anonymous: false };
+    return named(parent.getName());
   }
   if (parent?.isKind(SyntaxKind.PropertyAssignment)) {
-    return { label: `\`${parent.getName()}\``, anonymous: false };
+    return named(parent.getName());
   }
-  return { label: 'an anonymous function', anonymous: true };
+  return unnamed('an anonymous function', true);
 }
 
-export function describeTypeLiteralContext(node: Node): Described {
+/** A context label for a member finding — markup included, never a bare name. */
+interface DescribedContext {
+  label: string;
+  anonymous: boolean;
+}
+
+export function describeTypeLiteralContext(node: Node): DescribedContext {
   const parent = node.getParent();
   if (!parent) return { label: `an object type (${location(node)})`, anonymous: true };
 

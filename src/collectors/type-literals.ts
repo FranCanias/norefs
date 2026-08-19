@@ -4,7 +4,6 @@ import { describeTypeLiteralContext } from '../describe';
 import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { mergeNames } from './constraints';
-import { isKeyofTargeted } from './dynamic-usage';
 import {
   callableEscapes,
   castValueStaysLocal,
@@ -49,12 +48,7 @@ function isUnderDynamicallyConsumedType(typeLiteral: TypeLiteralNode, ctx: Colle
   while (node) {
     if (ctx.dynamic.suppressed.has(node)) return true;
     if (node.isKind(SyntaxKind.TypeAliasDeclaration) || node.isKind(SyntaxKind.InterfaceDeclaration)) {
-      let targeted = ctx.keyofTargeted.get(node);
-      if (targeted === undefined) {
-        targeted = isKeyofTargeted(node.getNameNode());
-        ctx.keyofTargeted.set(node, targeted);
-      }
-      if (targeted) return true;
+      if (ctx.isKeyofTargeted(node, node.getNameNode())) return true;
     }
     node = node.getParent();
   }

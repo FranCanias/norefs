@@ -77,6 +77,8 @@ function declaredPatterns(
   return patterns.length > 0 ? { patterns, source: 'package.json workspaces' } : undefined;
 }
 
+const MAX_PACKAGE_DEPTH = 5;
+
 /**
  * Every directory under the root that holds a package.json.
  *
@@ -91,8 +93,6 @@ function declaredPatterns(
  * called `build` or `dist` is still a package, and the declaration is what says
  * which directories count — guessing from names here would drop a real one.
  */
-const MAX_PACKAGE_DEPTH = 5;
-
 function packageDirectories(rootDir: string, fileSystem: ReadOnlyFileSystem): string[] {
   const found: string[] = [];
   const walk = (dir: string, depth: number): void => {
@@ -124,9 +124,10 @@ function packageDirectories(rootDir: string, fileSystem: ReadOnlyFileSystem): st
 function yamlPackages(text: string): string[] {
   const lines = text.split('\n');
   const start = lines.findIndex(line => /^packages\s*:/.test(line));
-  if (start === -1) return [];
+  const header = lines[start];
+  if (header === undefined) return [];
 
-  const inline = lines[start].slice(lines[start].indexOf(':') + 1).trim();
+  const inline = header.slice(header.indexOf(':') + 1).trim();
   if (inline.startsWith('[')) {
     const close = inline.lastIndexOf(']');
     return (close === -1 ? inline.slice(1) : inline.slice(1, close))

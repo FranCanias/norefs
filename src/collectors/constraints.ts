@@ -131,9 +131,11 @@ function collectStructuralMatchConstraints(sourceFile: SourceFile, index: Constr
 function creditConstraints(args: Node[], target: Node, index: ConstraintIndex): void {
   if (args.length === 0) return;
   const parameters = typeParametersOf(target);
-  for (let i = 0; i < Math.min(args.length, parameters.length); i++) {
-    const constraint = parameters[i].getConstraint();
-    if (constraint) creditLiterals(constraint, args[i].getType(), index);
+  for (const [i, parameter] of parameters.entries()) {
+    const arg = args[i];
+    if (!arg) break;
+    const constraint = parameter.getConstraint();
+    if (constraint) creditLiterals(constraint, arg.getType(), index);
   }
 }
 
@@ -339,7 +341,7 @@ function constrainSingle(sub: Type, sup: Type, index: ConstraintIndex, depth: nu
     const subArgs = sub.getTypeArguments();
     const supArgs = sup.getTypeArguments();
     if (subArgs.length === supArgs.length) {
-      for (let i = 0; i < subArgs.length; i++) constrain(subArgs[i], supArgs[i], index, depth + 1);
+      for (const [i, subArg] of subArgs.entries()) constrain(subArg, supArgs[i]!, index, depth + 1);
     }
     return;
   }

@@ -64,7 +64,7 @@ describe('applyVerifiedFixes', () => {
     });
     expect(result.aborted).toBeUndefined();
     expect(result.heldBack.map(h => h.finding.name)).toEqual(['keepMe']);
-    expect(result.heldBack[0].errors).toEqual(['keepMe is gone']);
+    expect(result.heldBack[0]?.errors).toEqual(['keepMe is gone']);
     const text = lib.getFullText();
     expect(text).toContain('function keepMe');
     expect(text).not.toContain('other');
@@ -80,7 +80,7 @@ describe('applyVerifiedFixes', () => {
     const { project, lib } = setup();
     const findings = analyze(project);
     const other = findings.find(f => f.name === 'other');
-    if (other?.node) {
+    if (other && 'node' in other) {
       other.node = new Proxy(other.node, {
         get(target, property) {
           if (property === 'remove') {
@@ -105,8 +105,8 @@ describe('applyVerifiedFixes', () => {
     });
     expect(result.aborted).toBeUndefined();
     expect(result.heldBack.map(h => h.finding.name)).toEqual(['other']);
-    expect(result.heldBack[0].unapplied).toBe(true);
-    expect(result.heldBack[0].errors).toEqual(['Manipulation error: the editor refused this node.']);
+    expect(result.heldBack[0]?.unapplied).toBe(true);
+    expect(result.heldBack[0]?.errors).toEqual(['Manipulation error: the editor refused this node.']);
     // The run finished: the other two fixes are in, and the refused one is not.
     const text = lib.getFullText();
     expect(text).not.toContain('keepMe');

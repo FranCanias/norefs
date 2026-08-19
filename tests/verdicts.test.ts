@@ -1,7 +1,7 @@
 import { Project } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
-import type { Finding } from '../src/types';
+import type { EmptyTypeFinding, Finding } from '../src/types';
 
 function verdictOf(findings: Finding[], name: string): Finding | undefined {
   return findings.find(f => f.kind === 'member' && f.name === name);
@@ -33,7 +33,7 @@ describe('verdicts', () => {
     expect(verdictOf(findings, 'recipes')?.evidence).toContain('JSON.parse');
 
     // RecipeIO loses every member, so the cascade folds into one finding.
-    const emptied = findings.find(f => f.kind === 'empty-type' && f.name === 'RecipeIO');
+    const emptied = findings.find((f): f is EmptyTypeFinding => f.kind === 'empty-type' && f.name === 'RecipeIO');
     expect(emptied?.verdict).toBe('contract');
     expect(emptied?.swallowed).toBe(2);
     expect(verdictOf(findings, 'id')).toBeUndefined();

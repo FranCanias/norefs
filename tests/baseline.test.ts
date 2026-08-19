@@ -6,7 +6,16 @@ import type { Finding, FindingKind } from '../src/types';
 import { tempDirs } from './helpers';
 
 function make(cwd: string, kind: FindingKind, relativePath: string, name: string, line = 1): Finding {
-  return { kind, filePath: path.join(cwd, relativePath), line, column: 1, name, context: '', anonymous: false };
+  // The baseline reads only the key fields, so the node-carrying rest of each variant is irrelevant here.
+  return {
+    kind,
+    filePath: path.join(cwd, relativePath),
+    line,
+    column: 1,
+    name,
+    context: '',
+    anonymous: false,
+  } as Finding;
 }
 
 const dirs = tempDirs('norefs-baseline-');
