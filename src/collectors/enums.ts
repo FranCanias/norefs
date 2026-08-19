@@ -3,18 +3,12 @@ import { SyntaxKind } from 'ts-morph';
 import { findReferencesAsNodes } from '../lookup/references';
 import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
-import { isKeyofTargeted } from './dynamic-usage';
 
 export function collectEnumCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
   const candidates: Candidate[] = [];
   for (const enumDecl of sourceFile.getEnums()) {
     if (ctx.dynamic.suppressed.has(enumDecl)) continue;
-    let dynamic = ctx.keyofTargeted.get(enumDecl);
-    if (dynamic === undefined) {
-      dynamic = isKeyofTargeted(enumDecl.getNameNode()) || isIndexedDynamically(enumDecl);
-      ctx.keyofTargeted.set(enumDecl, dynamic);
-    }
-    if (dynamic) continue;
+    if (ctx.isKeyofTargeted(enumDecl, enumDecl.getNameNode()) || isIndexedDynamically(enumDecl)) continue;
     const probed = ctx.dynamic.probed.get(enumDecl);
     const context = `enum \`${enumDecl.getName()}\``;
     for (const member of enumDecl.getMembers()) {

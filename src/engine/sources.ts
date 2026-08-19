@@ -1,16 +1,16 @@
 import path from 'node:path';
 import { ts } from 'ts-morph';
-import { stripQuerySuffix } from './dependencies';
 import type { PackageConfig } from './project';
 import { optionsForDir } from './project';
 import type { FileScan, Specifier } from './scan';
 import { scanFiles } from './scan';
+import { stripQuerySuffix } from './text';
 
 /** An import as written, and where it resolves to. */
 interface Import {
   specifier: Specifier;
   /** The project file it names, when it names one the project holds. */
-  target?: string;
+  target?: string | undefined;
   /**
    * True when the compiler found a file for it. A resolved specifier that is
    * not a project file still names project code — a declaration file beside
@@ -39,7 +39,8 @@ export class SourceIndex {
   constructor(filePaths: string[], packages: PackageConfig[], fallbackOptions: ts.CompilerOptions) {
     this.filePaths = filePaths;
     const scans = scanFiles(filePaths);
-    for (let i = 0; i < filePaths.length; i++) this.scans.set(filePaths[i], scans[i]);
+    // scanFiles returns one scan per path.
+    for (const [i, filePath] of filePaths.entries()) this.scans.set(filePath, scans[i]!);
 
     const known = new Set(filePaths);
     const caches = new Map<ts.CompilerOptions, ts.ModuleResolutionCache>();
@@ -85,10 +86,11 @@ export class SourceIndex {
     let high = starts.length - 1;
     while (low < high) {
       const middle = (low + high + 1) >> 1;
-      if (starts[middle] <= offset) low = middle;
+      // The search keeps 0 <= low <= middle <= high < starts.length.
+      if (starts[middle]! <= offset) low = middle;
       else high = middle - 1;
     }
-    return { line: low + 1, column: offset - starts[low] + 1 };
+    return { line: low + 1, column: offset - starts[low]! + 1 };
   }
 
   private resolveAll(
@@ -119,8 +121,10 @@ function includes(values: number[], value: number): boolean {
   let high = values.length - 1;
   while (low <= high) {
     const middle = (low + high) >> 1;
-    if (values[middle] === value) return true;
-    if (values[middle] < value) low = middle + 1;
+    // The search keeps 0 <= low <= middle <= high < values.length.
+    const candidate = values[middle]!;
+    if (candidate === value) return true;
+    if (candidate < value) low = middle + 1;
     else high = middle - 1;
   }
   return false;

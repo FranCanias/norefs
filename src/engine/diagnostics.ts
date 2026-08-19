@@ -1,4 +1,5 @@
 import type { Project } from 'ts-morph';
+import { escapeRegExp } from './text';
 
 /**
  * Import specifiers that resolve to nothing. Every unresolved import hides all
@@ -30,8 +31,4 @@ export function findUnresolvedImports(project: Project): string[] {
     if (ambientMatchers.some(rx => rx.test(specifier))) return;
     unresolved.add(specifier);
   }
-}
-
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

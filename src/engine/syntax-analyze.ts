@@ -23,13 +23,13 @@ export function isSyntaxOnly(kinds: FindingKind[] | undefined): boolean {
 }
 
 interface SyntaxOptions {
-  scopeDir?: string;
-  entries?: string[];
-  rootDirs?: string[];
-  packages?: PackageConfig[];
-  ignoreDependencies?: string[];
+  scopeDir?: string | undefined;
+  entries?: string[] | undefined;
+  rootDirs?: string[] | undefined;
+  packages?: PackageConfig[] | undefined;
+  ignoreDependencies?: string[] | undefined;
   /** Treat harness files as absent: the shipping code path alone. */
-  production?: boolean;
+  production?: boolean | undefined;
 }
 
 /**

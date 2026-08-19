@@ -10,7 +10,7 @@ import type {
 } from 'ts-morph';
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
 import { findReferencesAsNodes } from '../lookup/references';
-import type { Boundary, Finding, FindingKind, TypeKeyword } from '../types';
+import type { Boundary, ExportFinding, Finding, TypeKeyword } from '../types';
 import type { DependencyUse } from './dependencies';
 import { analyzeDependencies } from './dependencies';
 import { packageEntryPoints } from './entry-points';
@@ -39,24 +39,24 @@ interface ModuleAnalysis {
 
 export interface ModuleOptions {
   /** Only report findings declared under this absolute path prefix. */
-  scopeDir?: string;
+  scopeDir?: string | undefined;
   /** Absolute paths (files or directories) treated as entry points. */
-  entries?: string[];
+  entries?: string[] | undefined;
   /** Directories that anchor the entry-file and harness-file patterns — one per tsconfig. */
-  rootDirs?: string[];
+  rootDirs?: string[] | undefined;
   /** Per-package compiler options; each package's manifest entries map through its own outDir. */
-  packages?: PackageConfig[];
+  packages?: PackageConfig[] | undefined;
   /** Dependency names or globs the dependency checks never report. */
-  ignoreDependencies?: string[];
+  ignoreDependencies?: string[] | undefined;
   /** Channel boundaries the project declared, for the stranded-handler pairing. */
-  boundaries?: Boundary[];
+  boundaries?: Boundary[] | undefined;
   /**
    * Analyze the shipping code path alone: test, spec, stories, bench, config
    * files and everything under a test directory are treated as absent. They
    * stop keeping code reachable, they stop counting as usage, and they report
    * nothing of their own.
    */
-  production?: boolean;
+  production?: boolean | undefined;
 }
 
 /**
@@ -255,7 +255,13 @@ function collectExportFindings(
       if (externallyUsed) continue;
 
       const typeKind = typeKeyword(decl);
-      const kind: FindingKind = namespaceAlias ? (typeKind ? 'ns-type' : 'ns-export') : typeKind ? 'type' : 'export';
+      const kind: ExportFinding['kind'] = namespaceAlias
+        ? typeKind
+          ? 'ns-type'
+          : 'ns-export'
+        : typeKind
+          ? 'type'
+          : 'export';
       if (testOnly) {
         // Production code in its own file justifies the declaration; tests
         // importing it on top of that make it simply used.
@@ -315,12 +321,12 @@ function collectNamespaceFindings(ns: ModuleDeclaration, findings: Finding[], de
 }
 
 function makeFinding(
-  kind: FindingKind,
+  kind: ExportFinding['kind'],
   nameNode: Node,
   context: string,
   dead: boolean,
   typeKind?: TypeKeyword
-): Finding {
+): ExportFinding {
   const sourceFile = nameNode.getSourceFile();
   const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
   return {

@@ -25,8 +25,8 @@ describe('dependency checks', () => {
       { '/main.ts': "import { x } from 'used-pkg';\nexport const y = x;\n" }
     );
     expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', 'dead-pkg']]);
-    expect(findings[0].filePath).toBe('/package.json');
-    expect(findings[0].line).toBe(4);
+    expect(findings[0]?.filePath).toBe('/package.json');
+    expect(findings[0]?.line).toBe(4);
   });
 
   it('counts deep imports and dynamic imports as usage', () => {
@@ -46,7 +46,7 @@ describe('dependency checks', () => {
       { '/main.ts': "import { x } from 'not-listed';\nexport const y = x;\n" }
     );
     expect(findings.map(f => [f.kind, f.name])).toEqual([['unlisted', 'not-listed']]);
-    expect(findings[0].filePath).toBe('/main.ts');
+    expect(findings[0]?.filePath).toBe('/main.ts');
   });
 
   it('an imported devDependency is used, and satisfies the unlisted check', () => {
@@ -308,7 +308,7 @@ describe('a dependency in the wrong section', () => {
       { runtime: { name: 'runtime' } }
     );
     expect(findings.map(f => [f.kind, f.name, f.context])).toEqual([['misplaced', 'runtime', 'devDependencies']]);
-    expect(findings[0].evidence).toContain('production code imports it');
+    expect(findings[0]?.evidence).toContain('production code imports it');
   });
 
   it("a second target's config is still a config, not production code", () => {
@@ -334,7 +334,7 @@ describe('a dependency in the wrong section', () => {
       { fixtures: { name: 'fixtures' } }
     );
     expect(findings.map(f => [f.kind, f.name, f.context])).toEqual([['misplaced', 'fixtures', 'dependencies']]);
-    expect(findings[0].evidence).toContain('ships for nothing');
+    expect(findings[0]?.evidence).toContain('ships for nothing');
   });
 
   it('names a dependency only a config uses', () => {
@@ -349,7 +349,7 @@ describe('a dependency in the wrong section', () => {
       { 'dom-shim': { name: 'dom-shim' } }
     );
     expect(findings.map(f => [f.kind, f.name, f.context])).toEqual([['misplaced', 'dom-shim', 'dependencies']]);
-    expect(findings[0].evidence).toContain('ships for nothing');
+    expect(findings[0]?.evidence).toContain('ships for nothing');
   });
 
   it('leaves a devDependency that production code reads for types alone', () => {
@@ -453,6 +453,6 @@ describe('a dependency in the wrong section', () => {
       }
     );
     const text = JSON.stringify(manifest, null, 2).split('\n');
-    expect(text[findings[0].line - 1]).toContain('"nothing": "1.0.0"');
+    expect(text[(findings[0]?.line ?? 0) - 1]).toContain('"nothing": "1.0.0"');
   });
 });

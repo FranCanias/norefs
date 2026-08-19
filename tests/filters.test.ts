@@ -3,7 +3,8 @@ import { applyFilters, parseKinds } from '../src/filters';
 import type { Finding, FindingKind } from '../src/types';
 
 function make(kind: FindingKind, filePath = '/proj/src/a.ts'): Finding {
-  return { kind, filePath, line: 1, column: 1, name: 'x', context: '', anonymous: false };
+  // The filters read only kind, path, and anonymity; the node-carrying rest of each variant is irrelevant here.
+  return { kind, filePath, line: 1, column: 1, name: 'x', context: '', anonymous: false } as Finding;
 }
 
 describe('parseKinds', () => {
@@ -20,7 +21,7 @@ describe('parseKinds', () => {
 describe('applyFilters', () => {
   it('keeps only the requested kinds', () => {
     const findings = [make('file'), make('export'), make('member')];
-    const kept = applyFilters(findings, { anonymous: true, only: ['file', 'member'] });
+    const kept = applyFilters(findings, { anonymous: true, only: ['file', 'member'], cwd: '/proj' });
     expect(kept.map(f => f.kind)).toEqual(['file', 'member']);
   });
 

@@ -21,7 +21,7 @@ describe('the scanner reads every form of import', () => {
   });
 
   it('marks which clauses the compiler erases', () => {
-    const erased = (text: string): boolean => scanText(text).specifiers[0].typeOnly;
+    const erased = (text: string): boolean | undefined => scanText(text).specifiers[0]?.typeOnly;
 
     expect(erased("import type { A } from 'x';")).toBe(true);
     expect(erased("import type A from 'x';")).toBe(true);
@@ -43,7 +43,7 @@ describe('the scanner reads every form of import', () => {
   });
 
   it('does not mistake a binding called `type` for the keyword', () => {
-    const erased = (text: string): boolean => scanText(text).specifiers[0].typeOnly;
+    const erased = (text: string): boolean | undefined => scanText(text).specifiers[0]?.typeOnly;
 
     // A default import named `type`, and the same name in braces.
     expect(erased("import type from 'x';")).toBe(false);
@@ -113,7 +113,8 @@ describe('the scanner reports positions TypeScript agrees with', () => {
   it('offsets in UTF-16 code units, not bytes', () => {
     const text = "const emoji = '🎉';\nimport 'lib';";
     const scan = scanText(text);
-    expect(text.slice(scan.specifiers[0].start, scan.specifiers[0].end)).toBe("'lib'");
+    const spec = scan.specifiers[0];
+    expect(spec && text.slice(spec.start, spec.end)).toBe("'lib'");
   });
 
   it('a line table matching a split on newlines', () => {

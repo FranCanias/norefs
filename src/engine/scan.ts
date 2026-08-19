@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { hasBlockMark, hasFileMark, hasLineMark } from './marks';
+import { isSpace, isWordPart } from './text';
 
 /** A module specifier as it stands in the source. */
 export interface Specifier {
@@ -47,16 +48,8 @@ function isIdentStart(c: string): boolean {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c === '_' || c === '$' || c > '\x7f';
 }
 
-function isIdentPart(c: string): boolean {
-  return isIdentStart(c) || (c >= '0' && c <= '9');
-}
-
-function isLineBreak(c: string): boolean {
+function isLineBreak(c: string | undefined): boolean {
   return c === '\n' || c === '\r';
-}
-
-function isSpace(c: string): boolean {
-  return c === ' ' || c === '\t' || c === '\v' || c === '\f' || c === '\r' || c === '\n';
 }
 
 function word(text: string, token: Token): string {
@@ -89,8 +82,8 @@ const OPERATOR_WORDS = new Set([
  * not cross a line, so an unterminated one is re-read as division.
  */
 function regexAllowed(text: string, tokens: Token[]): boolean {
-  if (tokens.length === 0) return true;
-  const previous = tokens[tokens.length - 1];
+  const previous = tokens.at(-1);
+  if (!previous) return true;
   if (previous.kind === 'str' || previous.kind === 'number') return false;
   if (previous.kind === 'punct') return previous.punct !== ')' && previous.punct !== ']';
   if (previous.kind === 'ident') return OPERATOR_WORDS.has(word(text, previous));
@@ -127,7 +120,7 @@ function tokenize(text: string): { tokens: Token[]; firstTokenStart: number } {
 
   let position = 0;
   while (position < length) {
-    const c = text[position];
+    const c = text[position]!;
 
     if (isSpace(c)) {
       position++;
@@ -168,7 +161,7 @@ function tokenize(text: string): { tokens: Token[]; firstTokenStart: number } {
         scan++;
       }
       if (closed) {
-        while (scan < length && isIdentPart(text[scan])) scan++;
+        while (scan < length && isWordPart(text[scan])) scan++;
         tokens.push({ kind: 'other', punct: '', start: position, end: scan + 1, innerStart: 0, innerEnd: 0 });
         position = scan + 1;
         continue;
@@ -221,7 +214,7 @@ function tokenize(text: string): { tokens: Token[]; firstTokenStart: number } {
 
     if (isIdentStart(c)) {
       let scan = position;
-      while (scan < length && isIdentPart(text[scan])) scan++;
+      while (scan < length && isWordPart(text[scan])) scan++;
       tokens.push({ kind: 'ident', punct: '', start: position, end: scan, innerStart: 0, innerEnd: 0 });
       position = scan;
       continue;
@@ -229,7 +222,7 @@ function tokenize(text: string): { tokens: Token[]; firstTokenStart: number } {
 
     if (c >= '0' && c <= '9') {
       let scan = position;
-      while (scan < length && (isIdentPart(text[scan]) || text[scan] === '.')) scan++;
+      while (scan < length && (isWordPart(text[scan]) || text[scan] === '.')) scan++;
       tokens.push({ kind: 'number', punct: '', start: position, end: scan, innerStart: 0, innerEnd: 0 });
       position = scan;
       continue;
@@ -339,9 +332,11 @@ function scanClause(text: string, tokens: Token[], index: number, out: Specifier
 
   for (let j = index + 1; j < tokens.length; j++) {
     const token = tokens[j];
+    if (!token) break;
     if (token.kind === 'str') {
       // `import 'x'` names a module; a string anywhere else needs `from`.
-      if (j === index + 1 || (tokens[j - 1].kind === 'ident' && word(text, tokens[j - 1]) === 'from')) {
+      const before = tokens[j - 1];
+      if (j === index + 1 || (before?.kind === 'ident' && word(text, before) === 'from')) {
         endBinding();
         // `import 'x'` runs the module for its side effects: nothing is erased.
         const typeOnly = j > index + 1 && (typeKeyword || (bindings > 0 && !valueBinding));
@@ -385,11 +380,13 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
   const out: Specifier[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
-    if (token.kind !== 'ident') continue;
+    if (token?.kind !== 'ident') continue;
 
     const name = word(text, token);
-    if (name === 'import' && i + 2 < tokens.length && tokens[i + 1].kind === 'punct' && tokens[i + 1].punct === '(') {
-      if (tokens[i + 2].kind === 'str') pushSpecifier(text, tokens[i + 2], false, out);
+    const next = tokens[i + 1];
+    const argument = tokens[i + 2];
+    if (name === 'import' && next?.kind === 'punct' && next.punct === '(' && argument) {
+      if (argument.kind === 'str') pushSpecifier(text, argument, false, out);
       i += 2;
       continue;
     }
@@ -397,14 +394,8 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
       i = scanClause(text, tokens, i, out);
       continue;
     }
-    if (
-      name === 'require' &&
-      i + 2 < tokens.length &&
-      tokens[i + 1].kind === 'punct' &&
-      tokens[i + 1].punct === '(' &&
-      tokens[i + 2].kind === 'str'
-    ) {
-      pushSpecifier(text, tokens[i + 2], false, out);
+    if (name === 'require' && next?.kind === 'punct' && next.punct === '(' && argument?.kind === 'str') {
+      pushSpecifier(text, argument, false, out);
       i += 2;
     }
   }
@@ -439,9 +430,9 @@ export function scanText(text: string): FileScan {
   // exactly as it does in a line-by-line reading.
   const suppressedLines: number[] = [];
   const commentLines: number[] = [];
-  for (let line = 0; line < lineStarts.length; line++) {
-    const start = lineStarts[line];
-    const end = Math.max(start, line + 1 < lineStarts.length ? lineStarts[line + 1] - 1 : text.length);
+  for (const [line, start] of lineStarts.entries()) {
+    const next = lineStarts[line + 1];
+    const end = Math.max(start, next === undefined ? text.length : next - 1);
     const content = text.slice(start, end);
     if (isSuppressedLine(content)) suppressedLines.push(line + 1);
     if (opensWithComment(content)) commentLines.push(line + 1);

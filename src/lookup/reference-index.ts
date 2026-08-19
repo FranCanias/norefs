@@ -764,8 +764,9 @@ class ReferenceIndex {
     const index = call.arguments.indexOf(argument as ts.Expression);
     if (index < 0) return undefined;
     // A spread at or before the argument shifts every position after it.
-    for (let i = 0; i <= index; i++) {
-      if (ts.isSpreadElement(call.arguments[i])) return undefined;
+    for (const [i, arg] of call.arguments.entries()) {
+      if (i > index) break;
+      if (ts.isSpreadElement(arg)) return undefined;
     }
     const calleeType = safely(() => this.checker.getTypeAtLocation(call.expression));
     if (!calleeType || calleeType.isUnion()) return undefined;
@@ -904,7 +905,7 @@ class ReferenceIndex {
     let types = anchor;
     if (generic && !types.every(isStableUnderInstantiation)) return undefined;
     for (let i = steps.length - 1; i >= 0; i--) {
-      const step = steps[i];
+      const step = steps[i]!;
       const next: ts.Type[] = [];
       for (const type of types) {
         for (const part of partsOf(type)) {
@@ -1035,7 +1036,7 @@ interface Anchor {
 /** A write no member could be charged with; spreads keep the copied symbol. */
 interface UnattributedWrite {
   site: ts.Node;
-  source?: ts.Symbol;
+  source?: ts.Symbol | undefined;
   /** The contextual types were known and concrete, and none declares the name. */
   knownDifferent: boolean;
 }
@@ -1054,7 +1055,7 @@ interface WriteSites {
 interface Owner {
   symbols: Set<ts.Symbol>;
   /** The owner's type, where there is one to have. Undefined turns the shape rule off. */
-  type?: ts.Type;
+  type?: ts.Type | undefined;
 }
 
 /** Where a value ends up. */

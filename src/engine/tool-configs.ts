@@ -144,7 +144,8 @@ function toolConfigs(packageDir: string, fileSystem: ReadOnlyFileSystem): ToolCo
     // HTML has no token stream to read; its strings are the `<script src>`
     // values and nothing else, and it imports nothing of its own.
     const { strings, specifiers } = html
-      ? { strings: [...text.matchAll(SCRIPT_SRC)].map(match => match[1]), specifiers: [] as string[] }
+      ? // SCRIPT_SRC's one group is not optional: every match captures it.
+        { strings: [...text.matchAll(SCRIPT_SRC)].map(match => match[1]!), specifiers: [] as string[] }
       : configLiterals(text);
     configs.push({
       filePath,

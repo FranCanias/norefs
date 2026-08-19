@@ -1,9 +1,10 @@
 import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
-import type { Finding } from '../types';
+import type { Finding, Verdict } from '../types';
 import { isHarnessFile } from './reachability';
 import { commandTokens, scriptsOf } from './scripts';
+import { escapeRegExp, stripQuerySuffix } from './text';
 
 const BUILTINS = new Set(builtinModules);
 
@@ -69,7 +70,7 @@ export function analyzeDependencies(
   uses: DependencyUse[],
   rootDirs: string[],
   options: {
-    scopeDir?: string;
+    scopeDir?: string | undefined;
     /** Dependency names or globs never reported. */
     ignore: string[];
     /** tsconfig `paths` patterns: an alias into project code, never a package. */
@@ -79,7 +80,7 @@ export function analyzeDependencies(
      * imports is not usage — and devDependencies, which exist to build and
      * test, are outside the question this run is asking.
      */
-    production?: boolean;
+    production?: boolean | undefined;
   },
   context: DependencyContext
 ): Finding[] {
@@ -150,7 +151,7 @@ export function analyzeDependencies(
         // @types packages are consumed by the compiler, which no import shows.
         if (name.startsWith('@types/') || isIgnored(name, ignore)) continue;
         const at = manifestPosition(manifest.text, section, name);
-        const place = (finding: Omit<Finding, 'filePath' | 'line' | 'column' | 'name' | 'context' | 'anonymous'>) =>
+        const place = (finding: { kind: 'dependency' | 'misplaced'; verdict?: Verdict; evidence: string }) =>
           findings.push({ ...finding, filePath: manifest.filePath, ...at, name, context: section, anonymous: false });
 
         const imported = manifest.used.has(name);
@@ -265,7 +266,7 @@ function providedByEnvironment(dir: string, name: string, context: DependencyCon
   const typesPath = path.resolve(found.dir, types);
   const text = context.fileExists(typesPath) ? context.readFile(typesPath) : undefined;
   if (text === undefined) return false;
-  const quoted = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const quoted = escapeRegExp(name);
   return new RegExp(`declare\\s+module\\s+['"]${quoted}['"]`).test(text);
 }
 
@@ -444,15 +445,6 @@ function owningManifests(filePath: string, manifests: Manifest[]): Manifest[] {
   return owners.length > 0 ? owners : manifests;
 }
 
-/**
- * Bundler-only query suffixes like Vite's `?react`, `?raw`, `?worker` are not
- * part of the module name and break resolution when left on.
- */
-export function stripQuerySuffix(specifier: string): string {
-  const query = specifier.indexOf('?');
-  return query === -1 ? specifier : specifier.slice(0, query);
-}
-
 /** True when the specifier matches a tsconfig `paths` pattern: an alias into project code, never a package. */
 function matchesAlias(specifier: string, patterns: string[]): boolean {
   return patterns.some(pattern => {
@@ -472,7 +464,8 @@ function packageName(specifier: string): string | undefined {
   const parts = specifier.split('/');
   if (specifier.startsWith('@')) {
     // A scoped name needs a real scope and a real name; '@/x' is an alias, not a package.
-    if (parts[0].length < 2 || !parts[1]) return undefined;
+    const [scope = '', second] = parts;
+    if (scope.length < 2 || !second) return undefined;
     return parts.slice(0, 2).join('/');
   }
   const name = parts[0];
@@ -499,6 +492,7 @@ function manifestPosition(text: string, section: string, name: string): { line: 
   const lines = text.split('\n');
   const from = lines.findIndex(line => line.includes(`"${section}"`));
   const index = lines.findIndex((line, at) => at >= Math.max(from, 0) && line.includes(`"${name}"`));
-  if (index === -1) return { line: 1, column: 1 };
-  return { line: index + 1, column: lines[index].indexOf(`"${name}"`) + 1 };
+  const found = lines[index];
+  if (found === undefined) return { line: 1, column: 1 };
+  return { line: index + 1, column: found.indexOf(`"${name}"`) + 1 };
 }

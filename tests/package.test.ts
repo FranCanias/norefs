@@ -15,6 +15,14 @@ const root = path.resolve(__dirname, '..');
  * which `npm pack` leaves alone.
  */
 function published(): Set<string> {
+  // Asked of npm once per suite run: the answer costs ~0.9 s and four tests read it.
+  packed ??= packedFiles();
+  return packed;
+}
+
+let packed: Set<string> | undefined;
+
+function packedFiles(): Set<string> {
   // On Windows npm is a .cmd, which execFile cannot start by its bare name.
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   const output = execFileSync(npm, ['pack', '--dry-run', '--json'], { cwd: root, encoding: 'utf8' });
@@ -31,8 +39,13 @@ function published(): Set<string> {
 
 /** Every relative link target in a markdown file. Anchors and URLs are not files. */
 function linkedFiles(markdown: string): string[] {
-  const targets = [...markdown.matchAll(/\]\(([^)\s]+)\)/g)].map(match => match[1]);
-  const files = targets.filter(target => !/^(https?:|#|mailto:)/.test(target)).map(target => target.split('#')[0]);
+  const targets = [...markdown.matchAll(/\]\(([^)\s]+)\)/g)].flatMap(match => match[1] ?? []);
+  const files = targets
+    .filter(target => !/^(https?:|#|mailto:)/.test(target))
+    .map(target => {
+      const [file = ''] = target.split('#');
+      return file;
+    });
   return [...new Set(files)];
 }
 
@@ -64,7 +77,7 @@ describe('the published package', () => {
     const drop = new Set(['--no-verify', '--no-anon', '--no-explain', '--no-production']);
     const flags = (text: string): string[] => [...flagsIn(text)].filter(flag => !drop.has(flag)).sort();
 
-    const help = fs.readFileSync(path.join(root, 'src/index.ts'), 'utf8');
+    const help = fs.readFileSync(path.join(root, 'src/messages.ts'), 'utf8');
     const helpText = help.slice(help.indexOf('Options:'), help.indexOf('Configuration:'));
     const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
     const readmeTable = readme.slice(readme.indexOf('| Option |'), readme.indexOf('`norefs` exits with code'));
@@ -89,12 +102,36 @@ describe('the published package', () => {
     // The build once emitted 48 declaration files, 13% of the tarball, that
     // nothing could import: no `main`, no `exports`, no `types` to reach them
     // through. Either the manifest publishes an API or the build stops
-    // pretending there is one. This pins which way that was decided.
+    // pretending there is one. This pins which way that was decided: the
+    // `exports` map names package.json alone, so `require('norefs')` fails
+    // with the manifest's own "no exports" error instead of an opaque one,
+    // and deep imports into dist/ are refused outright.
     const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
     expect(manifest.bin).toEqual({ norefs: 'dist/index.js' });
-    for (const field of ['main', 'exports', 'types', 'typings', 'module']) {
+    expect(manifest.exports).toEqual({ './package.json': './package.json' });
+    for (const field of ['main', 'types', 'typings', 'module']) {
       expect(manifest[field], `package.json declares ${field}, so it promises an API`).toBeUndefined();
     }
     expect([...published()].filter(file => file.endsWith('.d.ts'))).toEqual([]);
+  });
+
+  it('ships dist, docs, and the top-level pages — nothing else', () => {
+    // `files` names directories, so one loose entry ("src", a stray fixture)
+    // would ship whole trees without any check noticing until publish. This
+    // pins the shape of the tarball, not just the presence of what docs link.
+    const allowed = [
+      /^package\.json$/,
+      /^README\.md$/,
+      /^LICENSE$/,
+      /^CHANGELOG\.md$/,
+      /^dist\/.+\.js(\.map)?$/,
+      /^docs\/[^/]+\.md$/,
+    ];
+    for (const file of published()) {
+      expect(
+        allowed.some(pattern => pattern.test(file)),
+        `${file} is not a file the tarball means to ship`
+      ).toBe(true);
+    }
   });
 });

@@ -61,7 +61,7 @@ describe('editing package.json as text', () => {
     expect(after.dependencies).toEqual({ alpha: '^1.0.0', zulu: '3.2.1' });
     expect(after.devDependencies).toEqual({ biome: '2.0.0', 'only-in-tests': '1.0.0', runtime: '1.0.0' });
     // Alphabetical, because the section already was.
-    expect(Object.keys(after.devDependencies)).toEqual(['biome', 'only-in-tests', 'runtime']);
+    expect(Object.keys(after.devDependencies ?? {})).toEqual(['biome', 'only-in-tests', 'runtime']);
     expect(text).toContain('    "only-in-tests": "1.0.0",');
   });
 
@@ -69,7 +69,7 @@ describe('editing package.json as text', () => {
     const { text } = editManifest(MANIFEST, [{ name: 'runtime', from: 'devDependencies', to: 'dependencies' }]);
     expect(() => parsed(text)).not.toThrow();
     const after = parsed(text);
-    expect(after.dependencies.runtime).toBe('1.0.0');
+    expect(after.dependencies?.runtime).toBe('1.0.0');
     expect(after.devDependencies).toEqual({ biome: '2.0.0' });
   });
 
@@ -88,7 +88,7 @@ describe('editing package.json as text', () => {
     ].join('\n');
     const { text } = editManifest(unsorted, [{ name: 'moving', from: 'devDependencies', to: 'dependencies' }]);
     expect(() => parsed(text)).not.toThrow();
-    expect(Object.keys(parsed(text).dependencies)).toEqual(['zulu', 'alpha', 'moving']);
+    expect(Object.keys(parsed(text).dependencies ?? {})).toEqual(['zulu', 'alpha', 'moving']);
   });
 
   it('refuses a move with no section to move into, and says so', () => {
@@ -125,7 +125,7 @@ describe('editing package.json as text', () => {
     const compact = ['{', '  "dependencies": { "alpha": "1.0.0", "beta": "2.0.0" }', '}', ''].join('\n');
     const { text, refused } = editManifest(compact, [{ name: 'beta', from: 'dependencies' }]);
     expect(text).toBe(compact);
-    expect(refused[0].reason).toContain('shares a line with others');
+    expect(refused[0]?.reason).toContain('shares a line with others');
   });
 
   it('refuses an entry that is not where it was said to be', () => {

@@ -4,7 +4,18 @@ import type { Finding, FindingKind } from '../src/types';
 
 function make(kind: FindingKind, name: string, context = '', dead = false): Finding {
   const verdict = kind === 'unlisted' ? undefined : kind === 'member' || dead ? 'dead' : 'over-exported';
-  return { kind, filePath: '/proj/src/a.ts', line: 4, column: 3, name, context, anonymous: false, dead, verdict };
+  // The reporters read no nodes, so the node-carrying rest of each variant is irrelevant here.
+  return {
+    kind,
+    filePath: '/proj/src/a.ts',
+    line: 4,
+    column: 3,
+    name,
+    context,
+    anonymous: false,
+    dead,
+    verdict,
+  } as Finding;
 }
 
 describe('formatGitHub', () => {

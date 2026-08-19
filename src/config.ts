@@ -33,19 +33,26 @@ interface Config {
 
 export const CONFIG_FILE = 'norefs.config.json';
 
-const KNOWN_KEYS = [
-  'project',
-  'entry',
-  'ignore',
-  'only',
-  'ignoreDependencies',
-  'boundaries',
-  'scope',
-  'reporter',
-  'anon',
-  'explain',
-  'production',
-];
+/**
+ * Every key at the default `norefs init` writes. The unknown-key check and the
+ * init file both read from this one object, so the interface, the check, and
+ * the defaults cannot drift apart.
+ */
+const INIT_DEFAULTS: Required<Config> = {
+  project: ['tsconfig.json'],
+  entry: [],
+  ignore: [],
+  only: [],
+  ignoreDependencies: [],
+  boundaries: [],
+  scope: '',
+  reporter: 'text',
+  anon: false,
+  explain: false,
+  production: false,
+};
+
+const KNOWN_KEYS = Object.keys(INIT_DEFAULTS);
 
 /** Read norefs.config.json from the directory, if present. Throws when the file is invalid. */
 export function loadConfig(dir: string): Config {
@@ -79,15 +86,16 @@ export function loadConfig(dir: string): Config {
       throw new Error(`${CONFIG_FILE} has an unknown key "${key}" (expected ${KNOWN_KEYS.join(', ')})`);
     }
   }
+  const reporter = readString(data, 'reporter');
   return {
     project: readStringOrStrings(data, 'project'),
     entry: readStrings(data, 'entry'),
     ignore: readStrings(data, 'ignore'),
-    only: data.only === undefined ? undefined : readStrings(data, 'only'),
+    ...(data.only === undefined ? {} : { only: readStrings(data, 'only') }),
     ignoreDependencies: readStrings(data, 'ignoreDependencies'),
     boundaries: readBoundaries(data),
     scope: readString(data, 'scope') ?? '',
-    reporter: readString(data, 'reporter'),
+    ...(reporter === undefined ? {} : { reporter }),
     anon: readBoolean(data, 'anon'),
     explain: readBoolean(data, 'explain'),
     production: readBoolean(data, 'production'),
@@ -104,20 +112,7 @@ export function initConfig(dir: string): string {
   const filePath = path.join(dir, CONFIG_FILE);
   if (fs.existsSync(filePath)) throw new Error(`${CONFIG_FILE} already exists — delete it first to start over`);
 
-  const defaults: Config = {
-    project: ['tsconfig.json'],
-    entry: [],
-    ignore: [],
-    only: [],
-    ignoreDependencies: [],
-    boundaries: [],
-    scope: '',
-    reporter: 'text',
-    anon: false,
-    explain: false,
-    production: false,
-  };
-  fs.writeFileSync(filePath, `${JSON.stringify(defaults, null, 2)}\n`);
+  fs.writeFileSync(filePath, `${JSON.stringify(INIT_DEFAULTS, null, 2)}\n`);
   return CONFIG_FILE;
 }
 

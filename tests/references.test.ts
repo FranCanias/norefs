@@ -49,8 +49,8 @@ describe('findReferencesAsNodes', () => {
     });
     const binding = project
       .getSourceFileOrThrow('/main.ts')
-      .getImportDeclarations()[0]
-      .getNamedImports()[0]
+      .getImportDeclarations()[0]!
+      .getNamedImports()[0]!
       .getNameNode();
 
     expect(locations(findReferencesAsNodes(binding))).toEqual(['lib.ts:1', 'main.ts:2']);
@@ -64,7 +64,7 @@ describe('findReferencesAsNodes', () => {
 
     const refs = findReferencesAsNodes(kind.getNameNode());
     expect(locations(refs)).toEqual(['main.ts:4', 'main.ts:5']);
-    expect(refs[1].getKind()).toBe(SyntaxKind.StringLiteral);
+    expect(refs[1]?.getKind()).toBe(SyntaxKind.StringLiteral);
   });
 
   it('searches a type whose name a deeply generic alias would be costly to render', () => {

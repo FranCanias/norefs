@@ -4,7 +4,7 @@ import { collectCandidates } from '../collectors';
 import { describeFunctionName } from '../describe';
 import { buildReferenceIndex } from '../lookup/reference-index';
 import { findReferencesAsNodes } from '../lookup/references';
-import type { Finding, FindingKind } from '../types';
+import type { EmptyTypeFinding, Finding, FindingKind, MemberFinding } from '../types';
 import { memberUsage } from './check';
 import type { ModuleOptions } from './modules';
 import { analyzeModules } from './modules';
@@ -19,7 +19,9 @@ interface AnalyzeOptions extends ModuleOptions {
    * attribute writes — so a run that asks for none of it skips that work
    * rather than doing it and filtering the findings away.
    */
-  kinds?: FindingKind[];
+  kinds?: FindingKind[] | undefined;
+  /** The directory evidence paths are made relative to. Defaults to the process cwd, read once here. */
+  cwd?: string | undefined;
 }
 
 /** True when the requested kinds need the member analysis. */
@@ -34,6 +36,7 @@ function needsMembers(kinds: FindingKind[] | undefined): boolean {
 }
 
 export function analyze(project: Project, options: AnalyzeOptions = {}): Finding[] {
+  const cwd = options.cwd ?? process.cwd();
   const members = needsMembers(options.kinds);
   // The index holds nodes of the project as it stands. A watch run and a run
   // after --fix both see an edited project, so every analysis starts fresh.
@@ -78,11 +81,10 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     });
   }
 
-  const typeFold = emptyOwnerFindings(reportedMembers);
-  const sliceFold = emptyReturnedObjectFindings(reportedMembers);
-  findings.push(...typeFold.emptyFindings, ...sliceFold.emptyFindings);
+  const folds = [...emptyOwnerFindings(reportedMembers), ...emptyReturnedObjectFindings(reportedMembers)];
+  findings.push(...folds);
   const deadFilePaths = new Set<string>([...modules.deadFiles].map(sf => sf.getFilePath()));
-  assignVerdicts(project, findings, process.cwd(), filePath => deadFilePaths.has(filePath));
+  assignVerdicts(project, findings, cwd, filePath => deadFilePaths.has(filePath));
   // A far side earns a finding on the same terms as everything else: nothing
   // already reported covers it, it sits inside the scope this run was asked
   // for, and nobody suppressed it.
@@ -95,28 +97,20 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     if (isFileSuppressed(sourceFile)) return false;
     return !isNodeSuppressed(far);
   };
-  findings.push(
-    ...annotateStrandedChannels(project, findings, process.cwd(), { reportFarSide, boundaries: options.boundaries })
-  );
+  findings.push(...annotateStrandedChannels(project, findings, cwd, { reportFarSide, boundaries: options.boundaries }));
   // One logical fact, one finding: a type losing every member is the story,
   // not seven bullets. The members fold in after they lent it their verdict.
-  const swallowed = new Set([...typeFold.swallowed, ...sliceFold.swallowed]);
   // A strand note on a member about to fold must survive on the finding that
   // replaces it, or the far side vanishes exactly when the whole wrapper dies.
-  for (const empty of findings) {
-    if (empty.kind !== 'empty-type' || empty.strands) continue;
-    const donor = findings.find(
-      f =>
-        f.kind === 'member' &&
-        f.node &&
-        swallowed.has(f.node) &&
-        f.strands &&
-        f.filePath === empty.filePath &&
-        f.context.includes(`\`${empty.name}\``)
-    );
-    if (donor) empty.strands = donor.strands;
+  const memberFindings = findings.filter((f): f is MemberFinding => f.kind === 'member');
+  for (const empty of folds) {
+    if (empty.strands !== undefined) continue;
+    const owned = new Set(empty.members);
+    const donor = memberFindings.find(f => owned.has(f.node) && f.strands !== undefined);
+    if (donor?.strands !== undefined) empty.strands = donor.strands;
   }
-  const folded = findings.filter(f => !(f.kind === 'member' && f.node && swallowed.has(f.node)));
+  const swallowed = new Set(folds.flatMap(empty => empty.members));
+  const folded = findings.filter(f => !(f.kind === 'member' && swallowed.has(f.node)));
   folded.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || a.column - b.column);
   return folded;
 }
@@ -126,17 +120,16 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
  * every property. Nobody reads what it computes, so the computation itself is
  * the finding, not the properties one by one.
  */
-function emptyReturnedObjectFindings(reportedMembers: Set<Node>): { emptyFindings: Finding[]; swallowed: Set<Node> } {
-  const literals = new Set<Node>();
+function emptyReturnedObjectFindings(reportedMembers: Set<Node>): EmptyTypeFinding[] {
+  const literals = new Set<ObjectLiteralExpression>();
   for (const member of reportedMembers) {
     const parent = member.getParent();
     if (parent?.isKind(SyntaxKind.ObjectLiteralExpression)) literals.add(parent);
   }
 
-  const emptyFindings: Finding[] = [];
-  const swallowed = new Set<Node>();
+  const folds: EmptyTypeFinding[] = [];
   for (const literal of literals) {
-    const properties = (literal as ObjectLiteralExpression).getProperties();
+    const properties = literal.getProperties();
     if (properties.length === 0 || !properties.every(property => reportedMembers.has(property))) continue;
     const fn = literal
       .getAncestors()
@@ -151,19 +144,19 @@ function emptyReturnedObjectFindings(reportedMembers: Set<Node>): { emptyFinding
     if (described.anonymous) continue;
     const sourceFile = literal.getSourceFile();
     const { line, column } = sourceFile.getLineAndColumnAtPos(literal.getStart());
-    for (const property of properties) swallowed.add(property);
-    emptyFindings.push({
+    folds.push({
       kind: 'empty-type',
       filePath: sourceFile.getFilePath(),
       line,
       column,
-      name: described.label.replace(/`/g, ''),
+      name: described.name,
       context: 'returned object',
       anonymous: false,
       swallowed: properties.length,
+      members: [...properties],
     });
   }
-  return { emptyFindings, swallowed };
+  return folds;
 }
 
 /**
@@ -173,15 +166,14 @@ function emptyReturnedObjectFindings(reportedMembers: Set<Node>): { emptyFinding
  * consumers should go too. The member findings it swallows are returned so
  * the caller can fold them away.
  */
-function emptyOwnerFindings(reportedMembers: Set<Node>): { emptyFindings: Finding[]; swallowed: Set<Node> } {
+function emptyOwnerFindings(reportedMembers: Set<Node>): EmptyTypeFinding[] {
   const owners = new Set<InterfaceDeclaration | TypeAliasDeclaration>();
   for (const member of reportedMembers) {
     const owner = namedOwner(member);
     if (owner) owners.add(owner);
   }
 
-  const emptyFindings: Finding[] = [];
-  const swallowed = new Set<Node>();
+  const folds: EmptyTypeFinding[] = [];
   for (const owner of owners) {
     const members = ownerMembers(owner);
     if (members.length === 0 || !members.every(member => reportedMembers.has(member))) continue;
@@ -192,8 +184,7 @@ function emptyOwnerFindings(reportedMembers: Set<Node>): { emptyFindings: Findin
     if (!findReferencesAsNodes(nameNode).some(ref => ref !== nameNode)) continue;
     const sourceFile = owner.getSourceFile();
     const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
-    for (const member of members) swallowed.add(member);
-    emptyFindings.push({
+    folds.push({
       kind: 'empty-type',
       filePath: sourceFile.getFilePath(),
       line,
@@ -202,9 +193,10 @@ function emptyOwnerFindings(reportedMembers: Set<Node>): { emptyFindings: Findin
       context: owner.isKind(SyntaxKind.InterfaceDeclaration) ? 'interface' : 'type',
       anonymous: false,
       swallowed: members.length,
+      members,
     });
   }
-  return { emptyFindings, swallowed };
+  return folds;
 }
 
 function namedOwner(member: Node): InterfaceDeclaration | TypeAliasDeclaration | undefined {

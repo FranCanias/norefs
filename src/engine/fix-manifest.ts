@@ -6,7 +6,7 @@ interface ManifestEdit {
   /** The section holding it now. */
   from: string;
   /** The section it belongs in, or nothing when it belongs nowhere. */
-  to?: string;
+  to?: string | undefined;
 }
 
 /** An edit that could not be made, with the reason a reader needs. */
@@ -48,7 +48,8 @@ export function editManifest(text: string, edits: ManifestEdit[]): { text: strin
       refused.push({ name: edit.name, reason: `there is no "${edit.to}" section to move it into` });
       continue;
     }
-    const entry = lines[at].trim().replace(/,$/, '');
+    // entryLine only returns an index whose line exists.
+    const entry = lines[at]!.trim().replace(/,$/, '');
     lines = removeEntry(lines, at);
     if (edit.to !== undefined) lines = insertEntry(lines, edit.to, edit.name, entry);
   }
@@ -82,10 +83,11 @@ export function manifestEdits(findings: Finding[]): Map<string, ManifestEdit[]> 
  */
 function sectionRange(lines: string[], section: string): { first: number; last: number; inline: boolean } | undefined {
   const open = lines.findIndex(line => line.includes(`"${section}"`) && line.includes('{'));
-  if (open === -1) return undefined;
-  if (lines[open].includes('}')) return { first: open, last: open, inline: true };
+  const opening = lines[open];
+  if (opening === undefined) return undefined;
+  if (opening.includes('}')) return { first: open, last: open, inline: true };
   for (let at = open + 1; at < lines.length; at++) {
-    if (lines[at].includes('}')) return { first: open + 1, last: at, inline: false };
+    if (lines[at]?.includes('}')) return { first: open + 1, last: at, inline: false };
   }
   return undefined;
 }
@@ -110,7 +112,7 @@ function entryLine(lines: string[], section: string, name: string): number | und
   const range = sectionRange(lines, section);
   if (!range) return undefined;
   for (let at = range.first; at < range.last; at++) {
-    if (lines[at].trimStart().startsWith(`"${name}":`)) return at;
+    if (lines[at]?.trimStart().startsWith(`"${name}":`)) return at;
   }
   return undefined;
 }
@@ -147,7 +149,8 @@ function insertEntry(lines: string[], section: string, name: string, entry: stri
 
   if (range.inline) {
     // `"deps": {}` opens back up around the entry it is receiving.
-    const line = lines[range.first];
+    // sectionRange only returns indices whose lines exist.
+    const line = lines[range.first]!;
     const indent = indentOf(line);
     const kept = [...lines];
     kept.splice(
@@ -161,7 +164,10 @@ function insertEntry(lines: string[], section: string, name: string, entry: stri
   }
 
   const names = lines.slice(range.first, range.last).map(line => line.trim().match(/^"([^"]+)":/)?.[1] ?? '');
-  const sorted = names.every((value, at) => at === 0 || names[at - 1] <= value);
+  const sorted = names.every((value, at) => {
+    const previous = names[at - 1];
+    return previous === undefined || previous <= value;
+  });
   const before = sorted ? names.findIndex(value => value > name) : -1;
   const target = before === -1 ? range.last : range.first + before;
 
@@ -169,7 +175,7 @@ function insertEntry(lines: string[], section: string, name: string, entry: stri
   // none to copy, and `lines[range.first]` is then its own closing brace — so
   // the indent comes from the section instead, one level in.
   const indent =
-    range.first < range.last ? indentOf(lines[range.first]) : oneLevelIn(indentOf(lines[range.last] ?? ''));
+    range.first < range.last ? indentOf(lines[range.first] ?? '') : oneLevelIn(indentOf(lines[range.last] ?? ''));
   const previous = lines[target - 1];
   const kept = [...lines];
   // The line above gains the comma this entry needs in front of it.

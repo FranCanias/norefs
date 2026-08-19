@@ -2,7 +2,6 @@ import type { ObjectLiteralExpression, SourceFile, VariableDeclaration } from 't
 import { SyntaxKind, VariableDeclarationKind } from 'ts-morph';
 import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
-import { isKeyofTargeted } from './dynamic-usage';
 import { valueUsesStayLocal } from './escape';
 
 /**
@@ -67,12 +66,7 @@ function trackableObjectLiteral(
   if (!literal?.isKind(SyntaxKind.ObjectLiteralExpression)) return undefined;
   if (ctx.dynamic.suppressed.has(literal)) return undefined;
 
-  let targeted = ctx.keyofTargeted.get(declaration);
-  if (targeted === undefined) {
-    targeted = isKeyofTargeted(nameNode);
-    ctx.keyofTargeted.set(declaration, targeted);
-  }
-  if (targeted) return undefined;
+  if (ctx.isKeyofTargeted(declaration, nameNode)) return undefined;
 
   return valueUsesStayLocal(nameNode) ? literal : undefined;
 }

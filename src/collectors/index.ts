@@ -1,9 +1,10 @@
-import type { Project, SourceFile } from 'ts-morph';
+import type { Node, Project, SourceFile } from 'ts-morph';
 import type { Candidate, CollectContext } from './candidate';
 import { collectClassCandidates } from './classes';
 import { collectConstObjectCandidates } from './const-objects';
 import { buildConstraintIndex } from './constraints';
 import { buildDynamicConsumptionIndex } from './dynamic-index';
+import { isKeyofTargeted } from './dynamic-usage';
 import { collectEnumCandidates } from './enums';
 import { collectInterfaceCandidates } from './interfaces';
 import { collectReturnedObjectCandidates } from './returned-objects';
@@ -22,14 +23,22 @@ const collectors: Array<(sourceFile: SourceFile, ctx: CollectContext) => Candida
 
 interface CollectOptions {
   /** Only collect candidates from files under this absolute path prefix. Reference resolution still uses the whole project. */
-  scopeDir?: string;
+  scopeDir?: string | undefined;
 }
 
 export function collectCandidates(project: Project, options: CollectOptions = {}): Candidate[] {
+  const keyofTargeted = new Map<Node, boolean>();
   const ctx: CollectContext = {
     dynamic: buildDynamicConsumptionIndex(project),
     constrained: buildConstraintIndex(project),
-    keyofTargeted: new Map(),
+    isKeyofTargeted: (declaration, nameNode) => {
+      let targeted = keyofTargeted.get(declaration);
+      if (targeted === undefined) {
+        targeted = isKeyofTargeted(nameNode);
+        keyofTargeted.set(declaration, targeted);
+      }
+      return targeted;
+    },
     classEscapes: new Map(),
   };
   const candidates: Candidate[] = [];
