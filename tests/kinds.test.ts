@@ -1,11 +1,11 @@
-import path from 'node:path';
 import { Project } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { loadProject } from '../src/engine/project';
 import type { Finding, FindingKind } from '../src/types';
+import { fixture } from './helpers';
 
-const fixturesDir = path.resolve('tests/fixtures');
+const fixturesDir = fixture('fixtures');
 const options = { rootDirs: [fixturesDir], entries: [fixturesDir] };
 
 /** A finding as a comparable line, so two runs can be compared exactly. */
@@ -18,7 +18,7 @@ function lines(findings: Finding[], kinds: FindingKind[]): string[] {
 
 /** A fresh project each time: the run must not depend on an index left behind. */
 function run(kinds?: FindingKind[]): Finding[] {
-  return analyze(loadProject([path.resolve('tests/fixtures/tsconfig.json')]), { ...options, kinds });
+  return analyze(loadProject([fixture('fixtures', 'tsconfig.json')]), { ...options, kinds });
 }
 
 describe('asking for fewer kinds does not change the findings', () => {

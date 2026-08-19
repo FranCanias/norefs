@@ -3,9 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { findUnresolvedImports } from '../src/engine/diagnostics';
 import { loadPackages, loadProject } from '../src/engine/project';
+import { fixture } from './helpers';
 
-const pkgA = path.resolve('tests/monorepo-fixtures/pkg-a');
-const pkgB = path.resolve('tests/monorepo-fixtures/pkg-b');
+const pkgA = fixture('monorepo-fixtures', 'pkg-a');
+const pkgB = fixture('monorepo-fixtures', 'pkg-b');
 
 describe('monorepo support', () => {
   it('loads several tsconfigs into one project and resolves cross-package usage', () => {
@@ -32,8 +33,8 @@ describe('per-package compiler options', () => {
   // resolution would leave pkg-b's imports dangling. pkg-b also names its
   // entry through package.json main + its own outDir, so lib.ts's otherwise
   // unused export `alone` counts as public API.
-  const pathsPkgA = path.resolve('tests/monorepo-paths-fixtures/pkg-a');
-  const pathsPkgB = path.resolve('tests/monorepo-paths-fixtures/pkg-b');
+  const pathsPkgA = fixture('monorepo-paths-fixtures', 'pkg-a');
+  const pathsPkgB = fixture('monorepo-paths-fixtures', 'pkg-b');
   const tsConfigs = [path.join(pathsPkgA, 'tsconfig.json'), path.join(pathsPkgB, 'tsconfig.json')];
 
   it('resolves each package with its own paths and maps entries through its own outDir', () => {

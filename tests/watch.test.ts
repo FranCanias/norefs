@@ -1,12 +1,12 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { loadProject } from '../src/engine/project';
 import { refreshProject } from '../src/engine/watch';
+import { makeTempDir } from './helpers';
 
-const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'norefs-watch-')));
+const dir = makeTempDir('norefs-watch-');
 const tsConfigPath = path.join(dir, 'tsconfig.json');
 const libPath = path.join(dir, 'src/lib.ts');
 const orphanPath = path.join(dir, 'src/orphan.ts');

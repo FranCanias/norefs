@@ -1,10 +1,10 @@
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { loadProject } from '../src/engine/project';
+import { fixture } from './helpers';
 
-const fixturesDir = path.resolve('tests/fixtures');
-const project = loadProject([path.resolve('tests/fixtures/tsconfig.json')]);
+const fixturesDir = fixture('fixtures');
+const project = loadProject([fixture('fixtures', 'tsconfig.json')]);
 // main.ts imports every fixture for its side effects, so the files are
 // reachable without becoming entry points themselves. An entry's exports are
 // public API — members included — and would hide the member findings these
