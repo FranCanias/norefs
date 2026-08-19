@@ -154,3 +154,7 @@ pipeline consumes. Everything else goes to **stderr**: unresolved-import
 warnings, baseline counts, held-back fixes, kept comments, stranded far sides,
 and the `Verified` line. A `--dry-run` diff goes to stdout, its summary to
 stderr.
+
+---
+
+[← All docs](README.md)

@@ -72,3 +72,7 @@ norefs --watch
 ```
 
 Loading the project is the expensive part of a run, so watch mode does it once. On every save it refreshes only the changed files in memory, re-analyzes, and reports again — created and deleted files included. Changes to `tsconfig.json` or `norefs.config.json` need a restart; `--watch` does not combine with `--fix` or `--baseline`.
+
+---
+
+[← All docs](README.md)

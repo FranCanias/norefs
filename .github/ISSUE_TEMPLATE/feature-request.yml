@@ -1,0 +1,20 @@
+name: Feature request
+description: Something norefs could do, and does not yet.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What would this let you do?
+      description: >
+        The task in front of you, not the feature — the best answer to a
+        request is sometimes a thing norefs already does.
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What do you do today instead?
+      description: A script, another tool, doing it by hand — or nothing.
+    validations:
+      required: false

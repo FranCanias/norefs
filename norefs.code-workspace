@@ -64,7 +64,7 @@
     "explorer.fileNesting.patterns": {
       "package.json": "pnpm-lock.yaml, pnpm-workspace.yaml, .npmrc, .nvmrc, biome.json, vitest.config.*, .editorconfig, .gitattributes, .gitignore, *.code-workspace",
       "tsconfig.json": "tsconfig.*.json, *.tsbuildinfo",
-      "README.md": "CHANGELOG.md, CONTRIBUTING.md, SECURITY.md, LICENSE"
+      "README.md": "CHANGELOG.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md, AGENTS.md, AUDIT.md, LICENSE"
     },
 
     // pnpm is the package manager for this repo (pnpm-lock.yaml / pnpm-workspace.yaml).

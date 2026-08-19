@@ -28,7 +28,9 @@ Worth knowing before you read a report as a vulnerability:
   report flags write their own files.
 - It runs two commands, and only two: `git status --porcelain`, to warn you
   before `--fix` edits a dirty tree, and whatever you pass to
-  `--verify-command`.
+  `--verify-command`. The two call sites are `hasUncommittedChanges` in
+  `src/index.ts` and the probe in `src/engine/fix-campaign.ts` — a third
+  anywhere is a bug.
 - It makes no network request, ever.
 
 A finding that norefs reads a file outside the analyzed project, writes without
