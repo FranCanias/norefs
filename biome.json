@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist", "!tsconfig.json"]
+    "includes": ["**", "!**/dist"]
   },
   "formatter": {
     "enabled": true,
@@ -32,7 +32,6 @@
         "preset": "none"
       },
       "style": {
-        "useNodejsImportProtocol": "off",
         "noNonNullAssertion": "off"
       },
       "complexity": {
@@ -45,9 +44,6 @@
       "correctness": {
         "noUnusedVariables": "error",
         "noUnusedImports": "error"
-      },
-      "nursery": {
-        "useExplicitType": "off"
       }
     }
   },
