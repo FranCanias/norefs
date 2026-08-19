@@ -166,3 +166,7 @@ To find unused properties in a library whose only consumer lives in another repo
 3. Run `norefs -p umbrella.tsconfig.json --scope path/to/library/src`.
 
 Resolution is everything here: each import that fails to resolve hides all references flowing through it, which turns used properties into "unused" findings. norefs checks for this and prints a warning listing the unresolved specifiers — fix those before trusting the results.
+
+---
+
+[← All docs](README.md)

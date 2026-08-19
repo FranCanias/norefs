@@ -42,6 +42,16 @@ Because the check is reference-based, it follows structural typing correctly —
 
 When every member of a named interface or type alias is unused while the type itself is still referenced, the member findings fold into one: ``interface `X` becomes empty: all 6 members are dead``. That is one logical fact, so it is one finding, carrying the most cautious verdict of the members it swallowed. Removing the members would leave an empty `interface X {}` behind, and only you know whether its consumers should go too — `--fix` never touches these. An interface that extends another is exempt — empty, it still works as an alias.
 
+## Three kinds by their `--only` names
+
+Most `--only` names read as the checks above: `files`, `exports`, `types`, `members`, `dependencies`, `unlisted`, `misplaced`, `stranded`. Three are less obvious, so here they are defined:
+
+| `--only` name | What it reports |
+| --- | --- |
+| `ns-exports` | An unused export whose namespace — a TS `namespace` or an `import * as` binding — is used, so the export may still be consumed dynamically |
+| `ns-types` | The same, for an exported type |
+| `empty-types` | A still-referenced type that becomes empty once its unused members go — the folded `becomes empty` finding above |
+
 ## Production mode
 
 Every finding norefs makes is relative to a question. The default question is "does anything in this repository use it?", and the tests count — a member only a test reads is labelled `test-only`, not dead, because deleting it breaks something real.
@@ -63,3 +73,7 @@ Test, spec, stories, bench and config files — and everything under `test`, `te
 **It never combines with `--fix`.** A production finding is dead to the shipping path and may be perfectly alive in the tests this run ignored — deleting it breaks them. That is the same reason `test-only` findings are never fixed either: the fix is deleting the tests too, and only you do that. `norefs --production --fix` is a usage error, exit code 2.
 
 The two modes answer different questions, so run both: the default one to find what nothing uses, `--production` to find what only the scaffolding is holding up.
+
+---
+
+[← All docs](README.md)

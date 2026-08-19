@@ -181,3 +181,7 @@ first to run a release's features.
 
 Next: enough manual verification per repo to publish a precision number
 instead of an anecdote.
+
+---
+
+[← All docs](README.md)

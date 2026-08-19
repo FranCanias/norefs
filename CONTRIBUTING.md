@@ -2,8 +2,13 @@
 
 Thanks for looking. This page holds what the code cannot say about itself: how
 the suite is organized, how a release happens, and the rules the writing follows.
+The [code of conduct](CODE_OF_CONDUCT.md) applies to every interaction here.
 
 ## Getting set up
+
+The package manager is pnpm, at the version `packageManager` in `package.json`
+pins. `corepack enable` once, and every `pnpm` call uses that exact version
+without a global install.
 
 ```sh
 pnpm install
@@ -49,9 +54,20 @@ shebang and never imported, so CJS costs nothing and starts marginally faster.
 The one file that has to be ESM says so with its extension —
 `vitest.config.mts`.
 
+Two commands here run npm, not pnpm, and both are deliberate. The `release`
+script runs `npm version` because pnpm has no `version` command. And
+`tests/global-setup.ts` shells `npm run build` because the suites it builds for
+spawn what `npm pack` would publish — the build should go through the same tool.
+
 `norefs.code-workspace` sets VS Code up for this repository — the pinned
 TypeScript, Biome as the formatter, the file nesting. `.editorconfig` carries
 the portable subset for every other editor.
+
+Dogfooding — running norefs on this repository — works from the repo root. Two
+things to know first: the root `tsconfig.json` includes only `src`, and one
+comment in `src/engine/syntax-analyze.ts` carries a `norefs-ignore` because the
+tests import across that boundary. That comment also shows `norefs-ignore`
+works with a trailing colon as well as without one — both forms count.
 
 ## The layers
 
@@ -130,11 +146,18 @@ Three places describe the flags — the README table, the `HELP` string in
 `src/index.ts`, and `docs/flags.md` — and `tests/package.test.ts` checks the
 three agree on the set. The prose still has to be updated by hand, in all three.
 
+## The changelog
+
+A user-visible change lands with its entry under `## Unreleased` in
+`CHANGELOG.md`, in the same commit. Entries are an engineering narrative with
+falsifiable claims: what changed, why, and what was checked rather than
+assumed. Writing the entry later means writing it from memory, which is where
+the falsifiable part goes missing.
+
 ## Releasing
 
-1. Update `CHANGELOG.md`. Entries are an engineering narrative with falsifiable
-   claims: what changed, why, and what was checked rather than assumed. Commit
-   it.
+1. Rename the `Unreleased` section to the new version and date it. The entries
+   are already written. Commit it.
 2. `pnpm run release patch` — or `minor`, or `major`. It bumps `package.json`,
    commits, tags `vX.Y.Z`, and pushes the commit with its tag. Three hand steps
    that had to agree, now one.
@@ -161,3 +184,10 @@ The code comments and the docs follow one voice, and it is part of the review:
 Conventional Commits, imperative mood, and a body that explains why. The history
 is meant to teach the next reader; `git log` is the closest thing this project
 has to a design document.
+
+## Pull requests
+
+Target `main`. CI runs the suite on two Node versions, the floor job, and the
+checks; every job has to be green before a merge. Run `pnpm test` and
+`pnpm run check` before you push — CI will not be gentler, only slower to tell
+you.

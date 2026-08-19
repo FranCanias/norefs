@@ -19,3 +19,7 @@ Review the diff before you commit. The emptied-type findings point at the leftov
 To see the diff without touching anything, run `norefs --fix --dry-run`. It applies the full fix — cascades included — to the in-memory project only and prints one unified diff per file. The exit code stays `1`, so it also works as a strict CI check.
 
 The fixing flags interact: [flags.md](flags.md) is one page on what every flag and every combination does to a working tree, and where the exit codes are pinned.
+
+---
+
+[← All docs](README.md)

@@ -31,3 +31,7 @@ A config file is a build's file, not the product's, so what it imports is never 
 **Fixing them.** `--fix-unsafe` removes an unused entry and moves a misplaced one, editing `package.json` as text so the key order and the indentation survive. It needs `--fix-unsafe` rather than `--fix` for an honest reason: the type checker does not read a dependency list, so the probe that guards every other fix has nothing to say here. `--verify-command` is the one that can judge these, and when it fails the manifest edits are held back on their own — the source fixes it did verify still land.
 
 Use the [`ignoreDependencies`](configuration.md) config key for a dependency norefs still cannot see: a binary invoked from somewhere other than a script, a package a runtime injects by a name nothing writes down.
+
+---
+
+[← All docs](README.md)

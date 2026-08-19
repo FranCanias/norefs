@@ -4,7 +4,42 @@ norefs follows [semver](https://semver.org). Before 1.0.0, minor versions
 (0.x.0) may change output formats, flag semantics, and verdicts; patch
 versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 
-## 0.8.0 — 2026-08-17
+A user-visible change lands with its entry here, under **Unreleased**. A release
+renames the section and dates it — the writing is already done.
+
+## Unreleased
+
+A repository audit went over everything again, and most of what it found lives
+behind the scenes: stricter compiler flags, a `Finding` type that says which
+fields each kind carries, a `main()` split into parts a test can reach. The
+user-visible edges:
+
+**Any failure is reported in the CLI's voice.** A malformed tsconfig or an
+analysis error mid-run used to escape as a raw stack trace. One boundary now
+catches whatever is thrown, prints `error: …`, and exits 2 — the same answer a
+usage error gets.
+
+**`--help` states the exit codes.** 0, 1, and 2 are the CLI's contract with CI,
+and the help text never said so.
+
+**`--fix` warns when git cannot vouch for the tree.** The dirty-tree guard
+returned clean when git was absent, so fixes wrote into an unversioned tree
+with no way to revert them separately. The guard still lets the run proceed —
+there is no tree state to protect — but it now says so first.
+
+**`--export` validates like `--reporter`.** A bad format now answers
+`--export must be one of md, json`, in the same voice as every other
+pick-from-a-list flag.
+
+**Stack traces name `src/` lines.** The package ships sourcemaps and turns
+them on, so the line numbers in a bug report point at code someone can read.
+
+**`require('norefs')` fails honestly.** The manifest now declares an `exports`
+map with no library entry, so importing the CLI as a library answers with the
+manifest's own error instead of an opaque resolution failure — and deep imports
+into `dist/` are refused. `CONTRIBUTING.md` no longer ships in the tarball.
+
+## [0.8.0](https://github.com/FranCanias/norefs/releases/tag/v0.8.0) — 2026-08-17
 
 A release about the machinery around the analysis. An audit went over the
 repository — CI, packaging, lint configuration, the layering — and found the
@@ -130,7 +165,7 @@ steps, `.nvmrc` puts local work on a Node version CI covers, `describe.ts` moved
 out of `engine/` because `collectors/` imported it upward, and the repository
 gained `SECURITY.md`, issue forms, and a pull request template.
 
-## 0.7.0 — 2026-08-14
+## [0.7.0](https://github.com/FranCanias/norefs/releases/tag/v0.7.0) — 2026-08-14
 
 A release about being wrong. Every change here answers a false positive somebody
 hit on a real repository — an Electron app with a headless server build — and
@@ -322,7 +357,7 @@ loosely invented no entry point, which was the risk worth checking. See
   say. A reader who went looking concluded the feature had never shipped. It
   shipped in 0.6.0; now the help says so.
 
-## 0.6.0 — 2026-08-14
+## [0.6.0](https://github.com/FranCanias/norefs/releases/tag/v0.6.0) — 2026-08-14
 
 A property can be read by the type system and never touched at runtime. Every
 such property was reported `dead`, with the evidence "no references anywhere" —
@@ -610,7 +645,7 @@ it used to decline, adds a stricter question to ask of a repository, and fixes a
   package legitimately called `build` is still a package. Its own test caught
   that one.
 
-## 0.5.0 — 2026-08-14
+## [0.5.0](https://github.com/FranCanias/norefs/releases/tag/v0.5.0) — 2026-08-14
 
 0.4.0 gave the fixer a rule: a fix finishes the finding it acts on, or says
 why it can't. Then it shipped a fixer that crashed on the example in these
@@ -735,7 +770,7 @@ release is tested against the artifact, not against the repository.**
   [docs/flags.md](docs/flags.md), which now ships, and a test pins all three so
   the next change cannot be a silent one.
 
-## 0.4.0 — 2026-08-14
+## [0.4.0](https://github.com/FranCanias/norefs/releases/tag/v0.4.0) — 2026-08-14
 
 0.3.0 taught the evidence layer to say "proven", "discarded", "unverified".
 The action layer had not learned the same vocabulary: `--fix-unsafe` acted on
@@ -822,7 +857,7 @@ follows: **a fix finishes the finding it acts on, or says why it can't.**
   what those writes were doing. Same rule as ever — the claim may not outrun
   the probe.
 
-## 0.3.0 — 2026-08-13
+## [0.3.0](https://github.com/FranCanias/norefs/releases/tag/v0.3.0) — 2026-08-13
 
 0.2.0 named write sites but matched them by name alone, project-wide. A
 member could be protected from deletion because an unrelated function
@@ -892,7 +927,7 @@ becomes a claim.
   `shadowed` verdict. The far side names its twin in return. One conceptual
   fact, one story, told from both ends.
 
-## 0.2.0 — 2026-08-13
+## [0.2.0](https://github.com/FranCanias/norefs/releases/tag/v0.2.0) — 2026-08-13
 
 The dead verdict now earns its evidence chain. 0.1.1 could call a member
 "dead — no untracked write of the name" while a shorthand property in an
@@ -935,7 +970,7 @@ fixed, and everything downstream of it is more honest.
   deletions were verified by the type check alone, the line says a type
   check cannot see runtime-only reads and points to `--verify-command`.
 
-## 0.1.1 — 2026-08-13
+## [0.1.1](https://github.com/FranCanias/norefs/releases/tag/v0.1.1) — 2026-08-13
 
 This release changed the output format and `--fix` semantics; by the rules
 above it should have been 0.2.0. Recorded here for the record.
@@ -962,7 +997,7 @@ above it should have been 0.2.0. Recorded here for the record.
 - Path-alias resolution no longer needs a suppression for `@/*` imports;
   Vite `?suffix` imports resolve.
 
-## 0.1.0 — 2026-08-13
+## [0.1.0](https://github.com/FranCanias/norefs/releases/tag/v0.1.0) — 2026-08-13
 
 First npm release: unused files, exports, types, members, and dependencies
 for TypeScript projects, with `--fix`, baselines, and github/sarif

@@ -51,3 +51,7 @@ Some findings point at inline types with no name to anchor them — a `{x, y}` p
 ```sh
 norefs --anon
 ```
+
+---
+
+[← All docs](README.md)

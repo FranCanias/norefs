@@ -8,20 +8,6 @@ Find unused files, exports, and type/object members in a TypeScript project.
 
 Most dead-code tools stop at the declaration boundary: an interface counts as "used" even when half its members are dead. `norefs` checks both levels. It finds unused files, unused exports, and unused exported types — and then looks inside the types that *are* used, including objects returned from functions (exported or not) and objects used as React component props.
 
-## How it works
-
-`norefs` loads your project with [ts-morph](https://ts-morph.com) and runs two passes.
-
-The **module-level pass** works on the import graph. It finds unused files, unused exports and exported types (a declaration used only inside its own file is *over-exported*: the fix is to drop the keyword, not the code), stranded handlers (a handler whose every sender this report deletes), and three dependency problems: unused, unlisted, and misplaced `package.json` entries.
-
-The **member pass** looks inside the types that survive: interfaces, type aliases and inline object types (React props included), enums, const objects, classes, and object literals returned from functions. For each member it asks norefs' own project-wide reference index whether anything reads it.
-
-Every finding carries a **verdict** — the claim it makes, with its safety profile: `dead`, `over-exported`, `write-only`, `contract`, `shadowed`, or `test-only`. `--fix` applies only the first two; each of the others prints its evidence and waits for `--fix-unsafe` or your judgment.
-
-Entry points are not yours to maintain: norefs reads them from what the build already declares — `package.json`, scripts, HTML, tool configs. Run `norefs entries` to see the list and what named each one.
-
-The full definitions live in the docs: [every check and verdict](docs/checks.md), [the dependency checks](docs/dependencies.md), and [what counts as usage — and what the analysis cannot see](docs/limitations.md).
-
 ## Install
 
 ```sh
@@ -35,7 +21,26 @@ npx norefs
 ```
 
 Then run `norefs` from any project with a `tsconfig.json`. norefs needs Node 22.4
-or newer.
+or newer. One command, and the report:
+
+```
+$ norefs
+
+src/models/User.ts
+  4:3  dead property `legacyId` in interface `User`
+
+src/legacy/formatter.ts
+  dead file
+
+src/hooks/useConfig.ts
+  3:18  over-exported: interface `ConfigDefaults` is used only in this file
+  8:14  dead export `configDefaults`
+
+src/recipes/RecipeBox.ts
+  12:3  property `maxServings` in interface `RecipeIO` looks like a data contract: its values come out of `JSON.parse(…)`
+
+5 findings: 3 dead, 1 over-exported, 1 likely contract
+```
 
 ## Usage
 
@@ -67,7 +72,7 @@ norefs entries   # list every entry point and what named it
 | `--anon` | Include findings on unnamed inline types and anonymous functions (hidden by default: they are the most false-positive-prone) |
 | `-h, --help` | Show the help message |
 
-`norefs` exits with code `1` when it finds unused code, `0` otherwise — so it slots into CI the same way a linter does. With `--fix` it exits `0` after it removes what it found.
+`norefs` exits with code `1` when it finds unused code, `0` otherwise, and `2` for a usage error — so it slots into CI the same way a linter does. With `--fix` it exits `0` after it removes what it found.
 
 The fixing flags interact: [docs/flags.md](docs/flags.md) is one page on what every flag and every combination does to a working tree.
 
@@ -138,24 +143,29 @@ A finding you disagree with has four answers, in the order worth trying:
 
 A wrong finding that fits none of these is a bug worth reporting.
 
-### Example
+## How it works
 
-```
-src/models/User.ts
-  4:3  dead property `legacyId` in interface `User`
+`norefs` loads your project with [ts-morph](https://ts-morph.com) and runs two passes.
 
-src/legacy/formatter.ts
-  dead file
+The **module-level pass** works on the import graph. It finds unused files, unused exports and exported types (a declaration used only inside its own file is *over-exported*: the fix is to drop the keyword, not the code), stranded handlers (a handler whose every sender this report deletes), and three dependency problems: unused, unlisted, and misplaced `package.json` entries.
 
-src/hooks/useConfig.ts
-  3:18  over-exported: interface `ConfigDefaults` is used only in this file
-  8:14  dead export `configDefaults`
+The **member pass** looks inside the types that survive: interfaces, type aliases and inline object types (React props included), enums, const objects, classes, and object literals returned from functions. For each member it asks norefs' own project-wide reference index whether anything reads it.
 
-src/recipes/RecipeBox.ts
-  12:3  property `maxServings` in interface `RecipeIO` looks like a data contract: its values come out of `JSON.parse(…)`
+Every finding carries a **verdict** — the claim it makes, with its safety profile: `dead`, `over-exported`, `write-only`, `contract`, `shadowed`, or `test-only`. `--fix` applies only the first two; each of the others prints its evidence and waits for `--fix-unsafe` or your judgment.
 
-5 findings: 3 dead, 1 over-exported, 1 likely contract
-```
+Entry points are not yours to maintain: norefs reads them from what the build already declares — `package.json`, scripts, HTML, tool configs. Run `norefs entries` to see the list and what named each one.
+
+The full definitions live in the docs: [every check and verdict](docs/checks.md), [the dependency checks](docs/dependencies.md), and [what counts as usage — and what the analysis cannot see](docs/limitations.md).
+
+## How it compares
+
+[knip](https://github.com/webpro-nl/knip), [ts-prune](https://github.com/nadeesha/ts-prune), and [depcheck](https://github.com/depcheck/depcheck) ask related questions. The honest split: knip understands your **toolchain** better; norefs understands your **code** better. Three things set norefs apart:
+
+- **It looks inside the types.** The others stop at the declaration boundary — an interface counts as used while half its members are dead. norefs reports the unused members of interfaces, type aliases, enums, classes, const objects, and returned object literals.
+- **Every finding carries a verdict.** Not one flat "unused", but a claim with a safety profile — `dead`, `over-exported`, `write-only`, `contract`, `shadowed`, `test-only` — and `--explain` prints the evidence behind it.
+- **The fix verifies itself.** `--fix` type-checks the fixed project in memory, bisects to any fix that broke the build, holds it back, and saves only what verifies.
+
+Where knip is better: about a hundred framework and tool plugins, coverage of non-TypeScript sources (`.vue`, `.svelte`, `.astro`), and years of publicly answered issues. ts-prune is in maintenance mode and covers unused exports only — its own README points at knip. depcheck covers dependencies only. If your project leans on a framework knip has a plugin for, running both is a fine answer: they disagree in useful places.
 
 ## Documentation
 
@@ -167,6 +177,8 @@ src/recipes/RecipeBox.ts
 - [Speed](docs/speed.md) — fast runs with `--only`, and watch mode
 - [Limitations](docs/limitations.md) — what counts as usage, when norefs stays silent, the remaining blind spots
 - [Corpus validation](docs/corpus.md) — results on real, widely used repositories
+- [Changelog](CHANGELOG.md) — every release, with what changed and why
+- [Security policy](https://github.com/FranCanias/norefs/blob/main/SECURITY.md) — how to report a vulnerability, and what norefs does on your machine
 
 ## Project layout
 
@@ -200,10 +212,10 @@ pnpm run typecheck  # tsc --noEmit, over src and tests both
 pnpm run format     # biome check --write
 ```
 
-norefs runs on Node 22.4 — the floor `engines` promises, and CI builds and runs
-the binary there. Developing it needs 22.12, which is what Vitest needs.
-[CONTRIBUTING.md](CONTRIBUTING.md) covers how the suite is organized, how a
-release happens, and the writing rules the code and docs follow.
+norefs runs on Node 22.4; developing it needs 22.12. The reasons, how the suite
+is organized, how a release happens, and the writing rules the code and docs
+follow are all in
+[CONTRIBUTING.md](https://github.com/FranCanias/norefs/blob/main/CONTRIBUTING.md).
 
 ## License
 
