@@ -59,7 +59,13 @@ jobs:
         with:
           node-version: '22.4'
           cache: pnpm
+      # .npmrc says engine-strict, and the dev toolchain (vite, rolldown) asks
+      # for Node 22.12+ — which would refuse this install on the one job that
+      # exists to run below the toolchain's floor. The binary under test needs
+      # none of those packages, so the gate is lifted for this install alone.
       - run: pnpm install --frozen-lockfile
+        env:
+          npm_config_engine_strict: 'false'
       - run: pnpm build
       - run: node dist/index.js --no-explain
 
