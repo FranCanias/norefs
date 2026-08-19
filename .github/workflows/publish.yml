@@ -41,10 +41,13 @@ jobs:
       # Trusted publishing and automatic provenance need npm >= 11.5.1. The
       # runner image ships whatever it ships, and it changes without a commit
       # here — so the version this job depends on is named here.
-      - run: npm install -g npm@latest
+      - run: npm install -g npm@11
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm typecheck
-      - run: pnpm build
+      # The test setup builds `dist` for the suites that spawn it, and
+      # `prepublishOnly` rebuilds it for the tarball — so `prepublishOnly` is
+      # the single source of the published artifact, with no build step here
+      # to disagree with it.
       - run: pnpm test
       - run: npm publish --provenance
