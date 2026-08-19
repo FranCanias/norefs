@@ -7,6 +7,12 @@ updates:
     # Match the Conventional Commits the repository already writes.
     commit-message:
       prefix: 'build(deps)'
+    # @types/node stays on 22.x while "engines" promises >=22.4: typing
+    # against a newer Node would let src compile calls to APIs the floor
+    # does not have, and only the floor job could catch it at runtime.
+    ignore:
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     # Runtime and build tooling fail for different reasons, so they land in
     # separate PRs — one red update no longer blocks the other group. A major
     # (a ts-morph API break, say) arrives alone, where it can be read alone.
