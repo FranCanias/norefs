@@ -1,6 +1,6 @@
 {
   "name": "norefs",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Find unused files, exports, and type/object members in a TypeScript project.",
   "type": "commonjs",
   "bin": {
