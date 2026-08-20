@@ -24,9 +24,9 @@ On a 541-file library:
 
 | run | time | memory |
 | --- | --- | --- |
-| everything | 12.6 s | 1.5 GB |
-| everything but members | 4.2 s | 1.0 GB |
-| files and dependencies only | 0.33 s | 188 MB |
+| everything | 8.4 s | 1.4 GB |
+| everything but members | 3.7 s | 1.0 GB |
+| files and dependencies only | 0.33 s | 192 MB |
 
 Re-run it yourself. The repository is Apollo Client at commit `54084bc`, cloned
 on 2026-08-17, and the numbers are the best of three runs on an Apple M3 with
@@ -41,18 +41,26 @@ cd apollo-client && npm install --ignore-scripts
 Absolute times belong to that machine. The ratio is the point, and it is what
 holds across repositories: the member pass is most of a full run.
 
+When a project is too big for Node's heap, the run dies in a V8 crash norefs
+cannot catch. So norefs estimates the cost from the source size first, and
+warns before the work starts when the estimate does not fit — with the two
+ways out: give Node more with `NODE_OPTIONS=--max-old-space-size=8192`, or
+ask for less with `--only`.
+
 The findings are the same either way — the kinds you ask for change the work
 done, not the answers. That is a claim with a probe behind it: on the run
 above, the full report and the member-less one name the same 88 module-level
 findings, and `tests/kinds.test.ts` asks the same question of every fixture.
 
 For the checks that do need references, norefs indexes the whole project once —
-one pass over every identifier, each filed under the declaration it names —
-instead of asking the language service per declaration, which would rebuild an
-import tracker every time.
+one pass that collects every identifier by its text — instead of asking the
+language service per declaration, which would rebuild an import tracker every
+time. Nothing resolves during that pass. A name resolves to its symbols when
+the first query targets it — a rename like `import { a as b }` links the two
+names, so the query still finds every alias — and a name no query ever
+targets, most occurrences of a big project, never resolves at all.
 
-The index skips what no finding can rest on. An occurrence named like nothing
-the run will ask about is never resolved to a symbol. And where the checker's
+The index skips what no finding can rest on. And where the checker's
 contextual-type answer would type-check a whole call, the index reads the
 argument's declared type off every signature of the callee instead — filing a
 reference under each candidate rather than the one overload the checker would

@@ -7,6 +7,44 @@ versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 A user-visible change lands with its entry here, under **Unreleased**. A release
 renames the section and dates it — the writing is already done.
 
+## Unreleased
+
+A performance pass, checked the honest way: every change ran A/B against
+0.9.0 on real repositories, and the findings — and the fix patches — came out
+byte-identical. The speed is the release; two smaller edges came with it.
+
+**Full runs are 40–50% faster.** The reference index no longer resolves every
+occurrence up front. A name resolves when the first query targets it — closed
+over its import renames — and a name no query ever targets, most occurrences
+of a big project, never resolves at all. Module resolution now keeps a cache
+instead of re-walking `node_modules` per specifier, descendant walks run over
+raw compiler nodes, and line numbers come off the compiler's cached line
+table. On the two repositories that drove the work, full runs went from
+29.4 s to 17.3 s and from 5.3 s to 2.7 s.
+
+**`--fix` cleans up orphans without rebuilding the program.** After a
+removal, the search for imports and locals that nothing uses anymore answered
+through the type checker, and each cleanup round rebuilt the whole program.
+It now answers from the syntax alone, which can only err by keeping code —
+never by removing it. A fix dry-run on one corpus went from 21.9 s to 9.1 s,
+at 0.6 GB less memory.
+
+**A pre-existing type error no longer aborts a `--fix` campaign.** The
+verifier keys each error to compare before against after, and the key
+included the compiler's narration — "the file is in the program because:
+imported via …" — which shifts whenever an edit touches an unrelated import.
+A pre-existing error would re-key as new, fail every bisection step, and
+abort the campaign over an error the fixes never caused. The key now stops at
+the head of the message. On one real repository this was the difference
+between an aborted campaign and 453 verified fixes.
+
+**norefs warns before it runs out of memory.** Running out of heap arrives as
+a V8 crash the CLI cannot catch or soften, so the only place to speak is
+before the work starts. norefs now estimates the run's cost from the
+project's source size, and when the estimate does not fit the heap it says so
+and names the two ways out: give Node more with
+`NODE_OPTIONS=--max-old-space-size=8192`, or ask for less with `--only`.
+
 ## [0.9.0](https://github.com/FranCanias/norefs/releases/tag/v0.9.0) — 2026-08-19
 
 A repository audit went over everything again, and most of what it found lives
