@@ -3,6 +3,7 @@
 [![npm](https://img.shields.io/npm/v/norefs.svg)](https://www.npmjs.com/package/norefs)
 [![CI](https://github.com/FranCanias/norefs/actions/workflows/ci.yml/badge.svg)](https://github.com/FranCanias/norefs/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/norefs.svg)](LICENSE)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14170/badge)](https://www.bestpractices.dev/projects/14170)
 
 Find unused files, exports, and type/object members in a TypeScript project.
 
