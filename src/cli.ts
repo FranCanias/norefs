@@ -2,10 +2,11 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import v8 from 'node:v8';
 import type { Project } from 'ts-morph';
 import { applyBaseline, writeBaseline } from './baseline';
 import { CONFIG_FILE, initConfig, loadConfig } from './config';
-import { analyze } from './engine/analyze';
+import { analyze, needsMembers } from './engine/analyze';
 import { findUnresolvedImports } from './engine/diagnostics';
 import { runFixCampaign } from './engine/fix-campaign';
 import { loadPackages, loadProject, optionsForDir } from './engine/project';
@@ -231,7 +232,13 @@ export function createSession(values: CliValues, cwd: string): Session {
   // and gigabytes. A run that only asks for unused files or dependencies never
   // needs one, so the load waits until something actually asks for types.
   let loaded: Project | undefined;
-  const project = (): Project => (loaded ??= loadProject(tsConfigPaths));
+  const project = (): Project => {
+    if (!loaded) {
+      loaded = loadProject(tsConfigPaths);
+      warnMemory(loaded, filterOptions.only);
+    }
+    return loaded;
+  };
 
   // Unused files and the dependency checks read the source text alone. When
   // nothing else is asked for, the syntax scanner answers them and the type
@@ -432,6 +439,32 @@ function runFix(session: Session, findings: Finding[], baseline: ReturnType<type
   for (const patch of result.patches) process.stdout.write(`${patch}\n`);
   for (const note of result.notes) process.stderr.write(`${note}\n`);
   if (!save) process.exitCode = 1;
+}
+
+/**
+ * Say before the analysis what a run this size costs, when the heap cannot
+ * hold it. Running out of memory arrives as a V8 native crash the CLI cannot
+ * catch or soften, so the only place to speak is before the work starts.
+ *
+ * The estimate is linear in project source bytes, fitted to profiled runs of
+ * 0.3, 1.1, and 8.9 MB of source (which needed roughly 0.3, 0.5, and 3.1 GB
+ * with the member analysis, and 0.1, 0.3, and 1.9 GB without). It is a
+ * warning threshold, not a promise — it only has to be right about the order
+ * of magnitude.
+ */
+function warnMemory(project: Project, kinds: Parameters<typeof needsMembers>[0]): void {
+  let sourceBytes = 0;
+  for (const sourceFile of project.getSourceFiles()) {
+    if (!sourceFile.isDeclarationFile()) sourceBytes += sourceFile.compilerNode.text.length;
+  }
+  const sourceMB = sourceBytes / (1024 * 1024);
+  const estimateMB = needsMembers(kinds) ? 200 + 330 * sourceMB : 130 + 200 * sourceMB;
+  const limitMB = v8.getHeapStatistics().heap_size_limit / (1024 * 1024);
+  if (estimateMB <= limitMB) return;
+  process.stderr.write(
+    `warning: ${Math.round(sourceMB)} MB of source against a ${Math.round(limitMB)} MB heap — this run is likely to run out of memory (it needs roughly ${Math.round(estimateMB / 100) / 10} GB).\n` +
+      'Give Node more with NODE_OPTIONS=--max-old-space-size=8192, or ask for less with --only.\n\n'
+  );
 }
 
 /**
