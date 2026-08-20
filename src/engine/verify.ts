@@ -50,11 +50,18 @@ function compilerErrors(project: Project): ts.Diagnostic[] {
 }
 
 function errorKey(diagnostic: ts.Diagnostic): string {
-  return [
-    diagnostic.file?.fileName ?? '',
-    diagnostic.code,
-    ts.flattenDiagnosticMessageText(diagnostic.messageText, ' '),
-  ].join('|');
+  return [diagnostic.file?.fileName ?? '', diagnostic.code, headMessage(diagnostic.messageText)].join('|');
+}
+
+/**
+ * The head of the message chain alone. The tail narrates context — "the file
+ * is in the program because: imported via …" — and that narration shifts
+ * whenever any edit touches an unrelated import. A pre-existing error whose
+ * key drifts on every fix reads as new, fails every bisection step, and
+ * aborts the whole campaign over an error the fixes never caused.
+ */
+function headMessage(messageText: string | ts.DiagnosticMessageChain): string {
+  return typeof messageText === 'string' ? messageText : messageText.messageText;
 }
 
 function describeError(diagnostic: ts.Diagnostic, cwd: string): string {
