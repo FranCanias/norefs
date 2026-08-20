@@ -12,6 +12,7 @@ import { Node as NodeGuards, SyntaxKind, ts } from 'ts-morph';
 import { findReferencesAsNodes } from '../lookup/references';
 import { firstLine } from '../messages';
 import type { ExportFinding, Finding, MemberFinding } from '../types';
+import { endLine, lineAndColumnAt, startLine } from './location';
 import { declarationNameNode } from './modules';
 
 /** The findings --fix edits through ts-morph: the kinds that carry a declaration node. */
@@ -349,7 +350,7 @@ function commentLocations(kept: Set<Node>): CommentLocation[] {
     if (node.wasForgotten()) continue;
     const sourceFile = node.getSourceFile();
     const range = node.getLeadingCommentRanges()[0];
-    const line = range ? sourceFile.getLineAndColumnAtPos(range.getPos()).line : node.getStartLineNumber();
+    const line = range ? lineAndColumnAt(sourceFile, range.getPos()).line : startLine(node);
     const [firstLineOfText = ''] = (range ? range.getText() : node.getText()).split('\n');
     const text = firstLineOfText.trim();
     locations.push({ filePath: sourceFile.getFilePath(), line, text });
@@ -501,8 +502,8 @@ function removeLeadingComments(node: Node, kept: Set<Node>): void {
     if (!previous) break;
     const kind = previous.getKind();
     if (kind !== SyntaxKind.SingleLineCommentTrivia && kind !== SyntaxKind.MultiLineCommentTrivia) break;
-    if (previous.getEndLineNumber() < above.getStartLineNumber() - 1) {
-      if (previous.getEndLineNumber() === above.getStartLineNumber() - 2) kept.add(previous);
+    if (endLine(previous) < startLine(above) - 1) {
+      if (endLine(previous) === startLine(above) - 2) kept.add(previous);
       break;
     }
     comments.push(previous);
@@ -604,10 +605,9 @@ function removeDeclaration(decl: Node, kept: Set<Node>): void {
 /**
  * Remove code the fixes orphaned: imports and unexported top-level declarations
  * that nothing references anymore. Each round first finds every orphan in
- * every touched file, then removes them all — queries never interleave with
- * edits, so the checker re-reads the project once per round rather than once
- * per question. One removal can orphan the next, so rounds repeat until the
- * files are stable.
+ * every touched file, then removes them all — a removal invalidates the
+ * wrappers around it, so queries never interleave with edits. One removal can
+ * orphan the next, so rounds repeat until the files are stable.
  */
 function cleanUpOrphans(files: Set<SourceFile>, kept: Set<Node>): void {
   for (let round = 0; round < MAX_CLEANUP_ROUNDS; round++) {
@@ -653,10 +653,8 @@ function collectUnusedImports(file: SourceFile, removals: Array<() => void>): vo
 }
 
 /**
- * True when anything in the file outside the import itself still reads the
- * binding. Answered from the file alone: the checker resolves each identifier
- * spelled like the binding, which never rebuilds the language service's
- * project-wide import tracker the way a find-references call would.
+ * True when anything in the file outside the import itself could still read
+ * the binding. Answered from the syntax alone — see `isUsedInFile`.
  */
 function isBindingUsed(binding: Identifier, file: SourceFile, importDecl: ImportDeclaration): boolean {
   return isUsedInFile(binding, file, new Set([importDecl.compilerNode]));
@@ -689,7 +687,11 @@ function collectUnusedLocals(file: SourceFile, removals: Array<() => void>, kept
       statement.isKind(SyntaxKind.TypeAliasDeclaration) ||
       statement.isKind(SyntaxKind.EnumDeclaration)
     ) {
-      if (statement.isExported() || statement.hasDeclareKeyword()) continue;
+      // The modifier, not ts-morph's `isExported()`: that one resolves
+      // symbols, which rebuilds the whole program mid-campaign. The other
+      // export forms — `export { x }`, `export default x`, `export = x` —
+      // reference the name, so `isUsedInFile` already keeps them.
+      if (hasExportModifier(statement) || statement.hasDeclareKeyword()) continue;
       const name = statement.getNameNode();
       if (name?.isKind(SyntaxKind.Identifier) && !isUsedInFile(name, file)) {
         removals.push(() => {
@@ -702,44 +704,83 @@ function collectUnusedLocals(file: SourceFile, removals: Array<() => void>, kept
   }
 }
 
+/** True when the statement carries an `export` or `export default` modifier. */
+function hasExportModifier(statement: Node): boolean {
+  return (
+    (ts.getCombinedModifierFlags(statement.compilerNode as ts.Declaration) &
+      (ts.ModifierFlags.Export | ts.ModifierFlags.Default)) !==
+    0
+  );
+}
+
 /**
- * True when an identifier outside `exclude` (and outside the declaration
- * itself) resolves to the same symbol the name declares. A shorthand property
- * and an `export { x }` specifier name the symbol without resolving to it
- * directly, so those ask the checker their own way. When the name resolves to
- * nothing, the declaration is kept: proof, not absence of proof, removes code.
+ * True when an identifier of the same text sits anywhere outside `exclude`
+ * (and outside the name itself) in a position that can reference a binding.
+ *
+ * Answered from the syntax alone. The checker's sharper answer — is that
+ * identifier this very symbol, or a shadow of it? — would rebuild the whole
+ * program on every cleanup round, because the rounds run after edits. A text
+ * match can only err by keeping a shadowed orphan; it can never remove a used
+ * declaration, and removal is the only direction that has to be proven.
  */
 function isUsedInFile(name: Identifier, file: SourceFile, exclude: ReadonlySet<ts.Node> = NO_NODES): boolean {
-  const checker = file.getProject().getTypeChecker().compilerObject;
-  const target = checker.getSymbolAtLocation(name.compilerNode);
-  if (!target) return true;
   const text = name.compilerNode.text;
-
   let used = false;
   const visit = (node: ts.Node): void => {
     if (used) return;
     if (exclude.has(node)) return;
-    if (ts.isIdentifier(node) && node.text === text && node !== name.compilerNode) {
-      const parent = node.parent;
-      if (ts.isShorthandPropertyAssignment(parent) && parent.name === node) {
-        if (checker.getShorthandAssignmentValueSymbol(parent) === target) {
-          used = true;
-          return;
-        }
-      }
-      if (ts.isExportSpecifier(parent) && (parent.propertyName ?? parent.name) === node) {
-        if (checker.getExportSpecifierLocalTargetSymbol(parent) === target) {
-          used = true;
-          return;
-        }
-      }
-      if (checker.getSymbolAtLocation(node) === target) {
-        used = true;
-        return;
-      }
+    if (ts.isIdentifier(node) && node.text === text && node !== name.compilerNode && canReferenceBinding(node)) {
+      used = true;
+      return;
     }
     node.forEachChild(visit);
   };
   file.compilerNode.forEachChild(visit);
   return used;
+}
+
+/**
+ * False for the positions that can never reference a module-level binding:
+ * property names, object keys, member and declaration names. Everything not
+ * provably one of those counts as a reference — a wrong "reference" keeps an
+ * orphan, a wrong "never" would delete used code.
+ */
+function canReferenceBinding(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  // `box.plate` and `Recipes.Plate`: the right side names a member, never a local.
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false;
+  if (ts.isQualifiedName(parent) && parent.right === node) return false;
+  // `{ plate: 1 }` and `const { plate: dish } = box`: the key names a property.
+  // (A shorthand `{ plate }` is a different node kind, and it does reference.)
+  if (ts.isPropertyAssignment(parent) && parent.name === node) return false;
+  if (ts.isBindingElement(parent) && parent.propertyName === node) return false;
+  if (ts.isJsxAttribute(parent) && parent.name === node) return false;
+  // A declaration's own name introduces a binding rather than reading one.
+  switch (parent.kind) {
+    case ts.SyntaxKind.PropertySignature:
+    case ts.SyntaxKind.PropertyDeclaration:
+    case ts.SyntaxKind.MethodSignature:
+    case ts.SyntaxKind.MethodDeclaration:
+    case ts.SyntaxKind.GetAccessor:
+    case ts.SyntaxKind.SetAccessor:
+    case ts.SyntaxKind.EnumMember:
+    case ts.SyntaxKind.Parameter:
+    case ts.SyntaxKind.VariableDeclaration:
+    case ts.SyntaxKind.BindingElement:
+    case ts.SyntaxKind.TypeParameter:
+    case ts.SyntaxKind.FunctionDeclaration:
+    case ts.SyntaxKind.FunctionExpression:
+    case ts.SyntaxKind.ClassDeclaration:
+    case ts.SyntaxKind.ClassExpression:
+    case ts.SyntaxKind.InterfaceDeclaration:
+    case ts.SyntaxKind.TypeAliasDeclaration:
+    case ts.SyntaxKind.EnumDeclaration:
+    case ts.SyntaxKind.ModuleDeclaration:
+    case ts.SyntaxKind.ImportSpecifier:
+    case ts.SyntaxKind.NamespaceImport:
+    case ts.SyntaxKind.ImportClause:
+      return (parent as ts.NamedDeclaration).name !== node;
+    default:
+      return true;
+  }
 }

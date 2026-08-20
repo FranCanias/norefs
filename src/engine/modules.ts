@@ -15,6 +15,7 @@ import type { DependencyUse } from './dependencies';
 import { analyzeDependencies } from './dependencies';
 import { packageEntryPoints } from './entry-points';
 import { hostFileSystem } from './file-system';
+import { lineAndColumnAt } from './location';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
@@ -197,7 +198,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
           const node = sourceFile?.getDescendantAtPos(offset);
           return node !== undefined && isNodeSuppressed(node);
         },
-        positionAt: (filePath, offset) => project.getSourceFileOrThrow(filePath).getLineAndColumnAtPos(offset),
+        positionAt: (filePath, offset) => lineAndColumnAt(project.getSourceFileOrThrow(filePath), offset),
         configStrings: dir => reader.strings(dir),
       }
     )
@@ -328,7 +329,7 @@ function makeFinding(
   typeKind?: TypeKeyword
 ): ExportFinding {
   const sourceFile = nameNode.getSourceFile();
-  const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
+  const { line, column } = lineAndColumnAt(sourceFile, nameNode.getStart());
   return {
     kind,
     filePath: sourceFile.getFilePath(),

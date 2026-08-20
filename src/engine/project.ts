@@ -56,14 +56,34 @@ export function loadProject(tsConfigFilePaths: string[]): Project {
 }
 
 function perPackageResolution(packages: PackageConfig[]): ResolutionHostFactory {
-  return (moduleResolutionHost, getCompilerOptions) => ({
-    resolveModuleNames: (moduleNames, containingFile) => {
-      const options = optionsForDir(packages, path.dirname(containingFile)) ?? getCompilerOptions();
-      return moduleNames.map(
-        moduleName => ts.resolveModuleName(moduleName, containingFile, options, moduleResolutionHost).resolvedModule
-      );
-    },
-  });
+  return (moduleResolutionHost, getCompilerOptions) => {
+    // Without a cache every specifier re-walks node_modules and re-reads each
+    // package.json on the way up — a quarter of a workspace run's CPU. One
+    // cache per options object, because the options steer the resolution.
+    const caches = new Map<ts.CompilerOptions, ts.ModuleResolutionCache>();
+    const cacheFor = (options: ts.CompilerOptions): ts.ModuleResolutionCache => {
+      let cache = caches.get(options);
+      if (!cache) {
+        const currentDirectory = moduleResolutionHost.getCurrentDirectory?.() ?? process.cwd();
+        // One package.json parse per file, however many packages resolve
+        // through it: the first cache's info cache is handed to the rest.
+        const packageJsonInfoCache = caches.values().next().value?.getPackageJsonInfoCache();
+        cache = ts.createModuleResolutionCache(currentDirectory, fileName => fileName, options, packageJsonInfoCache);
+        caches.set(options, cache);
+      }
+      return cache;
+    };
+    return {
+      resolveModuleNames: (moduleNames, containingFile) => {
+        const options = optionsForDir(packages, path.dirname(containingFile)) ?? getCompilerOptions();
+        const cache = cacheFor(options);
+        return moduleNames.map(
+          moduleName =>
+            ts.resolveModuleName(moduleName, containingFile, options, moduleResolutionHost, cache).resolvedModule
+        );
+      },
+    };
+  };
 }
 
 function readCompilerOptions(tsConfigFilePath: string): ts.CompilerOptions {

@@ -8,7 +8,7 @@ import type { Finding } from '../types';
 import { isFixable, unremovableWrites } from './fix';
 import { editManifest, manifestEdits } from './fix-manifest';
 import { applyVerifiedFixes, findingKey } from './fix-verified';
-import { formatLocation } from './location';
+import { formatLocation, startLine } from './location';
 import { formatPatch } from './report';
 
 interface CampaignOptions {
@@ -62,7 +62,7 @@ export function runFixCampaign(options: CampaignOptions): CampaignResult {
         if (stuck.length === 0) return [];
         const where = stuck
           .map(site => {
-            const at = formatLocation(site.getSourceFile().getFilePath(), site.getStartLineNumber(), cwd);
+            const at = formatLocation(site.getSourceFile().getFilePath(), startLine(site), cwd);
             return site.isKind(SyntaxKind.SpreadAssignment)
               ? `the spread at ${at}, which carries members beyond this one,`
               : `the write at ${at}`;

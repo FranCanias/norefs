@@ -1,5 +1,6 @@
 import type { InterfaceDeclaration, Node, Project, SourceFile, TypeAliasDeclaration, TypeNode } from 'ts-morph';
-import { SyntaxKind } from 'ts-morph';
+import { SyntaxKind, ts } from 'ts-morph';
+import { descendantsOfKind } from '../lookup/descendants';
 import { referenceIndex } from '../lookup/reference-index';
 import { findReferencesAsNodes } from '../lookup/references';
 import type { Finding, MemberFinding, Verdict } from '../types';
@@ -130,14 +131,15 @@ function contractEvidence(
 
 /** Up to three site locations, spelled out; past that, an honest count. Callers never pass an empty list. */
 function siteList(nodes: Node[], cwd: string): string {
-  const locations = nodes.map(node => location(node, cwd));
+  // Only the first three are ever printed, so only those pay for a location.
+  const locations = nodes.slice(0, 3).map(node => location(node, cwd));
   const last = locations[locations.length - 1] ?? '';
-  if (locations.length === 1) return last;
-  if (locations.length <= 3) {
+  if (nodes.length === 1) return last;
+  if (nodes.length <= 3) {
     return `${locations.slice(0, -1).join(', ')} and ${last}`;
   }
-  const rest = locations.length - 3;
-  return `${locations.slice(0, 3).join(', ')} and ${rest} more ${rest === 1 ? 'site' : 'sites'}`;
+  const rest = nodes.length - 3;
+  return `${locations.join(', ')} and ${rest} more ${rest === 1 ? 'site' : 'sites'}`;
 }
 
 /**
@@ -205,7 +207,7 @@ function boundaryClosure(project: Project): Map<Node, string> {
 }
 
 function collectBoundarySeeds(sourceFile: SourceFile, add: (decl: Node, evidence: string) => void): void {
-  for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+  for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
     const callee = call.getExpression();
     const name = callee.isKind(SyntaxKind.PropertyAccessExpression)
       ? callee.getName()
@@ -213,14 +215,16 @@ function collectBoundarySeeds(sourceFile: SourceFile, add: (decl: Node, evidence
         ? callee.getText()
         : undefined;
     if (name === undefined) continue;
-    const label = callee.getText().length <= 30 ? callee.getText() : name;
+    // Most calls match no branch below; the label waits for one that does.
+    let built: string | undefined;
+    const label = (): string => (built ??= callee.getText().length <= 30 ? callee.getText() : name);
 
     // Parse side: the type the result is asserted or annotated to.
     if (PARSE_CALLS.has(name)) {
       const typeNode = resultTypeNode(call);
       if (typeNode) {
         for (const decl of typeDeclarationsIn(typeNode)) {
-          add(decl, `its values come out of \`${label}(…)\``);
+          add(decl, `its values come out of \`${label()}(…)\``);
         }
       }
     }
@@ -229,7 +233,7 @@ function collectBoundarySeeds(sourceFile: SourceFile, add: (decl: Node, evidence
     if (SEND_CALLS.has(name)) {
       for (const argument of call.getArguments()) {
         for (const decl of declarationsOfExpressionType(argument)) {
-          add(decl, `its values go into \`${label}(…)\``);
+          add(decl, `its values go into \`${label()}(…)\``);
         }
       }
     }
@@ -240,13 +244,13 @@ function collectBoundarySeeds(sourceFile: SourceFile, add: (decl: Node, evidence
     if (hasAmbientCallee(call)) {
       for (const argument of call.getArguments()) {
         for (const decl of declarationsOfExpressionType(argument)) {
-          add(decl, `its values go into \`${label}(…)\`, which runs outside this program`);
+          add(decl, `its values go into \`${label()}(…)\`, which runs outside this program`);
         }
       }
       const typeNode = resultTypeNode(call);
       if (typeNode) {
         for (const decl of typeDeclarationsIn(typeNode)) {
-          add(decl, `its values come out of \`${label}(…)\`, which runs outside this program`);
+          add(decl, `its values come out of \`${label()}(…)\`, which runs outside this program`);
         }
       }
       continue;
@@ -257,7 +261,7 @@ function collectBoundarySeeds(sourceFile: SourceFile, add: (decl: Node, evidence
     const typeNode = resultTypeNode(call);
     if (typeNode && returnsUntracedValue(call)) {
       for (const decl of typeDeclarationsIn(typeNode)) {
-        add(decl, `its values come out of \`${label}(…)\`, which the types do not trace`);
+        add(decl, `its values come out of \`${label()}(…)\`, which the types do not trace`);
       }
     }
   }
@@ -265,11 +269,42 @@ function collectBoundarySeeds(sourceFile: SourceFile, add: (decl: Node, evidence
 
 /** True when the callee resolves to a declaration file inside the project. */
 export function hasAmbientCallee(call: Node & { getExpression(): Node }): boolean {
-  const symbol = call.getExpression().getSymbol();
+  const callee = call.getExpression();
+  const name = callee.isKind(SyntaxKind.PropertyAccessExpression)
+    ? callee.getName()
+    : callee.isKind(SyntaxKind.Identifier)
+      ? callee.getText()
+      : undefined;
+  if (name !== undefined && !ambientNames(callee.getProject()).has(name)) return false;
+  const symbol = callee.getSymbol();
   return (symbol?.getDeclarations() ?? []).some(decl => {
     const sourceFile = decl.getSourceFile();
     return sourceFile.isDeclarationFile() && !sourceFile.isInNodeModules();
   });
+}
+
+/**
+ * Every name the project's ambient declaration files mention. Resolving a
+ * callee's symbol types its receiver — for every call chain in the project —
+ * and on most projects no call resolves into a project .d.ts at all. A callee
+ * named like nothing in the ambient files cannot, and skips the checker.
+ * Every identifier and string in those files counts: too wide costs a lookup.
+ */
+const ambientNamesByProject = new WeakMap<Project, ReadonlySet<string>>();
+function ambientNames(project: Project): ReadonlySet<string> {
+  const cached = ambientNamesByProject.get(project);
+  if (cached) return cached;
+  const names = new Set<string>();
+  for (const sourceFile of project.getSourceFiles()) {
+    if (!sourceFile.isDeclarationFile() || sourceFile.isInNodeModules()) continue;
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) || ts.isPrivateIdentifier(node) || ts.isStringLiteralLike(node)) names.add(node.text);
+      node.forEachChild(visit);
+    };
+    sourceFile.compilerNode.forEachChild(visit);
+  }
+  ambientNamesByProject.set(project, names);
+  return names;
 }
 
 /** True when the call's result type is any/unknown, or a promise of them. */

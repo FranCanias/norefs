@@ -1,6 +1,7 @@
 import type { Node, ParameterDeclaration, SourceFile, TypeLiteralNode } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { describeTypeLiteralContext } from '../describe';
+import { descendantsOfKind } from '../lookup/descendants';
 import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { mergeNames } from './constraints';
@@ -14,7 +15,7 @@ import {
 
 export function collectTypeLiteralCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
   const candidates: Candidate[] = [];
-  for (const typeLiteral of sourceFile.getDescendantsOfKind(SyntaxKind.TypeLiteral)) {
+  for (const typeLiteral of descendantsOfKind(sourceFile, SyntaxKind.TypeLiteral)) {
     if (isGenericConstraint(typeLiteral)) continue;
     if (isUnderDynamicallyConsumedType(typeLiteral, ctx)) continue;
 

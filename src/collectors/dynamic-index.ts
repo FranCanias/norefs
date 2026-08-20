@@ -1,5 +1,6 @@
 import type { Node, Project, Type } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { forEachDescendantOfKinds } from '../lookup/descendants';
 
 /**
  * Project-wide index of types whose keys are consumed dynamically. When a value
@@ -16,6 +17,13 @@ export interface DynamicConsumptionIndex {
 
 const OBJECT_KEY_CONSUMERS = new Set(['keys', 'values', 'entries', 'getOwnPropertyNames', 'assign']);
 
+/** The only kinds the walk below acts on; one raw pass finds them all. */
+const CONSUMING_KINDS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.CallExpression,
+  SyntaxKind.ForInStatement,
+  SyntaxKind.BinaryExpression,
+]);
+
 /** How far into a union, intersection, or array the walk unwraps a type. */
 const MAX_TYPE_DEPTH = 3;
 
@@ -25,7 +33,7 @@ export function buildDynamicConsumptionIndex(project: Project): DynamicConsumpti
 
   for (const sourceFile of project.getSourceFiles()) {
     if (sourceFile.isDeclarationFile()) continue;
-    sourceFile.forEachDescendant(node => {
+    forEachDescendantOfKinds(sourceFile, CONSUMING_KINDS, node => {
       if (node.isKind(SyntaxKind.CallExpression)) {
         if (isKeyConsumingCall(node)) {
           for (const arg of node.getArguments()) {

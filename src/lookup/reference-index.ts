@@ -25,12 +25,12 @@ import { ts } from 'ts-morph';
  * It is the longest file here, so a map of it. Build runs in four passes, and
  * the banners below mark them in that order:
  *
- * 1. **indexing** — one walk per file collects every identifier, records the
- *    names the project declares, and queues the contextual sites. Later passes
- *    over those queues fill the buckets: plain occurrences first, then
- *    contextual ones, then spreads. Nothing resolves during the walk, because
- *    the name sets have to be complete first — and they are what lets most
- *    occurrences be skipped rather than resolved.
+ * 1. **indexing** — one walk per file collects every identifier by its text
+ *    and records the rename links between texts. Only the spreads resolve
+ *    right away; everything else waits. A name resolves — plain occurrences
+ *    and contextual sites both — when the first query targets it, and a name
+ *    no query ever targets — half the occurrences of a big project — never
+ *    resolves at all.
  * 2. **declared contextual types** — the answer to "which member does this
  *    object-literal property write?", read off the callee's declared
  *    signatures instead of asked of the checker. This is the pass that keeps
@@ -75,22 +75,33 @@ class ReferenceIndex {
    */
   private readonly memberNames = new Set<string>();
   /**
-   * Every name a query of this index can target. Each symbol an occurrence
-   * is filed under shares the occurrence's name — an import alias is itself
-   * a declared name — so an occurrence named like nothing in this set can
-   * never be looked up, and is not worth resolving to a symbol at all.
-   *
-   * With members, collectors query local variables and functions too, so the
-   * set is every declared name in the project. Without members, only the
-   * module analysis queries the index — exported declarations, import and
-   * export bindings, namespaces — and the set shrinks to the names those
-   * statements touch.
+   * Every plain occurrence, grouped by its text and unresolved. Resolving an
+   * occurrence types its receiver — for a property access, most of what a run
+   * costs — and a name no query ever targets never earns that. `filedNames`
+   * marks the texts already resolved into the buckets.
    */
-  private readonly queryableNames = new Set<string>();
-  /** Contextual occurrences, held until every file's member names are in. */
-  private pending: ts.Node[] = [];
-  /** Spreads inside object literals, held with the contextual occurrences. */
+  private readonly occurrencesByText = new Map<string, ts.Node[]>();
+  private readonly filedNames = new Set<string>();
+  /**
+   * The renames between texts: `import { a as b }` links `a` and `b`, a
+   * default import links its name to `default`, and so on. Every symbol an
+   * occurrence is filed under shares the occurrence's text except across such
+   * a rename — and every rename is a piece of syntax the collect walk sees —
+   * so a query for a name resolves its whole link closure and nothing else.
+   */
+  private readonly linkedNames = new Map<string, string[]>();
+  /**
+   * Contextual occurrences by text, as lazy as the plain ones: working one
+   * out types its whole container, and a container full of names no query
+   * ever targets — a fixture literal, a third-party config — never gets
+   * typed. A site resolves with its text's first query, alongside the plain
+   * occurrences of that text.
+   */
+  private readonly pendingByText = new Map<string, ts.Node[]>();
+  /** Spreads inside object literals; few enough to resolve up front. */
   private pendingSpreads: ts.SpreadAssignment[] = [];
+  /** Contextual types per container, shared by the spread pass and every lazy site. */
+  private readonly contextualTypes = new Map<ts.Node, ts.Type[]>();
   /**
    * Write sites — object-literal properties, computed keys, spread sources,
    * JSX attributes — this index could not attribute to any member: the
@@ -117,20 +128,11 @@ class ReferenceIndex {
     const program = project.getProgram().compilerObject;
     this.checker = program.getTypeChecker();
     this.members = options.members;
-    const occurrences: ts.Node[] = [];
     for (const sourceFile of project.getSourceFiles()) {
       this.wrappers.set(sourceFile.compilerNode, sourceFile);
-      this.collectFile(sourceFile.compilerNode, occurrences);
+      this.collectFile(sourceFile.compilerNode);
     }
-    for (const node of occurrences) {
-      if (this.queryableNames.has(propertyName(node))) this.indexOccurrence(node);
-    }
-    const contextualTypes = new Map<ts.Node, ts.Type[]>();
-    for (const node of this.pending) {
-      if (this.memberNames.has(propertyName(node))) this.indexContextual(node, contextualTypes);
-    }
-    this.pending = [];
-    for (const spread of this.pendingSpreads) this.indexSpread(spread, contextualTypes);
+    for (const spread of this.pendingSpreads) this.indexSpread(spread, this.contextualTypes);
     this.pendingSpreads = [];
   }
 
@@ -141,7 +143,7 @@ class ReferenceIndex {
     if (!symbol) return [];
 
     const found = new Set<ts.Node>();
-    for (const related of this.relatedSymbols(symbol)) {
+    for (const related of this.relatedFiled(symbol, propertyName(compilerNode))) {
       for (const node of this.buckets.get(related) ?? []) {
         if (node !== compilerNode) found.add(node);
       }
@@ -176,40 +178,89 @@ class ReferenceIndex {
   // ---------------------------------------------------------------- indexing
 
   /**
-   * One walk over a file: every occurrence goes into the list, every name in
-   * a declaring position goes into the name sets, and every contextual site
-   * waits in the pending queue. No symbol is resolved yet — resolution runs
-   * after the walk, when the name sets are complete enough to skip
-   * occurrences nothing will ever ask about.
+   * One walk over a file: every occurrence goes into its text's group, every
+   * rename goes into the link table, and every contextual site waits in the
+   * pending queue. No symbol is resolved yet — a plain occurrence resolves
+   * when a query first targets its text, or never.
    */
-  private collectFile(sourceFile: ts.SourceFile, occurrences: ts.Node[]): void {
-    // Inside an import, an export declaration, or an export assignment,
-    // every name takes part in the module graph the queries walk.
-    const visit = (node: ts.Node, moduleStatement: boolean): void => {
+  private collectFile(sourceFile: ts.SourceFile): void {
+    const visit = (node: ts.Node): void => {
       if (ts.isIdentifier(node) || ts.isPrivateIdentifier(node) || ts.isStringLiteralLike(node)) {
-        occurrences.push(node);
+        const text = propertyName(node);
+        const group = this.occurrencesByText.get(text);
+        if (group) group.push(node);
+        else this.occurrencesByText.set(text, [node]);
         const parent = node.parent as ts.Node & { name?: ts.Node };
         if (this.members) {
-          if (parent.name === node) {
-            const name = propertyName(node);
-            this.queryableNames.add(name);
-            if (isMemberDeclarationName(node)) this.memberNames.add(name);
+          if (parent.name === node && isMemberDeclarationName(node)) this.memberNames.add(text);
+          if (isContextualSite(node)) {
+            const sites = this.pendingByText.get(text);
+            if (sites) sites.push(node);
+            else this.pendingByText.set(text, [node]);
           }
-          if (isContextualSite(node)) this.pending.push(node);
-        } else if (moduleStatement || (parent.name === node && isExportedOrNamespaceName(parent))) {
-          this.queryableNames.add(propertyName(node));
+        }
+        // A default-modified declaration is reached through `default`.
+        if (
+          parent.name === node &&
+          (ts.getCombinedModifierFlags(parent as ts.Declaration) & ts.ModifierFlags.Default) !== 0
+        ) {
+          this.linkNames(text, 'default');
         }
       }
+      this.collectRename(node);
       if (this.members && ts.isSpreadAssignment(node)) this.pendingSpreads.push(node);
-      const inModuleStatement =
-        moduleStatement ||
-        ts.isImportDeclaration(node) ||
-        ts.isExportDeclaration(node) ||
-        ts.isExportAssignment(node) ||
-        ts.isImportEqualsDeclaration(node);
-      node.forEachChild(child => visit(child, inModuleStatement));
+      node.forEachChild(visit);
     };
-    sourceFile.forEachChild(child => visit(child, false));
+    sourceFile.forEachChild(visit);
+  }
+
+  /** The rename this node performs, if it is one of the shapes that rename. */
+  private collectRename(node: ts.Node): void {
+    if (ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) {
+      if (node.propertyName) this.linkNames(propertyName(node.propertyName), propertyName(node.name));
+    } else if (ts.isImportClause(node)) {
+      // A default import names the module's `default` export.
+      if (node.name) this.linkNames(node.name.text, 'default');
+    } else if (ts.isExportAssignment(node)) {
+      if (!node.isExportEquals && ts.isIdentifier(node.expression)) this.linkNames(node.expression.text, 'default');
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isEntityName(node.moduleReference)) {
+      const target = ts.isQualifiedName(node.moduleReference) ? node.moduleReference.right : node.moduleReference;
+      this.linkNames(propertyName(node.name), propertyName(target));
+    }
+  }
+
+  private linkNames(a: string, b: string): void {
+    if (a === b) return;
+    const forward = this.linkedNames.get(a);
+    if (forward) {
+      if (!forward.includes(b)) forward.push(b);
+    } else this.linkedNames.set(a, [b]);
+    const backward = this.linkedNames.get(b);
+    if (backward) {
+      if (!backward.includes(a)) backward.push(a);
+    } else this.linkedNames.set(b, [a]);
+  }
+
+  /**
+   * Resolve every occurrence a query for this name may need: the name's own
+   * group — contextual sites included, when the name is a declared member —
+   * and every name a rename connects it to, transitively, so an alias chain
+   * re-exported under new names still lands in the same buckets.
+   */
+  private ensureFiled(name: string): void {
+    if (this.filedNames.has(name)) return;
+    const queue = [name];
+    for (let current = queue.pop(); current !== undefined; current = queue.pop()) {
+      if (this.filedNames.has(current)) continue;
+      this.filedNames.add(current);
+      for (const node of this.occurrencesByText.get(current) ?? []) this.indexOccurrence(node);
+      this.occurrencesByText.delete(current);
+      if (this.memberNames.has(current)) {
+        for (const site of this.pendingByText.get(current) ?? []) this.indexContextual(site, this.contextualTypes);
+        this.pendingByText.delete(current);
+      }
+      queue.push(...(this.linkedNames.get(current) ?? []));
+    }
   }
 
   private indexOccurrence(node: ts.Node): void {
@@ -364,6 +415,8 @@ class ReferenceIndex {
    * verdict rests on.
    */
   unattributedWriteSites(name: string, member?: Node): WriteSites {
+    // The write sites of this name record when its sites resolve.
+    this.ensureFiled(name);
     const entries = this.unattributedWrites.get(name) ?? [];
     // The common case: no write of the name exists, and no symbol work is owed.
     if (entries.length === 0) return { typed: [], accounted: [], unverified: [] };
@@ -474,7 +527,7 @@ class ReferenceIndex {
    * is whether the value is consumed, not whether the name exists elsewhere.
    */
   private hasReadsBesides(property: ts.Symbol, site: ts.Node): boolean {
-    for (const related of this.relatedSymbols(property)) {
+    for (const related of this.relatedFiled(property, property.name)) {
       for (const node of this.buckets.get(related) ?? []) {
         if (node !== site && isReadOccurrence(node)) return true;
       }
@@ -615,7 +668,7 @@ class ReferenceIndex {
     if (!symbol) return NO_DESTINATIONS;
     let destinations = NOTHING_SEEN;
     const seen = new Set<ts.Node>([factoryName]);
-    for (const related of this.relatedSymbols(symbol)) {
+    for (const related of this.relatedFiled(symbol, factoryName.text)) {
       for (const ref of this.buckets.get(related) ?? []) {
         if (seen.has(ref)) continue;
         seen.add(ref);
@@ -645,7 +698,7 @@ class ReferenceIndex {
     if (!symbol) return NO_DESTINATIONS;
     let destinations = NOTHING_SEEN;
     const seen = new Set<ts.Node>([nameNode]);
-    for (const related of this.relatedSymbols(symbol)) {
+    for (const related of this.relatedFiled(symbol, nameNode.text)) {
       for (const ref of this.buckets.get(related) ?? []) {
         if (seen.has(ref)) continue;
         seen.add(ref);
@@ -947,6 +1000,19 @@ class ReferenceIndex {
   // ----------------------------------------------------------- symbol widening
 
   /**
+   * The related symbols with their buckets guaranteed filled: every bucket
+   * read goes through here. The query's own text covers the rename closure;
+   * each related symbol's name is insurance against a rename the collect walk
+   * has no shape for. Resolving a name no occurrence carries costs nothing.
+   */
+  private relatedFiled(symbol: ts.Symbol, text: string): ts.Symbol[] {
+    this.ensureFiled(text);
+    const related = this.relatedSymbols(symbol);
+    for (const each of related) this.ensureFiled(each.name);
+    return related;
+  }
+
+  /**
    * Every symbol a declaration can be reached through: past its import
    * aliases, into the constituents of a union member, and across the base
    * types that declare a member of the same name.
@@ -1158,21 +1224,6 @@ interface WrappingSourceFile {
 function propertyName(name: ts.Node): string {
   // Cooked text, the form symbol names take — not raw source with escapes.
   return (name as Partial<ts.Identifier>).text ?? name.getText();
-}
-
-/**
- * True when this declaration's name can be a query target without members:
- * an export-modified declaration (the modifier reaches through a variable
- * statement) or a namespace, whose exported members the module analysis
- * checks one by one.
- */
-function isExportedOrNamespaceName(declaration: ts.Node): boolean {
-  if (ts.isModuleDeclaration(declaration)) return true;
-  return (
-    (ts.getCombinedModifierFlags(declaration as ts.Declaration) &
-      (ts.ModifierFlags.Export | ts.ModifierFlags.Default)) !==
-    0
-  );
 }
 
 /** The step an array literal adds to a contextual walk: read an element type. */

@@ -6,6 +6,7 @@ import { buildReferenceIndex } from '../lookup/reference-index';
 import { findReferencesAsNodes } from '../lookup/references';
 import type { EmptyTypeFinding, Finding, FindingKind, MemberFinding } from '../types';
 import { memberUsage } from './check';
+import { lineAndColumnAt } from './location';
 import type { ModuleOptions } from './modules';
 import { analyzeModules } from './modules';
 import { annotateStrandedChannels } from './strands';
@@ -25,7 +26,7 @@ interface AnalyzeOptions extends ModuleOptions {
 }
 
 /** True when the requested kinds need the member analysis. */
-function needsMembers(kinds: FindingKind[] | undefined): boolean {
+export function needsMembers(kinds: FindingKind[] | undefined): boolean {
   return (
     kinds === undefined ||
     kinds.length === 0 ||
@@ -64,7 +65,7 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     const usage = options.production && found === 'test-only' ? 'unused' : found;
     if (usage === 'used') continue;
     const sourceFile = member.getSourceFile();
-    const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
+    const { line, column } = lineAndColumnAt(sourceFile, nameNode.getStart());
     // Only truly unused members feed the empty-type fold: a test-only member
     // needs its tests deleted with it, which is not an emptied type's story.
     if (usage === 'unused') reportedMembers.add(member);
@@ -143,7 +144,7 @@ function emptyReturnedObjectFindings(reportedMembers: Set<Node>): EmptyTypeFindi
     const described = describeFunctionName(fn);
     if (described.anonymous) continue;
     const sourceFile = literal.getSourceFile();
-    const { line, column } = sourceFile.getLineAndColumnAtPos(literal.getStart());
+    const { line, column } = lineAndColumnAt(sourceFile, literal.getStart());
     folds.push({
       kind: 'empty-type',
       filePath: sourceFile.getFilePath(),
@@ -183,7 +184,7 @@ function emptyOwnerFindings(reportedMembers: Set<Node>): EmptyTypeFinding[] {
     if (isNodeSuppressed(nameNode)) continue;
     if (!findReferencesAsNodes(nameNode).some(ref => ref !== nameNode)) continue;
     const sourceFile = owner.getSourceFile();
-    const { line, column } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
+    const { line, column } = lineAndColumnAt(sourceFile, nameNode.getStart());
     folds.push({
       kind: 'empty-type',
       filePath: sourceFile.getFilePath(),

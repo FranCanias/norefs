@@ -1,8 +1,9 @@
 import type { CallExpression, Node, Project, ts } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { descendantsOfKind } from '../lookup/descendants';
 import { isInside } from '../lookup/reference-index';
 import type { Boundary, ExportFinding, Finding, MemberFinding } from '../types';
-import { formatLocation, location } from './location';
+import { formatLocation, lineAndColumnAt, location } from './location';
 import { hasAmbientCallee } from './verdicts';
 
 /**
@@ -70,7 +71,7 @@ export function annotateStrandedChannels(
   // looks at it.
   for (const sourceFile of project.getSourceFiles()) {
     if (sourceFile.isDeclarationFile()) continue;
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
       const first = call.getArguments()[0];
       const channel = channelOf(first);
       if (first === undefined || channel === undefined) continue;
@@ -223,7 +224,7 @@ function deletesDeclaration(finding: Finding): boolean {
  */
 function strandedFinding(far: Node, channel: string, sending: Sender[], cwd: string): Finding {
   const sourceFile = far.getSourceFile();
-  const { line, column } = sourceFile.getLineAndColumnAtPos(far.getStart());
+  const { line, column } = lineAndColumnAt(sourceFile, far.getStart());
   const named = sending
     .slice(0, 3)
     .map(f => `\`${f.name}\` at ${formatLocation(f.filePath, f.line, cwd)}`)

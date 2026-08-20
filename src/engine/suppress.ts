@@ -1,5 +1,6 @@
 import type { Node, SourceFile } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { lineAndColumnAt } from './location';
 import { hasBlockMark, hasFileMark, hasLineMark } from './marks';
 
 const lineCache = new WeakMap<SourceFile, { text: string; lines: string[]; blocks: boolean }>();
@@ -17,7 +18,7 @@ const lineCache = new WeakMap<SourceFile, { text: string; lines: string[]; block
  */
 export function isNodeSuppressed(nameNode: Node): boolean {
   const sourceFile = nameNode.getSourceFile();
-  const { line } = sourceFile.getLineAndColumnAtPos(nameNode.getStart());
+  const { line } = lineAndColumnAt(sourceFile, nameNode.getStart());
   const { lines, blocks } = linesOf(sourceFile);
   const above = lines[line - 2] ?? '';
   // The line above only counts when it is a standalone comment; a trailing
@@ -36,7 +37,7 @@ export function isNodeSuppressed(nameNode: Node): boolean {
  */
 function isInsideIgnoredBlock(node: Node, sourceFile: SourceFile, lines: string[]): boolean {
   for (let owner: Node | undefined = node; owner && !owner.isKind(SyntaxKind.SourceFile); owner = owner.getParent()) {
-    const { line } = sourceFile.getLineAndColumnAtPos(owner.getStart());
+    const { line } = lineAndColumnAt(sourceFile, owner.getStart());
     if (hasBlockMark(lines[line - 1] ?? '')) return true;
     if (owner.getLeadingCommentRanges().some(range => hasBlockMark(range.getText()))) return true;
   }

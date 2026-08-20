@@ -1,5 +1,6 @@
 import type { Node, Project, SourceFile, Type, TypeLiteralNode } from 'ts-morph';
 import { SymbolFlags, SyntaxKind } from 'ts-morph';
+import { forEachDescendantOfKinds } from '../lookup/descendants';
 
 /**
  * A member can have zero references and still be load-bearing: when its owner
@@ -25,8 +26,7 @@ export function buildConstraintIndex(project: Project): ConstraintIndex {
   for (const sourceFile of project.getSourceFiles()) {
     if (sourceFile.isDeclarationFile()) continue;
     collectHeritageConstraints(sourceFile, index);
-    collectPredicateConstraints(sourceFile, index);
-    collectStructuralMatchConstraints(sourceFile, index);
+    collectWalkConstraints(sourceFile, index);
   }
   return index;
 }
@@ -69,13 +69,15 @@ function constrainOverride(member: Node, name: string, heritage: Type[], index: 
   }
 }
 
-function collectPredicateConstraints(sourceFile: SourceFile, index: ConstraintIndex): void {
-  for (const predicate of sourceFile.getDescendantsOfKind(SyntaxKind.TypePredicate)) {
-    const typeNode = predicate.getTypeNode();
-    const narrowed = predicateParameterType(predicate);
-    if (typeNode && narrowed) constrain(typeNode.getType(), narrowed, index, 0);
-  }
-}
+/** Every node kind the merged walk below dispatches on: one pass finds them all. */
+const WALKED_KINDS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.TypePredicate,
+  SyntaxKind.ConditionalType,
+  SyntaxKind.TypeReference,
+  SyntaxKind.CallExpression,
+  SyntaxKind.NewExpression,
+  SyntaxKind.ExpressionWithTypeArguments,
+]);
 
 /**
  * Type-level reads. Some properties are never touched at runtime and are still
@@ -96,17 +98,21 @@ function collectPredicateConstraints(sourceFile: SourceFile, index: ConstraintIn
  * — passes the value itself into the call, and the escape check already stops
  * tracking members of a value that leaves whole.
  */
-function collectStructuralMatchConstraints(sourceFile: SourceFile, index: ConstraintIndex): void {
-  for (const conditional of sourceFile.getDescendantsOfKind(SyntaxKind.ConditionalType)) {
-    matchStructurally(conditional.getCheckType(), conditional.getExtendsType(), index);
-  }
-  for (const predicate of sourceFile.getDescendantsOfKind(SyntaxKind.TypePredicate)) {
-    const asserted = predicate.getTypeNode();
-    const narrowed = predicateParameterType(predicate);
-    if (asserted && narrowed) creditLiterals(asserted, narrowed, index);
-  }
-
-  sourceFile.forEachDescendant(node => {
+function collectWalkConstraints(sourceFile: SourceFile, index: ConstraintIndex): void {
+  forEachDescendantOfKinds(sourceFile, WALKED_KINDS, node => {
+    if (node.isKind(SyntaxKind.TypePredicate)) {
+      const asserted = node.getTypeNode();
+      const narrowed = predicateParameterType(node);
+      if (asserted && narrowed) {
+        constrain(asserted.getType(), narrowed, index, 0);
+        creditLiterals(asserted, narrowed, index);
+      }
+      return;
+    }
+    if (node.isKind(SyntaxKind.ConditionalType)) {
+      matchStructurally(node.getCheckType(), node.getExtendsType(), index);
+      return;
+    }
     if (node.isKind(SyntaxKind.TypeReference)) {
       const pair = conditionalAliasArguments(node);
       if (pair) matchStructurally(pair[0], pair[1], index);

@@ -1,5 +1,6 @@
 import type { Node } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { startLine } from './engine/location';
 
 // Naming, not policy. It decides nothing about what is dead, which is why both
 // engine/ and collectors/ can read it without either layer sitting on the other.
@@ -82,5 +83,5 @@ export function describeTypeLiteralContext(node: Node): DescribedContext {
 
 function location(node: Node): string {
   const sf = node.getSourceFile();
-  return `${sf.getBaseName()}:${node.getStartLineNumber()}`;
+  return `${sf.getBaseName()}:${startLine(node)}`;
 }
