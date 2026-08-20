@@ -7,7 +7,7 @@ versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 A user-visible change lands with its entry here, under **Unreleased**. A release
 renames the section and dates it — the writing is already done.
 
-## Unreleased
+## [0.10.0](https://github.com/FranCanias/norefs/releases/tag/v0.10.0) — 2026-08-20
 
 A performance pass, checked the honest way: every change ran A/B against
 0.9.0 on real repositories, and the findings — and the fix patches — came out
