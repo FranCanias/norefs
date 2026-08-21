@@ -116,6 +116,10 @@ One behaviour per test, and the assertion names the behaviour. Beyond that:
   refactor from quietly promising more than the analysis proves.
 - **A new check needs a corpus note.** `docs/corpus.md` is the regression log:
   re-run the repos, compare the counts, explain every jump.
+- **A claim about speed needs a command.** Real repositories go in
+  `docs/speed.md`; a claim about one shape — a relay, a computed key — goes
+  through `bench/synthetic.mjs`, which builds a project made of nothing else.
+  Cite the shape by name so a reader can run what you ran.
 
 The whole suite is about 20 seconds of wall clock, most of it spawning the
 binary. While you work on the analysis, run the part that answers you fastest:

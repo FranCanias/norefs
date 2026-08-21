@@ -12,8 +12,9 @@ renames the section and dates it — the writing is already done.
 Two runs against a 3,700-file monorepo (drizzle-orm), each followed by a hand
 audit of every finding, drove this round. 41% of the first report was noise;
 the second audit found what the fixes had uncovered underneath. The same tree
-now reports 460 findings against the first run's 808, no true positive was
-lost, and a quarter of the verdicts that used to hedge now say `dead` outright.
+now reports 448 findings against the first run's 808, no true positive was
+lost, and the hedged `write-only (unverified name match)` verdicts went from 41
+to 15. [Corpus validation](docs/corpus.md) has the run and the counts.
 
 **A module a consumer takes whole is exempt, member and all.** `import * as
 schema from './schema'` followed by `orm(db, { schema })` hands the whole
@@ -153,9 +154,10 @@ a verdict in a baseline.
 
 The check does work it used to decline, so a codebase full of multi-return
 producers has more to analyze. Measured against the same volume of
-single-return literals, the new path is slightly faster per member (17.4 s vs
-20.1 s for 3,600 findings on a synthetic project) — the cost is the work, not
-the reading of it. On real repositories the wall clock did not move.
+single-return literals, the new path is slightly cheaper per member — 2.07 ms
+against 2.33 ms, on the two shapes `bench/synthetic.mjs` builds for exactly
+this comparison. The cost is the work, not the reading of it. On real
+repositories the wall clock did not move.
 
 **Object literals are read to their full depth.** The const-object and
 returned-object checks stopped at the top level: `const cfg = { oven: { tray:
@@ -264,7 +266,6 @@ are new members reaching the report through the work above, and the twin they
 name is real. The reading to have is the verdict's own: the finding is the
 duplication, not the member.
 
-
 **A key the source computes credits the members it can reach.**
 `manifest[section]` names a member without writing it down, and until now the
 reference check saw nothing there. The key's type says how much is in reach: a
@@ -273,8 +274,8 @@ of the type answerable, the way a `'name' in v` probe does; a string the type
 cannot pin down reaches every member, and the whole type goes quiet. This was
 a false-positive source on its own — it is what the new verdict ran into
 first, dogfooding norefs over norefs. Indexing costs one type lookup per
-computed key: unmeasurable on real code, about 10% on a synthetic project that
-is nothing but array indexing.
+computed key: unmeasurable on real code, and 0.69 s to 0.72 s on
+`bench/synthetic.mjs computed-key`, a project that is nothing but indexing.
 
 **A sink reached through a helper counts as a sink.** `Object.keys(recipe)`
 had always silenced `Recipe` — its keys are read without naming one, so its
@@ -294,8 +295,9 @@ calls itself. Only the parameter carrying the value relays; the ones beside it
 answer for their members as before.
 
 This costs nothing and often saves: a type it silences drops out of the member
-check entirely. On a synthetic project built to be all relays, the run went
-from 1.6 s to 0.5 s, and from 3000 false positives to none.
+check entirely. On `bench/synthetic.mjs relay`, a project built to be nothing
+else, the run went from 2.07 s to 0.36 s and from 3,300 false positives to
+none — the 300 findings left are the dead exports that were always there.
 
 **A `'name' in box` probe no longer kills the key it names.** The returned-object
 check counted every member of `makeBox()` against the reference index alone,

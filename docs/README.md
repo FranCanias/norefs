@@ -9,7 +9,7 @@ Eight pages, one topic each:
 - [Fixing automatically](fixing.md) — what `--fix` removes, verifies, refuses, and points out
 - [Flags](flags.md) — what every flag and combination does to a working tree, and the exit codes
 - [Limitations](limitations.md) — what counts as usage, when norefs stays silent, the remaining blind spots
-- [Speed](speed.md) — fast runs with `--only`, and watch mode
+- [Speed](speed.md) — fast runs with `--only`, the synthetic shapes, and watch mode
 
 The [README](https://github.com/FranCanias/norefs#readme) is the front door,
 and the [changelog](../CHANGELOG.md) records what each release changed and why.

@@ -151,6 +151,64 @@ The 64 test-only findings are the verdict earning its keep at scale: production
 code with references, all of them in tests. Nothing in that bucket is auto-fixed,
 because deleting it means deleting its tests.
 
+## The pre-0.11.0 re-run (2026-08-21, pre-0.11.0)
+
+This release was driven by two hand audits of one monorepo, so the monorepo is
+the claim it has to answer. Both repos below were run twice against the same
+clone, once per version — the only comparison that isolates a release.
+
+### drizzle-orm (612d1cc8, nine workspace packages, 939 TypeScript files)
+
+**808 findings before, 448 after.** No configuration, no `--only`: the run
+reads the packages out of `pnpm-workspace.yaml` and needs
+`NODE_OPTIONS=--max-old-space-size=8192`, which norefs asks for by name before
+it starts.
+
+| verdict | 0.10.0 | now |
+| --- | --- | --- |
+| dead | 210 | 167 |
+| over-exported | 224 | 206 |
+| test-only | 233 | 1 |
+| write-only | 41 | 25 |
+| shadowed | 7 | 33 |
+| module-level (no verdict) | 93 | 16 |
+
+Every jump has an entry in the [changelog](../CHANGELOG.md) behind it. The
+`test-only` column is the largest and the plainest: 232 of those findings were
+fixtures under `tests/` reported for helping tests, which is what a fixture
+under `tests/` is for. The `ns-export` kind fell from 250 to 4 — a namespace
+import handed to `orm(db, { schema })` is a module taken whole, and reporting
+its exports was advice to delete the thing the consumer iterates.
+
+`shadowed` is the one column that grew, and it grew for an honest reason:
+members reaching the report for the first time through the write-only work,
+in sibling dialect files that really are copies of each other. `pg-core`,
+`gel-core`, `mysql-core` and `singlestore-core` each declare the same index
+config. The verdict's own reading applies — the finding is the duplication.
+
+Nothing 0.10.0 reported and hand-verified was lost. The 27 findings this
+release's last fix withheld are all new in this release: literals handed to a
+callee whose body the run does not hold, where a write proves nothing.
+
+### apollo-client (54084bc, tsconfig.json)
+
+**141 findings before, 125 after**, on the same clone the [speed](speed.md)
+table cites. Re-run because this release changes what a write proves, and
+apollo-client is the corpus's largest repository.
+
+The interesting half is the seven `write-only` findings the release added and
+then took back. Two were provably wrong, and both are the reason the rule
+exists. `EnterLeaveVisitor.enter` is written twice and handed to graphql's
+`visit()`, which calls it on every node — the member is `readonly enter?`, so
+`--fix-unsafe` would have deleted it with no type error and broken fragment
+removal in silence. `SimpleCaseData.greeting` cited 138 writes, every one of
+them an `expect(…).toStrictEqualTyped({ data: { greeting: "Hello" } })` — the
+member is the thing under test. Both now keep the answer they had before.
+
+`promiseWithResolvers.reject` is the finding that survived, and it is real:
+every consumer destructures `promise` and `resolve`, and nothing in the
+repository ever rejects.
+
 ## The exhibit repository (since 0.5.0)
 
 The five reviews of this tool are themselves a corpus. Every exhibit they
@@ -171,7 +229,8 @@ first to run a release's features.
   single-digit seconds — except the 541-file one, at 12.4.
 - **Precision**: no standing false "dead" verdict from the reference analysis on
   any repo. apollo-client produced one — a dynamic import destructured on the
-  spot — and it is fixed rather than documented. Boundary rules (public API,
+  spot — and it is fixed rather than documented. Two false `write-only`
+  verdicts followed, on the same repo, and went the same way. Boundary rules (public API,
   harness files, workspace manifests) decide what is in scope; inside that
   scope, the spot-checked findings have held, and the one near-miss sat behind
   the unresolved-import warning the report itself led with.

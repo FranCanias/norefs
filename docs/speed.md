@@ -24,13 +24,13 @@ On a 541-file library:
 
 | run | time | memory |
 | --- | --- | --- |
-| everything | 8.4 s | 1.4 GB |
+| everything | 8.1 s | 1.4 GB |
 | everything but members | 3.7 s | 1.0 GB |
 | files and dependencies only | 0.33 s | 192 MB |
 
-Re-run it yourself. The repository is Apollo Client at commit `54084bc`, cloned
-on 2026-08-17, and the numbers are the best of three runs on an Apple M3 with
-8 GB, Node 23.4.0:
+Re-run it yourself. The repository is Apollo Client at commit `54084bc`, and
+the numbers are the best of three runs on an Apple M3 with 8 GB, Node 23.4.0,
+last measured 2026-08-21:
 
 ```sh
 git clone --depth 1 https://github.com/apollographql/apollo-client
@@ -70,6 +70,28 @@ the same way — which members `TableProps<T>` declares does not depend on what
 use it. Only the cases where instantiation can reshape a type's members — a
 naked type parameter, a conditional type, a mapped type, a spread, a class
 component — still pay the checker's price.
+
+## Synthetic shapes
+
+Some claims are about a shape, not a repository: what a relay costs, what
+reading every branch of a `return` costs, what a computed key costs. A real
+repository has too little of any one of them to measure, so
+`bench/synthetic.mjs` builds a project that is nothing else:
+
+```sh
+node bench/synthetic.mjs relay /tmp/bench-relay 300
+norefs -p /tmp/bench-relay/tsconfig.json
+```
+
+Four shapes: `single-return` and `multi-return` declare the same keys and the
+same reads either side of one `return` or three, so the pair prices reading the
+shape rather than the work it makes; `computed-key` is nothing but `rows[i]`
+indexing; `relay` sends every type to `Object.keys` through a helper. The
+[changelog](../CHANGELOG.md) cites them by name, and each one is a command.
+
+They are a stopwatch, not a corpus. What a shape costs when a project is made
+of nothing else is the ceiling, and [corpus validation](corpus.md) is where
+real repositories answer.
 
 ## Watch mode
 
