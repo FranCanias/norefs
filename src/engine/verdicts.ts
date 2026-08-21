@@ -3,7 +3,7 @@ import { SyntaxKind, ts } from 'ts-morph';
 import { writtenProperty } from '../collectors/object-literals';
 import { producerOf, returnedObjectLiterals } from '../collectors/returned-objects';
 import { descendantsOfKind } from '../lookup/descendants';
-import { referenceIndex } from '../lookup/reference-index';
+import { isWriteReference, referenceIndex } from '../lookup/reference-index';
 import { findReferencesAsNodes } from '../lookup/references';
 import type { Finding, MemberFinding, Verdict } from '../types';
 import { location } from './location';
@@ -103,18 +103,14 @@ export function assignVerdicts(
       finding.writeSites = sites.typed;
       continue;
     }
-    if (sites.unverified.length > 0) {
+    if (sites.unverified.length > 0 && sites.unverified.length <= NAME_MATCH_LIMIT) {
       finding.verdict = 'write-only';
       const one = sites.unverified.length === 1;
       finding.evidence = `\`${finding.name}\` is assigned at ${siteList(sites.unverified, cwd)} — ${one ? 'an unverified name match' : 'unverified name matches'} the analysis could not type either way`;
       continue;
     }
     finding.verdict = 'dead';
-    const writes =
-      sites.accounted.length === 0
-        ? 'no untracked write of the name'
-        : `every write of the name feeds another type (${siteList(sites.accounted, cwd)})`;
-    finding.evidence = `no references anywhere, no twin type reads \`${finding.name}\`, no serialization boundary, ${writes}`;
+    finding.evidence = `no references anywhere, no twin type reads \`${finding.name}\`, no serialization boundary, ${writeNote(finding.name, sites, cwd)}`;
   }
 
   assignEmptyTypeVerdicts(findings);
@@ -175,6 +171,26 @@ function contractEvidence(
 }
 
 /** Up to three site locations, spelled out; past that, an honest count. Callers never pass an empty list. */
+/**
+ * How many unverified name matches still make a lead.
+ *
+ * A name match is not a claim, it is a place for a person to look — and a list
+ * of two thousand places is not a lead, it is the news that `name` is a common
+ * word. Somewhere above a handful the count stops describing this member and
+ * starts describing the vocabulary, so the verdict drops back to what the
+ * references actually showed and the count goes in the evidence instead.
+ */
+const NAME_MATCH_LIMIT = 10;
+
+/** What the dead verdict can say about writes of the name it found. */
+function writeNote(name: string, sites: { accounted: Node[]; unverified: Node[] }, cwd: string): string {
+  if (sites.unverified.length > NAME_MATCH_LIMIT) {
+    return `and \`${name}\` is written at ${sites.unverified.length} sites — too common a name to attribute to this member`;
+  }
+  if (sites.accounted.length === 0) return 'no untracked write of the name';
+  return `every write of the name feeds another type (${siteList(sites.accounted, cwd)})`;
+}
+
 function siteList(nodes: Node[], cwd: string): string {
   // Only the first three are ever printed, so only those pay for a location.
   const locations = nodes.slice(0, 3).map(node => location(node, cwd));
@@ -552,7 +568,15 @@ class TwinIndex {
     return undefined;
   }
 
-  /** The twin's member of this name, when something reads it there. */
+  /**
+   * The twin's member of this name, when something reads it there.
+   *
+   * A reference is not a read. Two copies of a type whose builders both only
+   * fill the member in each pointed at the other and called it the reader, so
+   * the pair shadowed each other and neither said what was true: nobody reads
+   * it. The test is the one the member analysis uses — a reference the
+   * analysis cannot call a write is a read.
+   */
   private readMember(
     twin: InterfaceDeclaration | TypeAliasDeclaration,
     name: string,
@@ -561,7 +585,8 @@ class TwinIndex {
     const member = typeMembers(twin).find(m => memberName(m) === name);
     if (!member) return undefined;
     const nameNode = (member as Node & { getNameNode(): Node }).getNameNode();
-    if (findReferencesAsNodes(nameNode).length === 0) return undefined;
+    const references = findReferencesAsNodes(nameNode);
+    if (references.length === 0 || references.every(isWriteReference)) return undefined;
     return { typeName: twin.getName() ?? '?', node: member, readsMember: true, sameName };
   }
 }

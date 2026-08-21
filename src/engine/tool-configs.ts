@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { ReadOnlyFileSystem } from './file-system';
-import { configLiterals } from './scan';
+import { bundlerExternals, configLiterals } from './scan';
 
 /**
  * The files that configure a build, and the strings written in them.
@@ -50,15 +50,84 @@ const SKIP_DIRS = new Set([
   '.output',
 ]);
 
+/**
+ * The other name a tool's configuration goes by: a leading dot, the tool, `rc`,
+ * and an optional extension — `.eslintrc.yaml`, `.babelrc`, `.prettierrc.json`.
+ * The plugins an ESLint config names are packages the project uses, and reading
+ * only `*.config.*` missed every project that writes its config this way.
+ */
+const RC_NAME = /^\.[\w-]+rc(\.[\w]+)?$/;
+
+/** ESLint's config file, in both the shape it had and the shape it has. */
+const ESLINT_CONFIG_NAME = /^(\.eslintrc(\.\w+)?|eslint\.config\.[cm]?[jt]sx?)$/;
+
+/**
+ * A package's own build script: the build written as code rather than as
+ * config. It is read for one thing only — what the bundler leaves external —
+ * so it never joins the configs whose every string counts as a package in use.
+ */
+const BUILD_NAME = /^build\.[cm]?[jt]sx?$/;
+
+/** Extensions the JavaScript token scanner can read; the rest are data files. */
+const CODE_EXTENSION = /\.[cm]?[jt]sx?$/;
+
 const SCRIPT_SRC = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
 
 /** True when this file is a tool's configuration rather than product code. */
 export function isToolConfig(filePath: string, packageDirs: readonly string[]): boolean {
   const name = path.basename(filePath);
-  if (CONFIG_NAME.test(name)) return true;
+  if (CONFIG_NAME.test(name) || RC_NAME.test(name)) return true;
   if (!SECOND_TARGET_NAME.test(name)) return false;
   const dir = path.dirname(filePath);
   return packageDirs.some(packageDir => dir === packageDir);
+}
+
+/**
+ * The packages behind the plugin names an ESLint config writes.
+ *
+ * ESLint lets a config say `plugins: [import]`, `plugin:unicorn/recommended`
+ * and `import/no-cycle`, and all three load `eslint-plugin-import` or
+ * `eslint-plugin-unicorn`. Nothing in the file spells the package out, so
+ * matching the strings as written finds none of them and the report calls
+ * every plugin a dead dependency.
+ *
+ * A short name can expand more than one way — `@a/b` is either `@a`'s plugin
+ * under a config called `b` or `@a`'s `b` plugin — so this offers both. The
+ * dependency check keeps only what the manifest lists, and drops the rest.
+ */
+function eslintPluginPackages(strings: string[]): string[] {
+  const found: string[] = [];
+  for (const written of strings) {
+    const [first = '', second] = written.replace(/^plugin:/, '').split('/');
+    if (!first.startsWith('@')) {
+      if (/^[\w-]+$/.test(first)) found.push(`eslint-plugin-${first}`);
+      continue;
+    }
+    found.push(`${first}/eslint-plugin`);
+    if (second && /^[\w-]+$/.test(second)) found.push(`${first}/eslint-plugin-${second}`);
+  }
+  return found;
+}
+
+/**
+ * Every name a data config writes: quoted strings, and the bare scalars YAML
+ * lets a list write without quotes (`plugins:\n  - unicorn`). Comments are cut
+ * first, so a plugin somebody turned off stays off.
+ *
+ * Over-reading is safe here and under-reading is not. The dependency check
+ * drops every string it cannot match to a package name, so a stray word costs
+ * nothing; a plugin name this misses becomes a package the report calls unused.
+ */
+function dataConfigStrings(text: string): string[] {
+  const found: string[] = [];
+  for (const line of text.split('\n')) {
+    const code = line.replace(/(^|\s)(#|\/\/).*$/, '');
+    for (const match of code.matchAll(/["']([^"']*)["']|([@\w][\w./@-]*)/g)) {
+      const value = match[1] ?? match[2];
+      if (value) found.push(value);
+    }
+  }
+  return found;
 }
 
 /** A config file, and everything written inside it as a string. */
@@ -103,11 +172,16 @@ export interface ConfigReader {
    * check matches against the names in package.json.
    */
   strings(packageDir: string): string[];
+  /**
+   * The packages this package's own build leaves for the run time to provide.
+   * Nothing comes back when no build file here says, which is most packages.
+   */
+  externals(packageDir: string): Set<string> | undefined;
 }
 
 export function configReader(fileSystem: ReadOnlyFileSystem): ConfigReader {
-  const walked = new Map<string, ToolConfig[]>();
-  const configs = (packageDir: string): ToolConfig[] => {
+  const walked = new Map<string, Walk>();
+  const walk = (packageDir: string): Walk => {
     let found = walked.get(packageDir);
     if (!found) {
       found = toolConfigs(packageDir, fileSystem);
@@ -117,13 +191,21 @@ export function configReader(fileSystem: ReadOnlyFileSystem): ConfigReader {
   };
   return {
     readFile: filePath => fileSystem.readFile(filePath),
-    configs,
-    strings: packageDir => configs(packageDir).flatMap(config => config.strings),
+    configs: packageDir => walk(packageDir).configs,
+    strings: packageDir => walk(packageDir).configs.flatMap(config => config.strings),
+    externals: packageDir => walk(packageDir).externals,
   };
 }
 
-function toolConfigs(packageDir: string, fileSystem: ReadOnlyFileSystem): ToolConfig[] {
+/** One package's build files, read once. */
+interface Walk {
+  configs: ToolConfig[];
+  externals: Set<string> | undefined;
+}
+
+function toolConfigs(packageDir: string, fileSystem: ReadOnlyFileSystem): Walk {
   const found: string[] = [];
+  const builds: string[] = [];
   const walk = (dir: string): void => {
     for (const child of fileSystem.readDir(dir)) {
       const name = path.basename(child.path);
@@ -132,6 +214,7 @@ function toolConfigs(packageDir: string, fileSystem: ReadOnlyFileSystem): ToolCo
         continue;
       }
       if (name.endsWith('.html') || isToolConfig(child.path, [packageDir])) found.push(child.path);
+      else if (dir === packageDir && BUILD_NAME.test(name)) builds.push(child.path);
     }
   };
   walk(packageDir);
@@ -142,19 +225,55 @@ function toolConfigs(packageDir: string, fileSystem: ReadOnlyFileSystem): ToolCo
     if (text === undefined) continue;
     const html = filePath.endsWith('.html');
     // HTML has no token stream to read; its strings are the `<script src>`
-    // values and nothing else, and it imports nothing of its own.
+    // values and nothing else, and it imports nothing of its own. A YAML or
+    // JSON config has none either, and imports nothing.
     const { strings, specifiers } = html
       ? // SCRIPT_SRC's one group is not optional: every match captures it.
         { strings: [...text.matchAll(SCRIPT_SRC)].map(match => match[1]!), specifiers: [] as string[] }
-      : configLiterals(text);
+      : CODE_EXTENSION.test(filePath)
+        ? configLiterals(text)
+        : { strings: dataConfigStrings(text), specifiers: [] as string[] };
+    const name = path.basename(filePath);
     configs.push({
       filePath,
       dir: path.dirname(filePath),
       label: path.relative(packageDir, filePath) || path.basename(filePath),
       html,
-      strings,
+      strings: ESLINT_CONFIG_NAME.test(name) ? [...strings, ...eslintPluginPackages(strings)] : strings,
       imported: new Set(specifiers),
     });
   }
-  return configs;
+  return { configs, externals: externalPackages([...builds, ...configs.map(c => c.filePath)], packageDir, fileSystem) };
+}
+
+/**
+ * What every build file in this package leaves external, put together.
+ *
+ * A package builds more than one output — a CLI, a library, an ESM copy — and
+ * a name any one of them keeps external is a name the install still needs. So
+ * the lists are added up, and one list this cannot read makes the whole answer
+ * unknown rather than short.
+ *
+ * Only the files at the package root are read. A build deeper in the tree
+ * belongs to something else — a fixture, an example — and what it inlines says
+ * nothing about what this package ships.
+ */
+function externalPackages(
+  filePaths: string[],
+  packageDir: string,
+  fileSystem: ReadOnlyFileSystem
+): Set<string> | undefined {
+  const names = new Set<string>();
+  let declared = false;
+  for (const filePath of filePaths) {
+    if (path.dirname(filePath) !== packageDir || !CODE_EXTENSION.test(filePath)) continue;
+    const text = fileSystem.readFile(filePath);
+    if (text === undefined) continue;
+    const found = bundlerExternals(text);
+    if (!found) continue;
+    if (!found.known) return undefined;
+    declared = true;
+    for (const name of found.names) names.add(name);
+  }
+  return declared ? names : undefined;
 }

@@ -43,6 +43,34 @@ describe('test-only verdict', () => {
     expect(h?.verdict).toBe('test-only');
   });
 
+  it('stays quiet when a fixture in the harness serves only the harness', () => {
+    // A helper under tests/ whose callers are tests is what a helper under
+    // tests/ is for. The verdict is for shipping code the tests alone keep
+    // alive, and saying it of the harness itself says nothing at all.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile('/main.ts', 'export const keep = 1;\n');
+    project.createSourceFile('/tests/fixture.ts', 'export function pantry(): number {\n  return 1;\n}\n');
+    project.createSourceFile('/tests/box.test.ts', "import { pantry } from './fixture';\nvoid pantry();\n");
+
+    const findings = analyze(project, { rootDirs: ['/'] });
+    expect(findings.find(f => f.name === 'pantry')).toBeUndefined();
+  });
+
+  it('knows a harness directory by its shape, not by a list of words', () => {
+    // Projects name them `tests`, `type-tests`, `js-tests`. All three are the
+    // harness; `latest` is not, and only a separator tells them apart.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile('/main.ts', 'export const keep = 1;\n');
+    project.createSourceFile('/js-tests/fixture.ts', 'export function pantry(): number {\n  return 1;\n}\n');
+    project.createSourceFile('/js-tests/box.test.ts', "import { pantry } from './fixture';\nvoid pantry();\n");
+    project.createSourceFile('/latest/recipe.ts', 'export function shelf(): number {\n  return 1;\n}\n');
+    project.createSourceFile('/latest/box.test.ts', "import { shelf } from './recipe';\nvoid shelf();\n");
+
+    const findings = analyze(project, { rootDirs: ['/'] });
+    expect(findings.find(f => f.name === 'pantry')).toBeUndefined();
+    expect(findings.find(f => f.name === 'shelf')?.verdict).toBe('test-only');
+  });
+
   it('stays quiet when production code uses the export in its own file', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile('/main.ts', 'export const keep = 1;\n');

@@ -133,7 +133,7 @@ describe('verdicts', () => {
       '/main.ts',
       [
         'interface BoxRecipe {',
-        '  ip: string;',
+        '  cuisine: string;',
         '  label: string;',
         '}',
         'interface SavePayload {',
@@ -153,9 +153,9 @@ describe('verdicts', () => {
     );
     const findings = analyze(project);
 
-    // `ip` is unread in this process, but the type crosses the bridge.
-    expect(verdictOf(findings, 'ip')?.verdict).toBe('contract');
-    expect(verdictOf(findings, 'ip')?.evidence).toContain('api.invoke');
+    // `cuisine` is unread in this process, but the type crosses the bridge.
+    expect(verdictOf(findings, 'cuisine')?.verdict).toBe('contract');
+    expect(verdictOf(findings, 'cuisine')?.evidence).toContain('api.invoke');
     // `revision` rides the send side of the same edge.
     expect(verdictOf(findings, 'revision')?.verdict).toBe('contract');
   });
@@ -282,13 +282,13 @@ describe('verdicts', () => {
       '/electron.ts',
       [
         'interface RecipeIO {',
-        '  ip: string;',
-        '  mask: string;',
-        '  gateway: string;',
+        '  cuisine: string;',
+        '  author: string;',
+        '  servings: string;',
         '}',
         'declare const io: RecipeIO;',
         "export const persist = () => api.invoke('recipeBox:save', io);",
-        'export const gateway = () => io.gateway;',
+        'export const servings = () => io.servings;',
         '',
       ].join('\n')
     );
@@ -296,8 +296,8 @@ describe('verdicts', () => {
       '/renderer.ts',
       [
         'interface RecipeIO {',
-        '  ip: string;',
-        '  mask: string;',
+        '  cuisine: string;',
+        '  author: string;',
         '  label: string;',
         '}',
         'declare const local: RecipeIO;',
@@ -307,16 +307,16 @@ describe('verdicts', () => {
     );
     project.createSourceFile(
       '/index.ts',
-      "import { persist, gateway } from './electron';\nimport { render } from './renderer';\npersist();\nrender();\ngateway();\n"
+      "import { persist, servings } from './electron';\nimport { render } from './renderer';\npersist();\nrender();\nservings();\n"
     );
     const findings = analyze(project);
 
-    const nearSide = findings.find(f => f.kind === 'member' && f.name === 'ip' && f.filePath === '/renderer.ts');
+    const nearSide = findings.find(f => f.kind === 'member' && f.name === 'cuisine' && f.filePath === '/renderer.ts');
     expect(nearSide?.verdict).toBe('contract');
     expect(nearSide?.evidence).toContain('far side');
     expect(nearSide?.evidence).toContain('electron.ts');
 
-    const farSide = findings.find(f => f.kind === 'member' && f.name === 'ip' && f.filePath === '/electron.ts');
+    const farSide = findings.find(f => f.kind === 'member' && f.name === 'cuisine' && f.filePath === '/electron.ts');
     expect(farSide?.verdict).toBe('contract');
     expect(farSide?.evidence).toContain('api.invoke');
     // The far side names its twin too: one fact, told from both ends.
@@ -397,6 +397,113 @@ describe('verdicts', () => {
     expect(nearSide?.evidence).toContain('main.ts');
   });
 
+  it('reads a property access as the value being read at its own type', () => {
+    // Two dialects of the same builder, each returning its own card. A read of
+    // one card's `label` can never see the other's write, so neither `shelf`
+    // needs hedging: the name match is accounted for.
+    const project = new Project({ useInMemoryFileSystem: true });
+    const card = [
+      'export const cardFor = (title: string) => {',
+      '  const label = title;',
+      '  const shelf = 1;',
+      '  return { label, shelf };',
+      '};',
+      '',
+    ].join('\n');
+    project.createSourceFile('/pantry.ts', card);
+    project.createSourceFile('/larder.ts', card);
+    project.createSourceFile(
+      '/main.ts',
+      [
+        "import { cardFor as pantryCard } from './pantry';",
+        "import { cardFor as larderCard } from './larder';",
+        'export function print(): string {',
+        '  const a = pantryCard("soup");',
+        '  const b = larderCard("stew");',
+        '  return a.label + b.label;',
+        '}',
+        '',
+      ].join('\n')
+    );
+
+    const member = verdictOf(analyze(project), 'shelf');
+    expect(member?.verdict).toBe('dead');
+    expect(member?.evidence).toContain('every write of the name feeds another type');
+  });
+
+  it('follows a value that becomes a property of an inferred literal', () => {
+    // `return { schema, card }` hands the card on, and the checker takes the
+    // outer property's type from the card itself. Reading it back yields the
+    // same type, so the walk keeps its footing instead of giving up.
+    const project = new Project({ useInMemoryFileSystem: true });
+    const card = [
+      'export const cardFor = (title: string) => {',
+      '  const label = title;',
+      '  const shelf = 1;',
+      '  return { label, shelf };',
+      '};',
+      '',
+    ].join('\n');
+    project.createSourceFile('/pantry.ts', card);
+    project.createSourceFile('/larder.ts', card);
+    project.createSourceFile(
+      '/main.ts',
+      [
+        "import { cardFor as pantryCard } from './pantry';",
+        "import { cardFor as larderCard } from './larder';",
+        'export function open(title: string) {',
+        '  const card = larderCard(title);',
+        '  return { title, card };',
+        '}',
+        'export function print(): string {',
+        '  return pantryCard("soup").label + open("stew").card.label;',
+        '}',
+        '',
+      ].join('\n')
+    );
+
+    expect(verdictOf(analyze(project), 'shelf')?.verdict).toBe('dead');
+  });
+
+  it('gives up on a literal something else types', () => {
+    // The outer literal is declared as `Wrapped`, so its `card` property is
+    // whatever `Wrapped` says — not this value's own shape. The walk cannot
+    // say where the write ends up, and the verdict hedges.
+    const project = new Project({ useInMemoryFileSystem: true });
+    const card = [
+      'export const cardFor = (title: string) => {',
+      '  const label = title;',
+      '  const shelf = 1;',
+      '  return { label, shelf };',
+      '};',
+      '',
+    ].join('\n');
+    project.createSourceFile('/pantry.ts', card);
+    project.createSourceFile('/larder.ts', card);
+    project.createSourceFile(
+      '/main.ts',
+      [
+        "import { cardFor as pantryCard } from './pantry';",
+        "import { cardFor as larderCard } from './larder';",
+        'interface Wrapped {',
+        '  card: { label: string; shelf: number };',
+        '}',
+        'export function open(title: string): Wrapped {',
+        '  const card = larderCard(title);',
+        '  return { card };',
+        '}',
+        'export function print(): string {',
+        '  return pantryCard("soup").label + open("stew").card.label;',
+        '}',
+        '',
+      ].join('\n')
+    );
+
+    const member = verdictOf(analyze(project), 'shelf');
+    expect(member?.verdict).toBe('write-only');
+    expect(member?.evidence).toContain('unverified name match');
+  });
+
   it('spells out three write sites and counts the rest honestly', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(
@@ -419,6 +526,63 @@ describe('verdicts', () => {
     const member = findings.find(f => f.kind === 'member' && f.name === 'timeout');
     expect(member?.verdict).toBe('write-only');
     expect(member?.evidence).toMatch(/main\.ts:7, .*main\.ts:8, .*main\.ts:9 and 1 more site\b/);
+  });
+
+  it('stops calling a common name evidence, and says how common it is', () => {
+    // `name` written at two thousand sites across a repo told the reader
+    // nothing about this member, and the report could only ever show three of
+    // them. Past a handful the count is the finding, and the verdict falls
+    // back to what the references showed.
+    const writes = Array.from({ length: 12 }, (_, i) => `stash({ label: ${i} });`);
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'interface Recipe {',
+        '  title: string;',
+        '  label: string;',
+        '}',
+        'export const read = (r: Recipe) => r.title;',
+        'declare function stash(payload: unknown): void;',
+        ...writes,
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project);
+    const member = findings.find(f => f.kind === 'member' && f.name === 'label');
+    expect(member?.verdict).toBe('dead');
+    expect(member?.evidence).toContain('written at 12 sites');
+    expect(member?.evidence).toContain('too common a name');
+  });
+
+  it('will not let two copies that only write a member shadow each other', () => {
+    // Both shapes fill `zone` in and neither reads it. Each copy named the
+    // other as the reader, so the pair shadowed each other and the report
+    // never said the true thing: nobody reads it.
+    const shape = (name: string, fn: string): string =>
+      [
+        `interface ${name} {`,
+        '  label: string;',
+        '  color: string;',
+        '  zone: string;',
+        '}',
+        `export const ${fn} = (d: ${name}): string => {`,
+        "  d.zone = 'cold';",
+        '  return d.label + d.color;',
+        '};',
+        '',
+      ].join('\n');
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile('/pantry.ts', shape('ShelfData', 'stockShelf'));
+    project.createSourceFile('/larder.ts', shape('LarderData', 'stockLarder'));
+    project.createSourceFile(
+      '/main.ts',
+      ["export { stockShelf } from './pantry';", "export { stockLarder } from './larder';", ''].join('\n')
+    );
+
+    const zones = analyze(project).filter(f => f.kind === 'member' && f.name === 'zone');
+    expect(zones).toHaveLength(2);
+    expect(zones.map(f => f.verdict)).toEqual(['write-only', 'write-only']);
   });
 
   it('leaves a member with no signals dead', () => {

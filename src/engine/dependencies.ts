@@ -17,6 +17,14 @@ export interface DependencyUse {
   start: number;
   /** The compiler erases this import, so it needs nothing installed at run time. */
   typeOnly: boolean;
+  /**
+   * The specifier resolved to project code rather than into a package. A
+   * workspace dependency linked by path reads this way and is still the
+   * package being used; so does a `baseUrl` import that names no package at
+   * all. Which one it is, the manifest decides — so a use like this can say a
+   * listed name is used, and can never ask for a name to be listed.
+   */
+  internal: boolean;
 }
 
 /** What the checks need to read the manifests and place a finding. */
@@ -27,6 +35,8 @@ interface DependencyContext {
   positionAt(filePath: string, offset: number): { line: number; column: number };
   /** Every string written in this package's tool configs, imports included. */
   configStrings(dir: string): string[];
+  /** Packages this package's own build leaves for the run time to provide. */
+  bundlerExternals(dir: string): Set<string> | undefined;
 }
 
 interface Manifest {
@@ -39,6 +49,8 @@ interface Manifest {
   devDependencies: string[];
   /** Names in every dependency section; imports of these are never unlisted. */
   listed: Set<string>;
+  /** Names in "peerDependencies": what the consumer installs, not this package. */
+  peer: Set<string>;
   used: Set<string>;
   /** Names imported from a file that is not a test, spec, story, bench, or config. */
   usedInProduction: Set<string>;
@@ -54,6 +66,11 @@ interface Manifest {
   usedByConfig: Set<string>;
   /** Plugins a used package's peer list says that package loads. */
   pluggedInto: Set<string>;
+  /**
+   * True for `"private": true`: a package npm refuses to publish. Nobody
+   * installs it, so which section a name sits in decides nothing.
+   */
+  private: boolean;
 }
 
 /**
@@ -123,6 +140,7 @@ export function analyzeDependencies(
       if (!use.typeOnly) owner.neededAtRuntime.add(name);
     }
 
+    if (use.internal) continue;
     if (listedAnywhere.has(name) || listedAnywhere.has(typesPackage(name))) continue;
     if (reportedUnlisted.has(name) || isIgnored(name, ignore)) continue;
     if (scopeDir && !use.filePath.startsWith(scopeDir)) continue;
@@ -182,6 +200,11 @@ export function analyzeDependencies(
         // weight nobody uses. A production run cannot say: it never looked at
         // the half of the code that would decide it.
         if (production) continue;
+        // Neither claim can be made about a package that never ships. A
+        // private workspace — the repo root, an integration-test package —
+        // is installed by nobody, and every name in it is installed the same
+        // way whichever section holds it.
+        if (manifest.private) continue;
 
         if (section === 'devDependencies') {
           // Only a runtime import breaks the install. `import type` is erased,
@@ -190,6 +213,16 @@ export function analyzeDependencies(
           if (!manifest.neededAtRuntime.has(name)) continue;
           // Unless no install is what provides it in the first place.
           if (providedByEnvironment(manifest.dir, name, context)) continue;
+          // A peer dependency is the consumer's to install, and listing it
+          // here as well is how a package builds and tests against its own
+          // peer. Whoever installs the package brings it, so an install
+          // without dev dependencies is missing nothing.
+          if (manifest.peer.has(name)) continue;
+          // Nor when the build inlines it. A bundler is told what to leave for
+          // the run time, and everything else it is handed ends up inside the
+          // output file. A name the list omits ships with the package.
+          const externals = context.bundlerExternals(manifest.dir);
+          if (externals && !externals.has(name)) continue;
           place({
             kind: 'misplaced',
             evidence: 'production code imports it, so an install without dev dependencies is missing it',
@@ -314,12 +347,14 @@ function readManifest(context: DependencyContext, dir: string): Manifest | undef
     dependencies: names('dependencies'),
     devDependencies: names('devDependencies'),
     listed: listedNames(sections),
+    peer: new Set(names('peerDependencies')),
     used: new Set(),
     usedInProduction: new Set(),
     neededAtRuntime: new Set(),
     usedByScript: new Set(),
     usedByConfig: new Set(),
     pluggedInto: new Set(),
+    private: sections['private'] === true,
   };
   collectScriptUse(manifest, sections, context);
   collectConfigUse(manifest, context);
@@ -460,7 +495,11 @@ function matchesAlias(specifier: string, patterns: string[]): boolean {
 
 function packageName(specifier: string): string | undefined {
   // '.'/'/' are file paths, '#' is a Node subpath import: all project code.
-  if (/^[./#]/.test(specifier) || specifier.startsWith('node:')) return undefined;
+  if (/^[./#]/.test(specifier)) return undefined;
+  // A scheme names the host, not a package: `node:fs`, `bun:sqlite`,
+  // `cloudflare:workers`. npm resolves none of them, so no manifest can list
+  // one and calling it unlisted asks for a line nobody can write.
+  if (/^[a-z][\w+.-]*:/.test(specifier)) return undefined;
   const parts = specifier.split('/');
   if (specifier.startsWith('@')) {
     // A scoped name needs a real scope and a real name; '@/x' is an alias, not a package.

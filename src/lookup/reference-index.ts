@@ -392,6 +392,10 @@ class ReferenceIndex {
     source: ts.Symbol | undefined,
     knownDifferent: boolean
   ): void {
+    // A `.json` file the program holds is data, not code. `"test"` in a
+    // package.json script block writes nothing, and citing that line as the
+    // assignment behind a member is evidence pointing at a manifest.
+    if (site.getSourceFile().fileName.endsWith('.json')) return;
     const entry = { site, source, knownDifferent };
     const entries = this.unattributedWrites.get(name);
     if (entries) entries.push(entry);
@@ -610,7 +614,7 @@ class ReferenceIndex {
         if (!this.carriesProperty(parent.name, name, ownProperty)) return NO_DESTINATIONS;
         return this.destinationsOfVariable(parent.name, name, ownProperty, hops - 1);
       }
-      return NO_DESTINATIONS;
+      return this.ownShapeDestination(expression) ?? NO_DESTINATIONS;
     }
   }
 
@@ -646,6 +650,38 @@ class ReferenceIndex {
     const fromValue =
       types.length > 0 && types.every(type => (type.symbol?.declarations ?? []).some(decl => isInside(decl, argument)));
     return fromValue ? OWN_SHAPE_ONLY : NO_DESTINATIONS;
+  }
+
+  /**
+   * The two ways a value is used as itself, rather than handed to something
+   * wider.
+   *
+   * `card.label` reads `card` at that value's own type: an access can never
+   * see a member the value's own shape lacks. `return { schema, card }` is the
+   * same fact one level up — the checker takes the outer literal's `card`
+   * property straight from this value, so reading it back yields this type
+   * again. Both are destinations the walk can answer with, not escapes it has
+   * to give up on, and both answer with the value's own type.
+   *
+   * Nothing comes back when the node is neither, and the walk carries on.
+   */
+  private ownShapeDestination(value: ts.Node): Destinations | undefined {
+    const parent = value.parent;
+    const access =
+      (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === value;
+    const held =
+      ts.isShorthandPropertyAssignment(parent) || (ts.isPropertyAssignment(parent) && parent.initializer === value);
+    if (!access && !held) return undefined;
+    // A literal typed from outside is free to hand the value on as something
+    // wider, and then the property's type is no longer this value's.
+    if (held) {
+      const holder = parent.parent;
+      if (!ts.isObjectLiteralExpression(holder)) return undefined;
+      if (safely(() => this.checker.getContextualType(holder))) return NO_DESTINATIONS;
+    }
+    const type = safely(() => this.checker.getTypeAtLocation(value));
+    if (!type || !isConcreteKnowledge([type])) return NO_DESTINATIONS;
+    return { types: [type], conclusive: true, bounded: true };
   }
 
   /** True when this node's type holds the very property symbol in question. */
@@ -713,6 +749,11 @@ class ReferenceIndex {
           this.carriesProperty(ref.parent.name, name, ownProperty)
         ) {
           destinations = merge(destinations, this.destinationsOfVariable(ref.parent.name, name, ownProperty, hops - 1));
+          continue;
+        }
+        const ownShape = this.ownShapeDestination(ref);
+        if (ownShape) {
+          destinations = merge(destinations, ownShape);
           continue;
         }
         const contextual = safely(() => this.checker.getContextualType(ref as ts.Expression));

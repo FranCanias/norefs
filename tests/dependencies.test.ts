@@ -49,6 +49,62 @@ describe('dependency checks', () => {
     expect(findings[0]?.filePath).toBe('/main.ts');
   });
 
+  it('reads a bare specifier that lands on project code as the package it names', () => {
+    // A workspace dependency linked by path — `"seedbox": "workspace:../seedbox/dist"`
+    // — resolves straight into the repo, and the import stopped counting as
+    // using the package. The manifest lists it, so the import is what it says
+    // it is.
+    const findings = depFindings(
+      { dependencies: { seedbox: '1.0.0' } },
+      { '/main.ts': "import { x } from 'seedbox';\nexport const y = x;\n", '/seedbox.ts': 'export const x = 1;\n' },
+      [],
+      { baseUrl: '/' }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('never asks for a manifest entry for one', () => {
+    // The same specifier with nothing listed is a `baseUrl` import of project
+    // code. Asking for it in package.json would ask for a package that does
+    // not exist.
+    const findings = depFindings(
+      { dependencies: {} },
+      { '/main.ts': "import { x } from 'pantry';\nexport const y = x;\n", '/pantry.ts': 'export const x = 1;\n' },
+      [],
+      { baseUrl: '/' }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('counts require.resolve as needing the package', () => {
+    // A tool pointed at a parser by path is often the project's one mention of
+    // it: nothing imports it, and it still has to be installed.
+    const findings = depFindings(
+      { devDependencies: { 'parser-pkg': '1.0.0' } },
+      { '/main.ts': "export const parser = require.resolve('parser-pkg');\n" }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('says nothing about a module the host provides under a scheme', () => {
+    // `bun:sqlite` and `cloudflare:workers` are the runtime handing a module
+    // over, the way `node:fs` is. npm resolves none of them, so asking for a
+    // manifest entry asks for a line nobody can write.
+    const findings = depFindings(
+      { dependencies: {} },
+      {
+        '/main.ts': [
+          "import { Database } from 'bun:sqlite';",
+          "import { env } from 'cloudflare:workers';",
+          "import fs from 'node:fs';",
+          'export const y = [Database, env, fs];',
+          '',
+        ].join('\n'),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
   it('an imported devDependency is used, and satisfies the unlisted check', () => {
     const findings = depFindings(
       { devDependencies: { toolpkg: '1.0.0' } },
@@ -252,6 +308,36 @@ describe('what a config says a package is for', () => {
     expect(findings).toEqual([]);
   });
 
+  it('reads the older config shape too, plugins written as bare YAML scalars', () => {
+    // `.eslintrc.yaml` is a config the compiler never holds and the `*.config.*`
+    // walk never found, so every plugin it lists looked like a dead dependency.
+    // YAML writes them unquoted, so quoted strings alone are not enough.
+    const findings = withConfigs(
+      {
+        scripts: { lint: 'eslint .' },
+        devDependencies: { eslint: '9.0.0', 'eslint-plugin-pantry': '1.0.0', unused: '1.0.0' },
+      },
+      { '/.eslintrc.yaml': 'root: true\nplugins:\n  - pantry\nextends:\n  - plugin:pantry/recommended\n' },
+      { '/main.ts': 'export const x = 1;\n' },
+      {
+        eslint: { name: 'eslint', bin: { eslint: './bin/eslint.js' } },
+        'eslint-plugin-pantry': { name: 'eslint-plugin-pantry' },
+        unused: { name: 'unused' },
+      }
+    );
+    expect(findings.map(f => f.name)).toEqual(['unused']);
+  });
+
+  it('a plugin an rc file only mentions in a comment is still dead', () => {
+    const findings = withConfigs(
+      { devDependencies: { 'eslint-plugin-gone': '1.0.0' } },
+      { '/.eslintrc.yaml': 'plugins: []\n# - gone\n' },
+      { '/main.ts': 'export const x = 1;\n' },
+      { 'eslint-plugin-gone': { name: 'eslint-plugin-gone' } }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', 'eslint-plugin-gone']]);
+  });
+
   it('a package named only inside a comment is not a package in use', () => {
     // A commented-out plugin import is exactly the case where the package is
     // dead. Reading the config's raw text put the name in the used set and the
@@ -299,6 +385,31 @@ describe('what a config says a package is for', () => {
   });
 });
 
+describe('a package a comment names', () => {
+  it('counts a reference-types directive as needing the package', () => {
+    // `/// <reference types="pantry-types" />` is the file saying it needs
+    // that package, in the one place the import graph never looks.
+    const findings = installed(
+      { devDependencies: { 'pantry-types': '1.0.0' } },
+      { '/main.ts': '/// <reference types="pantry-types" />\nexport const x = 1;\n' },
+      { 'pantry-types': { name: 'pantry-types' } }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('reads one only where TypeScript honours it', () => {
+    // Past the first token the same words are prose. A comment quoting the
+    // directive must not keep a package alive, or nothing named in a comment
+    // can ever be reported.
+    const findings = installed(
+      { devDependencies: { 'pantry-types': '1.0.0' } },
+      { '/main.ts': 'export const x = 1;\n/// <reference types="pantry-types" />\n' },
+      { 'pantry-types': { name: 'pantry-types' } }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', 'pantry-types']]);
+  });
+});
+
 describe('a dependency in the wrong section', () => {
   it('names a devDependency that production code imports', () => {
     // The one that ships broken: `npm install --omit=dev` and it is gone.
@@ -309,6 +420,63 @@ describe('a dependency in the wrong section', () => {
     );
     expect(findings.map(f => [f.kind, f.name, f.context])).toEqual([['misplaced', 'runtime', 'devDependencies']]);
     expect(findings[0]?.evidence).toContain('production code imports it');
+  });
+
+  it('says nothing about a devDependency the build inlines', () => {
+    // A bundled CLI carries its dependencies inside the output file. `external`
+    // is the list of what it does not carry, and everything else is compiled
+    // in — so an install without dev dependencies is missing nothing.
+    const findings = withConfigs(
+      { devDependencies: { inlined: '1.0.0', kept: '1.0.0' } },
+      {
+        '/build.ts': "import * as esbuild from 'esbuild';\nesbuild.buildSync({ bundle: true, external: ['kept'] });\n",
+      },
+      { '/main.ts': "import 'inlined';\nimport 'kept';\nexport const x = 1;\n" },
+      { inlined: { name: 'inlined' }, kept: { name: 'kept' } }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['misplaced', 'kept']]);
+  });
+
+  it('reads the array a bundler config spreads into its external list', () => {
+    // `external: [...driversPackages]` is how a build keeps one list for
+    // several outputs. Reading only the strings between the brackets would
+    // miss every name in it and call the whole list inlined.
+    const findings = withConfigs(
+      { devDependencies: { kept: '1.0.0' } },
+      {
+        '/build.ts': "const drivers = ['kept'];\nbuild({ bundle: true, external: ['esbuild', ...drivers] });\n",
+      },
+      { '/main.ts': "import 'kept';\nexport const x = 1;\n" },
+      { kept: { name: 'kept' } }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['misplaced', 'kept']]);
+  });
+
+  it('says nothing about a devDependency the consumer installs anyway', () => {
+    // A peer dependency listed in devDependencies as well is how a package
+    // builds against its own peer. Whoever installs the package brings it.
+    const findings = installed(
+      { peerDependencies: { plugin: '1.0.0' }, devDependencies: { plugin: '1.0.0' } },
+      { '/main.ts': "import 'plugin';\nexport const x = 1;\n" },
+      { plugin: { name: 'plugin' } }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('says nothing about a section in a package that never ships', () => {
+    // `"private": true` is npm refusing to publish it. Nobody runs
+    // `install --omit=dev` against it and nobody downloads its weight, so
+    // both halves of the section claim are about an install that never
+    // happens — while a dependency nothing uses is still worth saying.
+    const findings = installed(
+      { private: true, dependencies: { fixtures: '1.0.0' }, devDependencies: { runtime: '1.0.0', idle: '1.0.0' } },
+      {
+        '/main.ts': "import 'runtime';\nexport const x = 1;\n",
+        '/main.test.ts': "import 'fixtures';\nexport const t = 1;\n",
+      },
+      { runtime: { name: 'runtime' }, fixtures: { name: 'fixtures' }, idle: { name: 'idle' } }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', 'idle']]);
   });
 
   it("a second target's config is still a config, not production code", () => {

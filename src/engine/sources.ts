@@ -4,7 +4,7 @@ import type { PackageConfig } from './project';
 import { optionsForDir } from './project';
 import type { FileScan, Specifier } from './scan';
 import { scanFiles } from './scan';
-import { stripQuerySuffix } from './text';
+import { runtimeSibling, stripQuerySuffix } from './text';
 
 /** An import as written, and where it resolves to. */
 interface Import {
@@ -58,6 +58,11 @@ export class SourceIndex {
     return this.imports.get(filePath) ?? [];
   }
 
+  /** The packages this file's `/// <reference types>` directives name. */
+  typeReferencesOf(filePath: string): Specifier[] {
+    return this.scans.get(filePath)?.typeReferences ?? [];
+  }
+
   isFileSuppressed(filePath: string): boolean {
     return this.scans.get(filePath)?.fileSuppressed ?? false;
   }
@@ -106,12 +111,23 @@ export class SourceIndex {
       const target = resolved.resolvedFileName;
       return {
         specifier,
-        target: known.has(target) ? target : undefined,
+        target: projectFileFor(target, known),
         resolved: true,
         external: resolved.isExternalLibraryImport === true || target.includes('/node_modules/'),
       };
     });
   }
+}
+
+/**
+ * The project file a resolved specifier names. A specifier landing on a
+ * declaration file names the JavaScript beside it: that is what the run loads,
+ * and what the import graph must keep alive.
+ */
+function projectFileFor(resolvedPath: string, known: Set<string>): string | undefined {
+  if (known.has(resolvedPath)) return resolvedPath;
+  const sibling = runtimeSibling(resolvedPath);
+  return sibling && known.has(sibling) ? sibling : undefined;
 }
 
 function includes(values: number[], value: number): boolean {

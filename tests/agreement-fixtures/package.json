@@ -11,6 +11,8 @@
     "dynamic-dep": "1.0.0",
     "star-export-dep": "1.0.0",
     "type-export-dep": "1.0.0",
+    "resolved-dep": "1.0.0",
+    "directive-dep": "1.0.0",
     "unused-dep": "1.0.0"
   }
 }

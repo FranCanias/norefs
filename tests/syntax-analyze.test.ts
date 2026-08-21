@@ -49,6 +49,15 @@ describe('the syntax-only pipeline', () => {
     expect(names).toContain('unused-dep');
     expect(names).toContain('unlisted-dep');
     expect(names).not.toContain('ignored-unlisted-dep');
+    // The `.js` behind `grammar.d.ts` is loaded at run time, so neither
+    // pipeline may call it a file nothing imports.
+    expect(names).not.toContain('grammar.js');
+    // And `require.resolve('resolved-dep')` counts as needing the package, in
+    // both pipelines — while `unused-dep` beside it in the manifest does not.
+    expect(names).not.toContain('resolved-dep');
+    // So does a `/// <reference types>` directive, which lives in a comment
+    // one pipeline reads off the AST and the other off the raw text.
+    expect(names).not.toContain('directive-dep');
   });
 
   it('recognises which requests it can serve', () => {

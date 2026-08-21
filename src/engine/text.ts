@@ -28,3 +28,16 @@ export function stripQuerySuffix(specifier: string): string {
 export function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+/**
+ * The JavaScript a hand-written declaration file describes.
+ * `import './grammar'` beside a `grammar.d.ts` resolves to the declaration and
+ * the type graph stops there, but the runtime loads `grammar.js`. Without this
+ * pairing the implementation looks like a file nothing imports, and deleting
+ * it breaks the build.
+ */
+export function runtimeSibling(declarationPath: string): string | undefined {
+  const match = /\.d\.([cm]?)ts$/.exec(declarationPath);
+  if (!match) return undefined;
+  return `${declarationPath.slice(0, match.index)}.${match[1]}js`;
+}

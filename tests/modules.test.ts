@@ -85,6 +85,13 @@ describe('exports in used namespace', () => {
     ]);
     expect(findings.find(f => f.name === 'dead')?.context).toBe('Config');
   });
+
+  // `box(recipes)` hands the module over as one object, and `Object.keys` on
+  // the far side reads every export with no reference to show for it. Calling
+  // those exports unused deletes the thing the consumer iterates.
+  it('says nothing about a module a consumer takes whole', () => {
+    expect(reportedIn('recipes.ts')).toEqual([]);
+  });
 });
 
 describe('exports a dynamic import destructures', () => {

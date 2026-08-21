@@ -76,13 +76,16 @@ export function analyzeSyntax(
   const uses: DependencyUse[] = [];
   for (const filePath of filePaths) {
     for (const entry of sources.importsOf(filePath)) {
-      if (entry.resolved && !entry.external) continue;
       uses.push({
         filePath,
         text: entry.specifier.text,
         start: entry.specifier.start,
         typeOnly: entry.specifier.typeOnly,
+        internal: entry.resolved && !entry.external,
       });
+    }
+    for (const reference of sources.typeReferencesOf(filePath)) {
+      uses.push({ filePath, text: reference.text, start: reference.start, typeOnly: true, internal: false });
     }
 
     if (options.scopeDir && !filePath.startsWith(options.scopeDir)) continue;
@@ -119,6 +122,7 @@ export function analyzeSyntax(
         isSuppressedAt: (filePath, offset) => sources.isSuppressedAt(filePath, offset),
         positionAt: (filePath, offset) => sources.positionAt(filePath, offset),
         configStrings: dir => reader.strings(dir),
+        bundlerExternals: dir => reader.externals(dir),
       }
     )
   );

@@ -9,6 +9,109 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+Two runs against a 3,700-file monorepo (drizzle-orm), each followed by a hand
+audit of every finding, drove this round. 41% of the first report was noise;
+the second audit found what the fixes had uncovered underneath. The same tree
+now reports 460 findings against the first run's 808, no true positive was
+lost, and a quarter of the verdicts that used to hedge now say `dead` outright.
+
+**A module a consumer takes whole is exempt, member and all.** `import * as
+schema from './schema'` followed by `orm(db, { schema })` hands the whole
+module over, and the far side walks its keys — `Object.keys`, an `is()` filter,
+a `for…in`. No reference search sees any of that, so every export in the module
+was reported dead and the advice was to delete the thing the consumer
+iterates. A namespace binding that leaves as a value now makes its module
+exempt on the same terms as public API. A binding whose every use is a property
+read is unchanged: those exports are still reported, at the same lower
+confidence as before.
+
+**A test helper is no longer reported for helping tests.** `test-only` says
+production code never touches this and only the tests keep it alive. Said of a
+fixture that lives under `tests/` itself, it says nothing at all — and on the
+monorepo that was 232 of the 808 findings. The verdict is now withheld when the
+declaration sits in the harness. A harness declaration nothing references at
+all is still `dead`.
+
+**A harness directory is known by its shape.** Projects name them `tests`,
+`type-tests`, `js-tests`, `__tests__`. Matching a fixed list of words meant
+every project that picked a different name had its whole harness read as
+shipping code. The rule is now the shape: `test` or `tests`, alone or behind a
+prefix and a separator — which is also what keeps `latest` out. `__mocks__` and
+`benchmarks` count too.
+
+**The JavaScript behind a hand-written `.d.ts` is not a dead file.** `import
+'./grammar'` beside a `grammar.d.ts` resolves to the declaration, and the type
+graph stops there — while the run loads `grammar.js`. The implementation looked
+like a file nothing imports, and deleting it broke the build. A resolved
+declaration file now keeps its runtime sibling alive, in both pipelines.
+
+**A reference is not a read.** The `shadowed` verdict claimed a twin *reads*
+the member on the strength of any reference to it. Two copies of a type whose
+builders both only fill the member in each pointed at the other and called it
+the reader, so the pair shadowed each other and the report never said the true
+thing: nobody reads it. The test is now the one the member analysis uses.
+
+**A name written everywhere stops being evidence.** `write-only (unverified
+name match)` cited `name` "assigned at … and 2,405 more sites". Past ten
+matches the count is all the match means, so the verdict falls back to `dead`
+and the count goes in the evidence instead. And a `.json` file the program
+holds is data: `"test"` in a package.json script block is no longer cited as
+the assignment behind a member.
+
+**Three more things count as a dependency being used.**
+
+- `require.resolve('pkg')`, which loads nothing and still says the package has
+  to be installed.
+- An `.eslintrc`-style rc file, in YAML or JSON. Only `*.config.*` was read
+  before, so every plugin an older ESLint config named came back dead. Short
+  plugin names expand on the way through: `plugins: [import]`,
+  `plugin:unicorn/recommended` and `import/no-cycle` all name
+  `eslint-plugin-…`.
+- A bare specifier that lands on project code, when a manifest lists it — a
+  workspace dependency linked by path (`"seedbox": "workspace:../seedbox/dist"`)
+  resolves straight back into the repo. One no manifest lists is a `baseUrl`
+  import, and is never reported unlisted either.
+
+**A dependency the build inlines is where it belongs.** A bundled CLI carries
+its dependencies inside its output file. `external: ['esbuild', 'drizzle-orm']`
+is the list of what it does not carry, and everything else is compiled in — so
+`npm install --omit=dev` is missing none of it. norefs now reads the `external`
+list out of the package's own build files, and withholds the misplaced claim
+for every name they leave out. A list built from something it cannot read — a
+call, an object — makes the answer unknown, and the check reports as before.
+On drizzle-kit this was 17 findings, every one of them wrong.
+
+**A peer dependency is the consumer's to install.** Listing it in
+`devDependencies` as well is how a package builds and tests against its own
+peer. Whoever installs the package brings it, so the install-is-missing-it
+claim was never true of one.
+
+**A `/// <reference types="…" />` directive is the package being used.** It is
+a file saying it needs that package installed, written in the one place the
+import graph never looks. Every types package a project reaches this way came
+back dead. Only the prologue is read — past the first token TypeScript honours
+nothing, and the same words are prose.
+
+**A value read as itself is not an escape.** Proving a member dead means
+following every same-named write to somewhere it cannot be read from. The walk
+gave up on two shapes it should have kept: `card.label`, which reads `card` at
+that value's own type, and `return { schema, card }`, where the checker takes
+the outer property's type straight from the value. Both now count as
+destinations. Twelve members of drizzle-kit's `schemaToTypeScript` results were
+hedged as `write-only (unverified name match)` on the strength of four sibling
+dialects writing the same names; all twelve are now `dead`, which is what they
+are.
+
+**A scheme names the host, not a package.** `bun:sqlite` and
+`cloudflare:workers` were reported unlisted, the way `node:fs` never was. npm
+resolves none of them, so the finding asked for a line nobody can write.
+
+**A private package has no section to get wrong.** `"private": true` is npm
+refusing to publish it: nobody runs `install --omit=dev` against it and nobody
+downloads its weight, so both halves of the misplaced-dependency claim are
+about an install that never happens. A dependency nothing uses is still
+reported.
+
 **A function with several `return` statements is finally read.** One returned
 object literal was the only shape the check would look at. Two meant the whole
 function was skipped, dead keys and all:

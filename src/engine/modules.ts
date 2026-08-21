@@ -7,8 +7,11 @@ import type {
   Node,
   Project,
   SourceFile,
+  StringLiteral,
 } from 'ts-morph';
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
+import { valueUsesStayLocal } from '../collectors/escape';
+import { descendantsOfKind } from '../lookup/descendants';
 import { findReferencesAsNodes } from '../lookup/references';
 import type { Boundary, ExportFinding, Finding, TypeKeyword } from '../types';
 import type { DependencyUse } from './dependencies';
@@ -20,7 +23,20 @@ import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
+import { runtimeSibling } from './text';
 import { configReader } from './tool-configs';
+
+/** How a module is consumed through an `import * as ns` / `export * as ns` binding. */
+interface NamespaceUse {
+  /** The binding name, quoted back in the finding as the namespace it belongs to. */
+  alias: string;
+  /**
+   * True when a consumer takes the namespace object whole — passes it as an
+   * argument, stores it, spreads it. Its keys can be enumerated at run time
+   * from there, so nothing inside it can be called unused.
+   */
+  opaque: boolean;
+}
 
 interface ModuleAnalysis {
   findings: Finding[];
@@ -77,7 +93,14 @@ function importedFiles(
   byPath: Map<string, SourceFile>,
   packages: PackageConfig[]
 ): SourceFile[] {
-  const targets = sourceFile.getReferencedSourceFiles().filter(target => !target.isDeclarationFile());
+  const referenced = sourceFile.getReferencedSourceFiles();
+  const targets = referenced.filter(target => !target.isDeclarationFile());
+  for (const target of referenced) {
+    if (!target.isDeclarationFile()) continue;
+    const sibling = runtimeSibling(target.getFilePath());
+    const implementation = sibling && byPath.get(sibling);
+    if (implementation) targets.push(implementation);
+  }
   // The options of the package owning the importing file, exactly as the
   // project used when it loaded: a run spanning several tsconfigs resolves
   // each package's `paths` with that package's own options, and a fallback
@@ -134,6 +157,12 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   const deadFiles = new Set<SourceFile>();
   const deadDecls = new Set<Node>();
   const publicDecls = publicApiDeclarations(sourceFiles, rootDirs, entries);
+  // A module handed to a runtime consumer as one object — `import * as schema`
+  // then `orm(db, { schema })` — is read key by key by code no reference search
+  // can see. Its exports stand on the same footing as public API.
+  for (const [target, use] of namespaceConsumers) {
+    if (use.opaque) publicDecls.add(target);
+  }
   const harnessFiles = new Set(sourceFiles.filter(sf => isHarnessFile(sf.getFilePath(), rootDirs)));
 
   for (const sourceFile of sourceFiles) {
@@ -166,7 +195,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
 
     collectExportFindings(
       sourceFile,
-      namespaceConsumers.get(sourceFile),
+      namespaceConsumers.get(sourceFile)?.alias,
       findings,
       deadDecls,
       publicDecls,
@@ -200,6 +229,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
         },
         positionAt: (filePath, offset) => lineAndColumnAt(project.getSourceFileOrThrow(filePath), offset),
         configStrings: dir => reader.strings(dir),
+        bundlerExternals: dir => reader.externals(dir),
       }
     )
   );
@@ -267,6 +297,10 @@ function collectExportFindings(
         // Production code in its own file justifies the declaration; tests
         // importing it on top of that make it simply used.
         if (locallyUsed) continue;
+        // So does a harness declaration the harness consumes: a fixture whose
+        // only callers are tests is what a fixture is. The verdict is for
+        // shipping code the tests alone keep alive.
+        if (harnessFiles.has(sourceFile)) continue;
         findings.push({
           ...makeFinding(kind, nameNode, namespaceAlias ?? '', false, typeKind),
           verdict: 'test-only',
@@ -392,27 +426,25 @@ function isModuleBinding(ref: Node): boolean {
  * reported at lower confidence: the namespace object may be consumed
  * dynamically.
  */
-function findNamespaceConsumers(project: Project): Map<SourceFile, string> {
-  const consumers = new Map<SourceFile, string>();
+function findNamespaceConsumers(project: Project): Map<SourceFile, NamespaceUse> {
+  const consumers = new Map<SourceFile, NamespaceUse>();
+  const record = (target: SourceFile | undefined, binding: Identifier): void => {
+    if (!target) return;
+    const refs = findReferencesAsNodes(binding).filter(ref => !isModuleBinding(ref));
+    if (refs.length === 0) return;
+    const seen = consumers.get(target);
+    const opaque = !valueUsesStayLocal(binding);
+    if (!seen) consumers.set(target, { alias: binding.getText(), opaque });
+    else if (opaque) seen.opaque = true;
+  };
   for (const sourceFile of project.getSourceFiles()) {
     for (const importDecl of sourceFile.getImportDeclarations()) {
       const binding = importDecl.getNamespaceImport();
-      if (!binding) continue;
-      const target = importDecl.getModuleSpecifierSourceFile();
-      if (!target || consumers.has(target)) continue;
-      if (findReferencesAsNodes(binding).some(ref => !isModuleBinding(ref))) {
-        consumers.set(target, binding.getText());
-      }
+      if (binding) record(importDecl.getModuleSpecifierSourceFile(), binding);
     }
     for (const exportDecl of sourceFile.getExportDeclarations()) {
-      const binding = exportDecl.getNamespaceExport();
-      const bindingName = binding?.getNameNode();
-      if (!bindingName?.isKind(SyntaxKind.Identifier)) continue;
-      const target = exportDecl.getModuleSpecifierSourceFile();
-      if (!target || consumers.has(target)) continue;
-      if (findReferencesAsNodes(bindingName).some(ref => !isModuleBinding(ref))) {
-        consumers.set(target, bindingName.getText());
-      }
+      const bindingName = exportDecl.getNamespaceExport()?.getNameNode();
+      if (bindingName?.isKind(SyntaxKind.Identifier)) record(exportDecl.getModuleSpecifierSourceFile(), bindingName);
     }
   }
   return consumers;
@@ -461,6 +493,8 @@ function dependencyUses(project: Project): DependencyUse[] {
   const sourceFiles = [...project.getSourceFiles()].sort((a, b) => a.getFilePath().localeCompare(b.getFilePath()));
   for (const sourceFile of sourceFiles) {
     if (sourceFile.isDeclarationFile()) continue;
+    const filePath = sourceFile.getFilePath();
+    const found: DependencyUse[] = [];
     for (const literal of sourceFile.getImportStringLiterals()) {
       const parent = literal.getParent();
       const clause =
@@ -468,16 +502,58 @@ function dependencyUses(project: Project): DependencyUse[] {
           ? parent
           : undefined;
       const target = clause?.getModuleSpecifierSourceFile();
-      if (target && !target.isInNodeModules()) continue;
-      uses.push({
-        filePath: sourceFile.getFilePath(),
+      found.push({
+        filePath,
         text: literal.getLiteralText(),
         start: literal.getStart(),
         typeOnly: clause !== undefined && isTypeOnlyClause(clause),
+        internal: target !== undefined && !target.isInNodeModules(),
       });
     }
+    for (const reference of sourceFile.getTypeReferenceDirectives()) {
+      found.push({
+        filePath,
+        text: reference.getFileName(),
+        start: reference.getPos(),
+        typeOnly: true,
+        internal: false,
+      });
+    }
+    for (const literal of resolveCallLiterals(sourceFile)) {
+      found.push({
+        filePath,
+        text: literal.getLiteralText(),
+        start: literal.getStart(),
+        typeOnly: false,
+        internal: false,
+      });
+    }
+    // In file order, so an unlisted package is reported at its first mention
+    // whichever of the two forms wrote it.
+    found.sort((a, b) => a.start - b.start);
+    uses.push(...found);
   }
   return uses;
+}
+
+/**
+ * The packages `require.resolve('pkg')` names. It loads nothing, so it is no
+ * import — and it is still the project saying that package must be installed,
+ * which is the only question the dependency checks ask. A tool pointed at a
+ * parser by path is usually the project's one mention of it.
+ */
+function resolveCallLiterals(sourceFile: SourceFile): StringLiteral[] {
+  // The walk is worth its cost only for a file that writes the call at all.
+  if (!sourceFile.getFullText().includes('require.resolve')) return [];
+  const found: StringLiteral[] = [];
+  for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
+    const callee = call.getExpression();
+    if (!callee.isKind(SyntaxKind.PropertyAccessExpression)) continue;
+    if (callee.getName() !== 'resolve' || callee.getExpression().getText() !== 'require') continue;
+    const [argument] = call.getArguments();
+    if (argument?.isKind(SyntaxKind.StringLiteral)) found.push(argument);
+  }
+  return found;
 }
 
 /**

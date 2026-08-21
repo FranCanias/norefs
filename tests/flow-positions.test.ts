@@ -166,19 +166,19 @@ describe('the two positions a factory literal leaves through', () => {
     project.createSourceFile(
       '/main.ts',
       [
-        'interface Peer {',
-        '  ip: string;',
-        '  port: number;',
+        'interface Ramekin {',
+        '  spice: string;',
+        '  grams: number;',
         '}',
         'declare function wrap<T>(factory: () => T): T;',
-        'declare const peer: Peer;',
-        "const config = wrap(() => ({ ip: '10.0.0.1' }));",
-        'export const run = () => [config, peer.port];',
+        'declare const ramekin: Ramekin;',
+        "const config = wrap(() => ({ spice: 'cumin' }));",
+        'export const run = () => [config, ramekin.grams];',
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    const member = memberOf(findings, 'ip');
+    const member = memberOf(findings, 'spice');
     expect(member?.verdict).toBe('write-only');
     expect(member?.evidence).toContain('unverified name match');
   });

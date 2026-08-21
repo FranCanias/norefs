@@ -97,21 +97,21 @@ describe('the write scan behind the dead verdict', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(
       '/types.ts',
-      ['export interface Peer {', '  ip: string;', '  port: number;', '}', ''].join('\n')
+      ['export interface Ramekin {', '  spice: string;', '  grams: number;', '}', ''].join('\n')
     );
     project.createSourceFile(
       '/main.ts',
       [
-        "import type { Peer } from './types';",
+        "import type { Ramekin } from './types';",
         'declare function wrap<T>(factory: () => T): T;',
-        'declare const peer: Peer;',
-        "const config = wrap(() => ({ ip: '10.0.0.1' }));",
-        'export const run = () => [config, peer.port];',
+        'declare const ramekin: Ramekin;',
+        "const config = wrap(() => ({ spice: 'cumin' }));",
+        'export const run = () => [config, ramekin.grams];',
         '',
       ].join('\n')
     );
     const findings = analyze(project);
-    const member = memberOf(findings, 'ip');
+    const member = memberOf(findings, 'spice');
     expect(member?.verdict).toBe('write-only');
     expect(member?.evidence).toMatch(/main\.ts:4/);
     // The value escapes into an untyped array; the match stays a labeled heuristic.

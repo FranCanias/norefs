@@ -28,7 +28,12 @@ export interface FileScan {
   /** 1-based lines whose first non-blank character opens a comment. */
   commentLines: number[];
   specifiers: Specifier[];
+  /** The packages `/// <reference types="…" />` names. */
+  typeReferences: Specifier[];
 }
+
+/** A triple-slash directive naming a types package, as TypeScript writes it. */
+const TYPE_REFERENCE = /\/\/\/\s*<reference\s+types\s*=\s*["']([^"']+)["']/g;
 
 type Kind = 'ident' | 'str' | 'punct' | 'number' | 'other';
 
@@ -392,9 +397,28 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
       i = scanClause(text, tokens, i, out);
       continue;
     }
-    if (name === 'require' && next?.kind === 'punct' && next.punct === '(' && argument?.kind === 'str') {
+    if (name !== 'require') continue;
+    if (next?.kind === 'punct' && next.punct === '(' && argument?.kind === 'str') {
       pushSpecifier(text, argument, false, out);
       i += 2;
+      continue;
+    }
+    // `require.resolve('pkg')` names a package as plainly as loading it does.
+    // A config that points a tool at a parser writes it this way and nothing
+    // else in the project mentions the package.
+    const open = tokens[i + 3];
+    const resolved = tokens[i + 4];
+    if (
+      next?.kind === 'punct' &&
+      next.punct === '.' &&
+      argument?.kind === 'ident' &&
+      word(text, argument) === 'resolve' &&
+      open?.kind === 'punct' &&
+      open.punct === '(' &&
+      resolved?.kind === 'str'
+    ) {
+      pushSpecifier(text, resolved, false, out);
+      i += 4;
     }
   }
   return out;
@@ -443,7 +467,32 @@ export function scanText(text: string): FileScan {
     suppressedLines,
     commentLines,
     specifiers: specifiersOf(text, tokens),
+    typeReferences: typeReferencesOf(text.slice(0, firstTokenStart)),
   };
+}
+
+/**
+ * The packages a triple-slash directive names.
+ *
+ * A reference directive is a file saying it needs that package installed, in
+ * the one place the import graph never looks: a comment. Nothing imports the
+ * package, no script runs it, and the report used to call it dead. The
+ * compiler erases the directive, so what it names is needed to build and never
+ * at run time.
+ *
+ * Only the prologue is read — everything before the first token — because that
+ * is the only place TypeScript honours a directive. The same words further
+ * down are prose.
+ */
+function typeReferencesOf(prologue: string): Specifier[] {
+  const found: Specifier[] = [];
+  for (const match of prologue.matchAll(TYPE_REFERENCE)) {
+    // TYPE_REFERENCE's one group is not optional: every match captures it.
+    const name = match[1]!;
+    const start = match[0].lastIndexOf(name) + match.index;
+    found.push({ text: name, start, end: start + name.length, typeOnly: true });
+  }
+  return found;
 }
 
 /**
@@ -463,6 +512,72 @@ export function configLiterals(text: string): { strings: string[]; specifiers: s
   return { strings, specifiers: specifiersOf(text, tokens).map(specifier => specifier.text) };
 }
 
+/** The key a bundler writes its "leave this to the run time" list under. */
+const EXTERNAL_KEY = /^externals?$/;
+
+/** An array literal as the token stream sees it: its strings, and the names in it. */
+interface ArrayLiteral {
+  strings: string[];
+  /** Identifiers written inside — a spread, a reference — and '' for anything else. */
+  names: string[];
+}
+
+/** Read an array literal, starting at its opening bracket. */
+function readArray(text: string, tokens: Token[], open: number): ArrayLiteral {
+  const strings: string[] = [];
+  const names: string[] = [];
+  let depth = 0;
+  for (let i = open; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.punct === '[') depth++;
+    else if (token.punct === ']' && --depth === 0) break;
+    else if (token.kind === 'str') strings.push(text.slice(token.innerStart, token.innerEnd));
+    else if (token.kind === 'ident') names.push(word(text, token));
+    else if (token.kind === 'other') names.push('');
+  }
+  return { strings, names };
+}
+
+/**
+ * The packages a build file leaves for the run time to provide.
+ *
+ * A bundler is told what not to inline — `external: ['esbuild', 'drizzle-orm']`
+ * — and everything else it is handed goes inside the output file. That answers
+ * a question no manifest can: whether the published package really needs a
+ * dependency installed, or carries it already.
+ *
+ * `known: false` comes back when the file writes such a list and builds it out
+ * of something this cannot read: a call, an object, a spread of an array that
+ * is not in the same file. The only use for the answer is withholding a
+ * report, so an unreadable list has to say so rather than look empty.
+ */
+export function bundlerExternals(text: string): { known: true; names: Set<string> } | { known: false } | undefined {
+  if (!/\bexternals?\s*:/.test(text)) return undefined;
+  const { tokens } = tokenize(text);
+  const arrays = new Map<string, ArrayLiteral>();
+  for (let i = 0; i + 2 < tokens.length; i++) {
+    if (tokens[i]!.kind !== 'ident' || tokens[i + 1]!.punct !== '=' || tokens[i + 2]!.punct !== '[') continue;
+    arrays.set(word(text, tokens[i]!), readArray(text, tokens, i + 2));
+  }
+
+  const names = new Set<string>();
+  let declared = false;
+  for (let i = 0; i + 2 < tokens.length; i++) {
+    const key = tokens[i]!;
+    if (key.kind !== 'ident' || tokens[i + 1]!.punct !== ':' || !EXTERNAL_KEY.test(word(text, key))) continue;
+    declared = true;
+    if (tokens[i + 2]!.punct !== '[') return { known: false };
+    const list = readArray(text, tokens, i + 2);
+    for (const name of list.strings) names.add(name);
+    for (const reference of list.names) {
+      const nested = arrays.get(reference);
+      if (!nested || nested.names.length > 0) return { known: false };
+      for (const name of nested.strings) names.add(name);
+    }
+  }
+  return declared ? { known: true, names } : undefined;
+}
+
 /** Read and scan these files. */
 export function scanFiles(filePaths: string[]): FileScan[] {
   return filePaths.map(filePath => {
@@ -478,6 +593,7 @@ export function scanFiles(filePaths: string[]): FileScan[] {
         suppressedLines: [],
         commentLines: [],
         specifiers: [],
+        typeReferences: [],
       };
     }
     return scanText(text);

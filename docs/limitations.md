@@ -44,6 +44,7 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - Two more ways of touching a property still read as reads, so the member stays used: a destructuring assignment (`({ count: t.count } = src)`), and a `delete`. A write through a computed key credits the member the key names, the same as a read would.
 - Anonymous default-export classes (`export default class { … }`) are skipped: without a name there are no class references to run the escape checks on.
 - Declaration files (`.d.ts`) are not scanned.
+- A workspace package that imports a sibling's *built* output rather than its source reads a second copy of every type. `drizzle-kit/node_modules/drizzle-orm` is a symlink to `drizzle-orm/dist`, so the reads land on declarations the run never holds, and the source members they belong to look unread. Point the run at the source — or expect those members to be reported.
 - Anonymous default exports (`export default { … }`) have no name to search references for, so the export check skips them.
 - A file consumed only through a bare `import './x'` for its side effects counts as used when its importer is reachable, even if nothing else touches it. That is the safe reading.
 - An entry point nothing declares in writing — a file loaded by a name the code computes at runtime — is a false positive until you pass it with `--entry`. Run `norefs entries` to see what was found before reaching for the flag.

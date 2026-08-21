@@ -5,7 +5,13 @@ import { isToolConfig } from './tool-configs';
 const ENTRY_NAME = /^(index|main|cli)\.[cm]?[jt]sx?$/;
 /** Files a harness runs directly; they import code but nothing imports them. */
 const HARNESS_NAME = /\.(test|spec|stories|bench)\.[cm]?[jt]sx?$/;
-const HARNESS_DIRS = new Set(['test', 'tests', '__tests__', '__mocks__']);
+/**
+ * A directory a harness keeps its files in. Projects name them more than one
+ * way — `tests`, `__tests__`, `type-tests`, `js-tests` — so the shape is read
+ * rather than a list of words: `test` or `tests`, alone or behind a prefix and
+ * a separator. The separator is what keeps `latest` out.
+ */
+const HARNESS_DIR = /^(?:__tests__|__mocks__|benchmarks?|(?:[\w.]+[-_])?tests?)$/;
 
 export function isEntryFile(filePath: string, rootDirs: string[], entries: string[]): boolean {
   if (entries.some(entry => filePath === entry || filePath.startsWith(`${entry}/`))) return true;
@@ -28,7 +34,7 @@ export function isHarnessFile(filePath: string, rootDirs: string[]): boolean {
     path
       .relative(root, path.dirname(filePath))
       .split(path.sep)
-      .some(segment => HARNESS_DIRS.has(segment))
+      .some(segment => HARNESS_DIR.test(segment))
   );
 }
 
