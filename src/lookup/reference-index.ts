@@ -1155,8 +1155,28 @@ function merge(a: Destinations, b: Destinations): Destinations {
 /** How many value hops the flow proof follows before giving up. */
 const MAX_FLOW_HOPS = 4;
 
+/**
+ * True when this reference fills the member in rather than reading it: an
+ * object-literal property, a computed key, a JSX attribute. A contextual site
+ * is one the type system matched to a member, and every one of them writes
+ * except the destructuring, which reads.
+ */
+export function isWriteReference(reference: Node): boolean {
+  const node = reference.compilerNode;
+  return isInPlaceWrite(node) || (!isReadOccurrence(node) && isContextualSite(node));
+}
+
+/** True when this reference consumes the member: a property access, an index, a destructuring. */
+export function isReadReference(reference: Node): boolean {
+  return isReadOccurrence(reference.compilerNode);
+}
+
 /** True when this occurrence consumes the property rather than declaring or writing it. */
 function isReadOccurrence(node: ts.Node): boolean {
+  // A property access is how the code reads a member and also how it writes
+  // one in place. The two look alike from here, so the assignment around it
+  // is what tells them apart.
+  if (isInPlaceWrite(node)) return false;
   const parent = node.parent;
   if (ts.isPropertyAccessExpression(parent) && parent.name === node) return true;
   if (ts.isBindingElement(parent) && (parent.propertyName ?? parent.name) === node) return true;
@@ -1300,6 +1320,47 @@ function isMemberDeclarationName(node: ts.Node): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * True when this occurrence writes the member in place: `shelf.count = 1`, or
+ * an update whose old value goes nowhere but straight back in — `shelf.count
+ * += 1`, `shelf.count++` standing as a statement of its own.
+ *
+ * The old value of an update is read, and that is the point: it is read to
+ * write it again, and no one else ever sees it. Where someone does —
+ * `const n = shelf.count++` hands the value on — this is a read like any
+ * other.
+ */
+function isInPlaceWrite(node: ts.Node): boolean {
+  const access = node.parent;
+  if (ts.isPropertyAccessExpression(access)) {
+    if (access.name !== node) return false;
+  } else if (ts.isElementAccessExpression(access)) {
+    if (access.argumentExpression !== node) return false;
+  } else {
+    return false;
+  }
+
+  const around = access.parent;
+  if (ts.isBinaryExpression(around) && around.left === access) {
+    const operator = around.operatorToken.kind;
+    return operator >= ts.SyntaxKind.FirstAssignment && operator <= ts.SyntaxKind.LastAssignment;
+  }
+  if (
+    (ts.isPostfixUnaryExpression(around) || ts.isPrefixUnaryExpression(around)) &&
+    around.operand === access &&
+    (around.operator === ts.SyntaxKind.PlusPlusToken || around.operator === ts.SyntaxKind.MinusMinusToken)
+  ) {
+    return valueGoesNowhere(around);
+  }
+  return false;
+}
+
+/** True where an expression's value is dropped: a statement of its own, a `for` update. */
+function valueGoesNowhere(node: ts.Node): boolean {
+  const parent = node.parent;
+  return ts.isExpressionStatement(parent) || (ts.isForStatement(parent) && parent.incrementor === node);
 }
 
 /** True when this node could name a member of the type its container is read as. */

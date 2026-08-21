@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
 import { loadProject } from '../src/engine/project';
+import type { Finding } from '../src/types';
 import { fixture } from './helpers';
 
 const fixturesDir = fixture('fixtures');
@@ -16,6 +17,14 @@ function reportedIn(fixture: string): string[] {
     .filter(f => f.kind === 'member' && f.filePath.endsWith(`/${fixture}`))
     .map(f => f.name)
     .sort();
+}
+
+function findingFor(fixture: string, name: string): Finding | undefined {
+  return findings.find(f => f.kind === 'member' && f.filePath.endsWith(`/${fixture}`) && f.name === name);
+}
+
+function verdictIn(fixture: string, name: string): string | undefined {
+  return findingFor(fixture, name)?.verdict;
 }
 
 describe('usage patterns the reference check resolves (no false positives)', () => {
@@ -54,6 +63,18 @@ describe('usage patterns the reference check resolves (no false positives)', () 
 
   it('returned object with only local property reads', () => {
     expect(reportedIn('returned-object-clean.ts')).toEqual(['deadProp']);
+  });
+
+  it('a literal nested in a returned object, reached through a read path', () => {
+    expect(reportedIn('returned-object-nested.ts')).toEqual(['deadMinServings']);
+  });
+
+  it('a nested literal with a declared shape is reported on that type', () => {
+    expect(reportedIn('returned-object-nested-typed.ts')).toEqual(['deadHalf']);
+  });
+
+  it("a returned object keeps the rest reportable when `'name' in box` probes one key", () => {
+    expect(reportedIn('returned-object-probe.ts')).toEqual(['deadLining']);
   });
 });
 
@@ -190,6 +211,29 @@ describe('enum members', () => {
   });
 });
 
+describe('sinks reached through a helper', () => {
+  it('silences the types a relaying parameter carries in', () => {
+    // The `Object.keys` inside `dump` sees only `T`. The concrete type is at
+    // the call site, through one hop, two hops, a method, or a relay that
+    // calls itself — and so is the decision to stay quiet about it.
+    expect(reportedIn('relayed-sink.ts')).toEqual([]);
+  });
+
+  it('silences what a relay handed on as a value will be given', () => {
+    // `sittings.forEach(dump)` writes no argument down. The position says what
+    // arrives — the array's element type, the declared option's parameter —
+    // and both go quiet. A callback with no sink in it relays nothing.
+    expect(reportedIn('relayed-sink-callback.ts')).toEqual(['deadAroma']);
+  });
+
+  it('silences the relaying parameter and nothing beside it', () => {
+    // `quietSubtitle` rode in on the relay. `deadColor` fed the parameter next
+    // to it, and `deadPlating` went through a helper with no sink in it —
+    // neither of those buys a type its silence.
+    expect(reportedIn('relayed-sink-narrow.ts')).toEqual(['deadColor', 'deadPlating']);
+  });
+});
+
 describe('const object members', () => {
   it('reports a member of an `as const` object that nothing reads', () => {
     // The enum modern TypeScript writes, and the same question asked of it.
@@ -220,6 +264,25 @@ describe('const object members', () => {
 
   it('says nothing about an object targeted by keyof typeof', () => {
     expect(reportedIn('const-object-keyof.ts')).toEqual([]);
+  });
+
+  it('asks the same question of the literals nested inside', () => {
+    // `oven`, `oven.grill`, `spices` and `timings` are each read in a way that
+    // keeps the value local — a path, a deeper path, a string index, a
+    // destructuring — so the members under them answer for themselves.
+    expect(reportedIn('const-object-nested.ts')).toEqual(['deadRack', 'deadRest', 'deadSetting', 'deadTin']);
+  });
+
+  it('stops at the property that lets its value out', () => {
+    // Forwarded, serialized, enumerated, indexed with a computed key: each one
+    // hands the whole inner shape onward, and nothing under it is reportable.
+    expect(reportedIn('const-object-nested-escapes.ts')).toEqual([]);
+  });
+
+  it('reports the unread property itself, not the members under it', () => {
+    // Nothing reaches inside a property nobody reads. One death, one finding,
+    // one edit — never the same death told twice.
+    expect(reportedIn('const-object-nested-unread.ts')).toEqual(['pantry']);
   });
 
   it('leaves a declared shape to the collector that reads declared shapes', () => {
@@ -296,10 +359,78 @@ describe('documented blind spots', () => {
     // The class declaration counts as a reference; class members are out of scope here.
     expect(reportedIn('implemented.ts')).toEqual([]);
   });
+});
 
-  it('write-only properties count as used', () => {
-    // writeOnlyRet is assigned in the return literal but never read; the write
-    // is a reference, so it is not reported.
-    expect(reportedIn('type-literal-alias.ts')).toEqual(['deadProp']);
+describe('objects returned from several branches', () => {
+  it('reads every shape the function hands back', () => {
+    // Two branches, two shapes, one return value. `handle` is read on both;
+    // the key each branch writes alone dies on that branch's terms.
+    expect(reportedIn('returned-object-branches.ts')).toEqual(['deadWide', 'deadNarrow'].sort());
+  });
+
+  it('credits a key one branch reads to every branch that writes it', () => {
+    // Two branches of one shape collapse to a single set of declarations, so
+    // every read of `mesh` lands on the first branch and the second holds no
+    // references at all. Reporting it would be a false positive.
+    expect(reportedIn('returned-object-branches-alike.ts')).toEqual(['deadGauge', 'deadGauge']);
+  });
+
+  it('calls the sibling write the member, not a name that matches it', () => {
+    // The other branch writing `deadGauge` is this property written twice.
+    // Reading it as an unverified name match would soften the verdict on the
+    // strength of the member itself.
+    const finding = findingFor('returned-object-branches-alike.ts', 'deadGauge');
+    expect(finding?.verdict).toBe('dead');
+  });
+
+  it('folds only when every branch loses everything', () => {
+    const fold = findings.find(
+      f => f.kind === 'empty-type' && f.filePath.endsWith('/returned-object-branches-empty.ts')
+    );
+    expect(fold?.name).toBe('tallyLadles');
+    // Three keys between the two branches, counted as the return value offers
+    // them rather than as lines that write them.
+    expect(fold?.kind === 'empty-type' ? fold.swallowed : 0).toBe(3);
+    expect(reportedIn('returned-object-branches-empty.ts')).toEqual([]);
+  });
+
+  it('leaves the function alone when a branch returns something else', () => {
+    // A read of the return value could land on that other shape, so the
+    // literal's own keys prove nothing.
+    expect(reportedIn('returned-object-branches-mixed.ts')).toEqual([]);
+  });
+});
+
+describe('members reached by a key the source computes', () => {
+  it('credits the keys the type pins down, and no more', () => {
+    // `'jams' | 'pickles'` reaches exactly two members. They are used; the rest
+    // of the shelf still answers for itself.
+    expect(reportedIn('computed-key.ts')).toEqual(['deadChutneys']);
+    // And the type does not fold: two of its three members are alive.
+    expect(findings.some(f => f.kind === 'empty-type' && f.name === 'ShelfIndex')).toBe(false);
+  });
+});
+
+describe('members the code writes and never reads', () => {
+  it('reports the member an annotated literal fills in and nothing reads', () => {
+    // `writeOnlyRet` is written into the returned literal against the declared
+    // return type, and read nowhere. The write is a reference like any other —
+    // seeing past it is the whole point of the verdict.
+    expect(reportedIn('type-literal-alias.ts')).toEqual(['deadProp', 'writeOnlyRet']);
+    expect(verdictIn('type-literal-alias.ts', 'writeOnlyRet')).toBe('write-only');
+  });
+
+  it('names the writes it found, and keeps them for the fix', () => {
+    const finding = findingFor('write-only-member.ts', 'spareCrates');
+    expect(finding?.verdict).toBe('write-only');
+    expect(finding?.evidence).toMatch(/the writes at .* name this member, and nothing reads it/);
+    expect(finding?.kind === 'member' ? finding.writeSites?.length : 0).toBe(2);
+  });
+
+  it('leaves a member alone when a read reaches it through any declaration', () => {
+    // `satisfies` and `as const` leave the literal holding its own type, so a
+    // read lands on the property written there. The member is not unread — the
+    // reads resolve to the other declaration, and both have to stay.
+    expect(reportedIn('write-only-shadowed.ts')).toEqual(['neverWritten']);
   });
 });

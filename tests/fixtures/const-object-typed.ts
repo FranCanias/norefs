@@ -5,10 +5,10 @@
  * the finding belongs to the collector that reads that type, and this one stays
  * out rather than saying the same thing in a second voice.
  *
- * Both dead members here are optional, and deliberately so: a member the
- * literal writes has a reference to show for it, which is the reference check
- * working as designed rather than the hand-off failing. The blind-spot list in
- * docs/limitations.md names that limit.
+ * Both dead members here are optional, and deliberately so: no literal fills
+ * them in, so the finding is a plain dead member. A member a literal does fill
+ * in and nothing reads is the `write-only` verdict's story, told in
+ * write-only-member.ts.
  */
 interface PantryLimits {
   jarCount: number;

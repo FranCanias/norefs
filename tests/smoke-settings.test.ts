@@ -22,14 +22,15 @@ describe('the settings a project decides once', () => {
       compilerOptions: { target: 'ES2022', module: 'ESNext', moduleResolution: 'bundler', strict: true, noEmit: true },
       include: ['**/*.ts'],
     }),
-    // A named dead member with two unnamed ones nested under it, so --anon has
-    // something to add.
+    // A named dead member (`dropped`) and an unnamed one (`value`) nested under
+    // a property something reads, so --anon has something to add.
     'src/lib.ts': [
       'export type Props = {',
       '  target: { value: string; label: string };',
       '  keep: string;',
+      '  dropped: string;',
       '};',
-      'export const helper = (p: Props): string => p.keep;',
+      'export const helper = (p: Props): string => p.keep + p.target.label;',
       '',
     ].join('\n'),
     'src/other.ts': [

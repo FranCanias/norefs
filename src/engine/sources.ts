@@ -32,12 +32,10 @@ interface Import {
  * is asked only to resolve the specifiers it finds.
  */
 export class SourceIndex {
-  readonly filePaths: string[];
   private readonly scans = new Map<string, FileScan>();
   private readonly imports = new Map<string, Import[]>();
 
   constructor(filePaths: string[], packages: PackageConfig[], fallbackOptions: ts.CompilerOptions) {
-    this.filePaths = filePaths;
     const scans = scanFiles(filePaths);
     // scanFiles returns one scan per path.
     for (const [i, filePath] of filePaths.entries()) this.scans.set(filePath, scans[i]!);

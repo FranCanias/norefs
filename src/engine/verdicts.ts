@@ -1,5 +1,7 @@
 import type { InterfaceDeclaration, Node, Project, SourceFile, TypeAliasDeclaration, TypeNode } from 'ts-morph';
 import { SyntaxKind, ts } from 'ts-morph';
+import { writtenProperty } from '../collectors/object-literals';
+import { producerOf, returnedObjectLiterals } from '../collectors/returned-objects';
 import { descendantsOfKind } from '../lookup/descendants';
 import { referenceIndex } from '../lookup/reference-index';
 import { findReferencesAsNodes } from '../lookup/references';
@@ -69,13 +71,28 @@ export function assignVerdicts(
         : `a same-named ${where} overlaps this shape`;
       continue;
     }
+    const alive = (site: Node): boolean => !isDeadFile(site.getSourceFile().getFilePath());
+    // Writes the analysis already proved: it reported this member because
+    // every reference to it is one. No name match can be that sure, so these
+    // are read first, and nothing below them is asked.
+    const proven = (finding.writeSites ?? []).filter(alive);
+    if (proven.length > 0) {
+      const one = proven.length === 1;
+      finding.verdict = 'write-only';
+      finding.evidence = `the write${one ? '' : 's'} at ${siteList(proven, cwd)} name${one ? 's' : ''} this member, and nothing reads it`;
+      finding.writeSites = proven;
+      continue;
+    }
     const nameNode = (finding.node as Node & { getNameNode(): Node }).getNameNode();
     const found = index.unattributedWriteSites(finding.name, nameNode);
-    const alive = (site: Node): boolean => !isDeadFile(site.getSourceFile().getFilePath());
+    // A branch writing the same key is this member, not a name that matches
+    // it, so it is dropped before it can become anyone's evidence.
+    const siblings = siblingBranchWrites(finding.node, finding.name);
+    const attributable = (site: Node): boolean => alive(site) && !siblings.has(site.compilerNode);
     const sites = {
-      typed: found.typed.filter(alive),
-      unverified: found.unverified.filter(alive),
-      accounted: found.accounted.filter(alive),
+      typed: found.typed.filter(attributable),
+      unverified: found.unverified.filter(attributable),
+      accounted: found.accounted.filter(attributable),
     };
     if (sites.typed.length > 0) {
       finding.verdict = 'write-only';
@@ -101,6 +118,34 @@ export function assignVerdicts(
   }
 
   assignEmptyTypeVerdicts(findings);
+}
+
+const NO_SIBLINGS: ReadonlySet<ts.Node> = new Set();
+
+/**
+ * The other branches of one `return` that write this same key.
+ *
+ * A function with several `return` statements hands back one shape per branch,
+ * so a key written in more than one of them is a single property written more
+ * than once. Reading a sibling as an unverified name match would soften a
+ * verdict on the strength of the member itself.
+ */
+function siblingBranchWrites(member: Node, name: string): ReadonlySet<ts.Node> {
+  const literal = member.getParent();
+  if (!literal?.isKind(SyntaxKind.ObjectLiteralExpression)) return NO_SIBLINGS;
+  const producer = producerOf(literal);
+  const branches = producer ? returnedObjectLiterals(producer) : [];
+  if (branches.length < 2 || !branches.includes(literal)) return NO_SIBLINGS;
+
+  const siblings = new Set<ts.Node>();
+  for (const branch of branches) {
+    if (branch === literal) continue;
+    for (const property of branch.getProperties()) {
+      const written = writtenProperty(property);
+      if (written?.key === name) siblings.add(written.nameNode.compilerNode);
+    }
+  }
+  return siblings;
 }
 
 /**

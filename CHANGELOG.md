@@ -7,6 +7,171 @@ versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 A user-visible change lands with its entry here, under **Unreleased**. A release
 renames the section and dates it — the writing is already done.
 
+## Unreleased
+
+**A function with several `return` statements is finally read.** One returned
+object literal was the only shape the check would look at. Two meant the whole
+function was skipped, dead keys and all:
+
+```ts
+export const ormCoreVersions = async () => {
+  try {
+    const { compatibilityVersion, npmVersion } = await import('drizzle-orm/version');
+    return { compatibilityVersion, npmVersion };   // only `npmVersion` is ever read
+  } catch (e) {
+    return {};
+  }
+}
+```
+
+Each branch is a shape of its own, and now each one answers for its own
+members. The example is real — that finding is new on drizzle-kit, and it is
+the only thing that changed across five repositories checked before and after.
+
+A key more than one branch writes is the part that needed care. Two branches
+returning the *same* shape collapse to a single set of declarations, so every
+read lands on the one the checker kept and the others hold no references at
+all. Reporting those would be a false positive, so a shared key is reported
+only when every branch that writes it is unread — and then at each line that
+writes it, because each is a separate edit. `--fix` retires them together.
+
+A `return` of anything but a literal still stops the check. A read of the value
+could land on that other shape, and the literal's own keys would prove nothing.
+
+**Two branches losing everything is one finding, not two.** "Nobody reads what
+`f` returns" now needs every branch to be empty, and counts the keys the return
+value offers rather than the lines that write them.
+
+**A sibling branch is no longer read as a name match.** A key written in two
+branches used to soften its own verdict to `write-only (unverified name match)`,
+citing the other branch as the write. That is the same property written twice,
+not a name that happens to match, so the verdict stays `dead`. This can change
+a verdict in a baseline.
+
+The check does work it used to decline, so a codebase full of multi-return
+producers has more to analyze. Measured against the same volume of
+single-return literals, the new path is slightly faster per member (17.4 s vs
+20.1 s for 3,600 findings on a synthetic project) — the cost is the work, not
+the reading of it. On real repositories the wall clock did not move.
+
+**Object literals are read to their full depth.** The const-object and
+returned-object checks stopped at the top level: `const cfg = { oven: { tray:
+'steel', deadRack: 'wire' } }` said nothing about `deadRack`. A literal nested
+inside another is a shape of its own, and now it answers for itself — as deep
+as the nesting goes, with the property path in the finding: ``dead property
+`deadRack` in const `cfg.oven` ``.
+
+The descent is only as safe as the reads that lead to it, so it follows the
+same rule the top level already lived by: every read of the holding property
+must keep the value local. `cfg.oven` passed bare, serialized, enumerated, or
+indexed with a computed key carries the whole inner shape with it, and the
+check stops there. A read reaches one level in through a path (`cfg.oven.tray`),
+a string index (`cfg['oven'].tray`), or a destructuring whose binding stays
+local — the last two are new, and the type-level checks gained them too.
+
+**A relay handed on as a value is followed too.** `Object.keys` one function
+away already silenced the types flowing through it, but only where that
+function was called with an argument to read:
+
+```ts
+function dump<T extends object>(o: T) { return Object.keys(o) }
+rows.forEach(dump)              // `Row`'s members were reported dead
+rows.forEach(row => dump(row))  // these were not
+```
+
+A wrapper nobody needs was the only thing between a user and a `--fix` that
+deletes members their code reads at run time. `rows.forEach(dump)` writes no
+argument down, so the position now answers instead: the type that position
+expects at the relaying parameter is what will arrive. That reading is not
+about arrays — a declared callback option or an annotated binding says the
+same thing, and each is followed.
+
+What is left is a relay renamed through a binding that declares no type
+(`const relay = dump`) or handed to a parameter typed only `Function`. Neither
+has a position to read. Annotating the binding restores it.
+
+**A property the code assigns and never reads back is write-only too.** An
+assignment target is a property access, so `t.misses = 0` looked exactly like
+a read and kept the member off the report:
+
+```ts
+interface Tally { hits: number; misses: number }
+function count(t: Tally) { t.misses = 0; t.misses += 1; return t.hits }
+```
+
+`misses` now reports. An update whose old value goes straight back in —
+`+= 1`, or `count++` on a line of its own — writes; one whose value is handed
+on, `const n = count++`, reads. Neither `--fix` nor `--fix-unsafe` touches
+these: no single edit retires an assignment, because the right-hand side may
+be doing work that has to stay. The finding is reported and left for you.
+
+Telling the two apart also settled a question the analysis had been answering
+by luck. A name match was discarded when *something* read the same property on
+another literal, and an in-place write counted as that read. It no longer does,
+so a member in that position reports as an unverified name match — which is
+what the analysis actually knows — rather than as dead.
+
+**A member the code only fills in is now write-only, not used.** A write is a
+reference, and a check that stops at "found one" called this member alive:
+
+```ts
+interface LarderStock { crateCount: number; spareCrates: number }
+const small: LarderStock = { crateCount: 12, spareCrates: 0 };   // `spareCrates` was silent
+```
+
+Nothing reads `spareCrates`. It now reports as `write-only`, naming the
+literals that set it, and `--fix-unsafe` retires the member together with
+every one of them. The verdict already existed for the writes the reference
+check could not see; this is the case where the reference is right there.
+
+A read through *any* declaration still counts as a read. `satisfies` and
+`as const` leave the literal holding its own type, so `shelves.trivetCount`
+lands on the property written there rather than on the member it was checked
+against — both stay.
+
+**A key the source computes credits the members it can reach.**
+`manifest[section]` names a member without writing it down, and until now the
+reference check saw nothing there. The key's type says how much is in reach: a
+union of string literals marks exactly those members used and leaves the rest
+of the type answerable, the way a `'name' in v` probe does; a string the type
+cannot pin down reaches every member, and the whole type goes quiet. This was
+a false-positive source on its own — it is what the new verdict ran into
+first, dogfooding norefs over norefs. Indexing costs one type lookup per
+computed key: unmeasurable on real code, about 10% on a synthetic project that
+is nothing but array indexing.
+
+**A sink reached through a helper counts as a sink.** `Object.keys(recipe)`
+had always silenced `Recipe` — its keys are read without naming one, so its
+members cannot be counted. The same call one function away did not:
+
+```ts
+function dump<T extends object>(o: T) { return Object.keys(o) }
+render(r: Recipe) { return r.title + dump(r).length }   // `label` reported dead
+```
+
+`label` is read at runtime, and the report was wrong about it. The sink
+standing inside `dump` sees only `T`; the concrete type is back at the call
+site. The index now follows a relaying parameter out to its callers and skips
+what it finds there, through as many hops as the forwarding goes — a plain
+function, an arrow bound to a const, a method, across files, and a relay that
+calls itself. Only the parameter carrying the value relays; the ones beside it
+answer for their members as before.
+
+This costs nothing and often saves: a type it silences drops out of the member
+check entirely. On a synthetic project built to be all relays, the run went
+from 1.6 s to 0.5 s, and from 3000 false positives to none.
+
+**A `'name' in box` probe no longer kills the key it names.** The returned-object
+check counted every member of `makeBox()` against the reference index alone,
+where the const-object check had always credited the probed key. A member only
+a probe reached was reported dead. Both checks now read the same index.
+
+**One death is reported once.** A property nothing reads no longer has its
+members reported underneath it. The property itself was already the finding;
+listing what it holds said the same thing twice and handed `--fix` two edits
+for one deletion. This also cleans up a case that predates the nesting work,
+where an interface member holding an inline object type reported both.
+
 ## [0.10.0](https://github.com/FranCanias/norefs/releases/tag/v0.10.0) — 2026-08-20
 
 A performance pass, checked the honest way: every change ran A/B against

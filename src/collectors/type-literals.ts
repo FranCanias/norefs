@@ -9,7 +9,7 @@ import {
   callableEscapes,
   castValueStaysLocal,
   getCallableNameNode,
-  propertyValueStaysLocal,
+  propertyReadsStayLocal,
   valueUsesStayLocal,
 } from './escape';
 
@@ -87,7 +87,8 @@ function climbToOwner(typeLiteral: TypeLiteralNode): { owner: Node | undefined; 
  * a whole-binding parameter or variable that escapes local view, a parameter of
  * a function type (implementations declare their own bindings), a return type
  * on a function whose result escapes, or the type of a property whose value
- * flows onward as a whole.
+ * flows onward as a whole — or that nothing reads, where the property itself is
+ * the finding.
  */
 function bindingEscapesTracking(owner: Node, topTypeNode: Node): boolean {
   if (owner.isKind(SyntaxKind.AsExpression) || owner.isKind(SyntaxKind.SatisfiesExpression)) {
@@ -117,7 +118,7 @@ function bindingEscapesTracking(owner: Node, topTypeNode: Node): boolean {
   }
 
   if (owner.isKind(SyntaxKind.PropertySignature) || owner.isKind(SyntaxKind.PropertyDeclaration)) {
-    return !propertyValueStaysLocal(owner);
+    return !propertyReadsStayLocal(owner);
   }
 
   return false;

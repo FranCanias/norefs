@@ -1,8 +1,8 @@
 import type { ObjectLiteralExpression, SourceFile, VariableDeclaration } from 'ts-morph';
 import { SyntaxKind, VariableDeclarationKind } from 'ts-morph';
 import type { Candidate, CollectContext } from './candidate';
-import { toCandidate } from './candidate';
 import { valueUsesStayLocal } from './escape';
+import { collectLiteralMembers, selfShapedLiteral } from './object-literals';
 
 /**
  * Members of a const object literal: `const Timeouts = { … } as const`.
@@ -18,6 +18,9 @@ import { valueUsesStayLocal } from './escape';
  * naming one. Each of those silences the whole declaration instead of softening
  * the verdict on it. A reference count that missed a read is not a weaker
  * claim — it is the wrong one.
+ *
+ * The same question goes to the literals nested inside, one property at a
+ * time, for as long as the reads keep the values local.
  */
 export function collectConstObjectCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
   const candidates: Candidate[] = [];
@@ -26,12 +29,9 @@ export function collectConstObjectCandidates(sourceFile: SourceFile, ctx: Collec
     for (const declaration of statement.getDeclarations()) {
       const literal = trackableObjectLiteral(declaration, ctx);
       if (!literal) continue;
-      const probed = ctx.dynamic.probed.get(literal);
-      const context = `const \`${declaration.getName()}\``;
-      for (const property of literal.getProperties()) {
-        const candidate = toCandidate(property, context, false, probed);
-        if (candidate) candidates.push(candidate);
-      }
+      const name = declaration.getName();
+      const label = (path: string[]): string => `const \`${[name, ...path].join('.')}\``;
+      candidates.push(...collectLiteralMembers(literal, ctx, false, label));
     }
   }
   return candidates;
@@ -56,14 +56,10 @@ function trackableObjectLiteral(
   const nameNode = declaration.getNameNode();
   if (!nameNode.isKind(SyntaxKind.Identifier)) return undefined;
 
-  const initializer = declaration.getInitializer();
   // `as const` leaves the literal in charge of its own shape. `as Config` and
   // `satisfies Config` hand that to a named type, and fall out here.
-  const literal =
-    initializer?.isKind(SyntaxKind.AsExpression) && initializer.getTypeNode()?.getText() === 'const'
-      ? initializer.getExpression()
-      : initializer;
-  if (!literal?.isKind(SyntaxKind.ObjectLiteralExpression)) return undefined;
+  const literal = selfShapedLiteral(declaration.getInitializer());
+  if (!literal) return undefined;
   if (ctx.dynamic.suppressed.has(literal)) return undefined;
 
   if (ctx.isKeyofTargeted(declaration, nameNode)) return undefined;

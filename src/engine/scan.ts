@@ -8,7 +8,7 @@ export interface Specifier {
   text: string;
   /** Offsets of the literal, quotes included. */
   start: number;
-  end: number;
+  end: number; // norefs-ignore: the test suite reads it, outside this tsconfig
   /**
    * True when the clause names types alone — `import type`, or braces whose
    * every binding is one. The compiler erases those, so nothing is left at run
@@ -19,8 +19,6 @@ export interface Specifier {
 
 /** Everything one source file says without a type checker being asked. */
 export interface FileScan {
-  /** The file could not be read; every other field is empty. */
-  unreadable: boolean;
   /** A `norefs-ignore-file` mark stands in the file's leading comments. */
   fileSuppressed: boolean;
   /** Offset where each line begins; line N is at index N - 1. */
@@ -440,7 +438,6 @@ export function scanText(text: string): FileScan {
 
   const { tokens, firstTokenStart } = tokenize(text);
   return {
-    unreadable: false,
     fileSuppressed: hasFileMark(text.slice(0, firstTokenStart)),
     lineStarts,
     suppressedLines,
@@ -473,8 +470,9 @@ export function scanFiles(filePaths: string[]): FileScan[] {
     try {
       text = fs.readFileSync(filePath, 'utf8');
     } catch {
+      // Nothing to say about a file that would not open. An empty scan keeps
+      // nothing alive and reports nothing, which is the safe reading of it.
       return {
-        unreadable: true,
         fileSuppressed: false,
         lineStarts: [],
         suppressedLines: [],

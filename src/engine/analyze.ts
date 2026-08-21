@@ -1,11 +1,14 @@
 import type { InterfaceDeclaration, Node, ObjectLiteralExpression, Project, TypeAliasDeclaration } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { collectCandidates } from '../collectors';
+import { writtenProperty } from '../collectors/object-literals';
+import type { FunctionLike } from '../collectors/returned-objects';
+import { producerOf, returnedObjectLiterals } from '../collectors/returned-objects';
 import { describeFunctionName } from '../describe';
 import { buildReferenceIndex } from '../lookup/reference-index';
 import { findReferencesAsNodes } from '../lookup/references';
 import type { EmptyTypeFinding, Finding, FindingKind, MemberFinding } from '../types';
-import { memberUsage } from './check';
+import { memberUsage, memberWriteSites } from './check';
 import { lineAndColumnAt } from './location';
 import type { ModuleOptions } from './modules';
 import { analyzeModules } from './modules';
@@ -78,6 +81,10 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
       context,
       anonymous,
       node: member,
+      // A member every reference writes carries its writes from here. The
+      // references are the proof, so the verdict pass has no name matching to
+      // do — it reads them, words them, and hands them to the fix.
+      ...(usage === 'write-only' ? { writeSites: memberWriteSites(member) } : {}),
       ...(usage === 'test-only' ? { verdict: 'test-only' as const, evidence: 'only test files reference it' } : {}),
     });
   }
@@ -120,31 +127,35 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
  * The producer half of a dead slice: a function whose returned object loses
  * every property. Nobody reads what it computes, so the computation itself is
  * the finding, not the properties one by one.
+ *
+ * A function with several `return` statements has to lose all of them. One
+ * branch keeping a property its callers read means the call still produces
+ * something, and the whole slice is not dead.
  */
 function emptyReturnedObjectFindings(reportedMembers: Set<Node>): EmptyTypeFinding[] {
-  const literals = new Set<ObjectLiteralExpression>();
+  const producers = new Map<FunctionLike, ObjectLiteralExpression[]>();
   for (const member of reportedMembers) {
-    const parent = member.getParent();
-    if (parent?.isKind(SyntaxKind.ObjectLiteralExpression)) literals.add(parent);
+    const literal = member.getParent();
+    if (!literal?.isKind(SyntaxKind.ObjectLiteralExpression)) continue;
+    const fn = producerOf(literal);
+    if (!fn || producers.has(fn)) continue;
+    // A literal nested one property in can lose every member while the return
+    // value keeps the property that holds it, and "nobody reads what this
+    // returns" would then be false. Only the shapes handed back count.
+    const returned = returnedObjectLiterals(fn);
+    if (returned.includes(literal)) producers.set(fn, returned);
   }
 
   const folds: EmptyTypeFinding[] = [];
-  for (const literal of literals) {
-    const properties = literal.getProperties();
+  for (const [fn, literals] of producers) {
+    const anchor = literals[0];
+    if (!anchor) continue;
+    const properties = literals.flatMap(literal => literal.getProperties());
     if (properties.length === 0 || !properties.every(property => reportedMembers.has(property))) continue;
-    const fn = literal
-      .getAncestors()
-      .find(
-        ancestor =>
-          ancestor.isKind(SyntaxKind.FunctionDeclaration) ||
-          ancestor.isKind(SyntaxKind.ArrowFunction) ||
-          ancestor.isKind(SyntaxKind.FunctionExpression)
-      );
-    if (!fn) continue;
     const described = describeFunctionName(fn);
     if (described.anonymous) continue;
-    const sourceFile = literal.getSourceFile();
-    const { line, column } = lineAndColumnAt(sourceFile, literal.getStart());
+    const sourceFile = anchor.getSourceFile();
+    const { line, column } = lineAndColumnAt(sourceFile, anchor.getStart());
     folds.push({
       kind: 'empty-type',
       filePath: sourceFile.getFilePath(),
@@ -153,8 +164,10 @@ function emptyReturnedObjectFindings(reportedMembers: Set<Node>): EmptyTypeFindi
       name: described.name,
       context: 'returned object',
       anonymous: false,
-      swallowed: properties.length,
-      members: [...properties],
+      // What the return value offers, not how many lines write it. Two
+      // branches writing the same key offer one property between them.
+      swallowed: new Set(properties.map(property => writtenProperty(property)?.key)).size,
+      members: properties,
     });
   }
   return folds;

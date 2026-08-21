@@ -1,6 +1,7 @@
 import { Project } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/engine/analyze';
+import { isFixable } from '../src/engine/fix';
 import type { EmptyTypeFinding, Finding } from '../src/types';
 
 function verdictOf(findings: Finding[], name: string): Finding | undefined {
@@ -8,6 +9,82 @@ function verdictOf(findings: Finding[], name: string): Finding | undefined {
 }
 
 describe('verdicts', () => {
+  it('reports a member the code only ever writes in place', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'interface Tally {',
+        '  hits: number;',
+        '  misses: number;',
+        '}',
+        'export function count(t: Tally): number {',
+        '  t.misses = 0;',
+        '  t.misses += 1;',
+        '  return t.hits;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project);
+
+    const member = verdictOf(findings, 'misses');
+    expect(member?.verdict).toBe('write-only');
+    expect(member?.evidence).toContain('name this member, and nothing reads it');
+    // No single edit retires an assignment — the right-hand side may do work —
+    // so the finding is reported and left for a human.
+    expect(isFixable(member as Finding, true)).toBe(false);
+  });
+
+  it('keeps a member whose in-place write is read back', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'interface Tally {',
+        '  hits: number;',
+        '  misses: number;',
+        '}',
+        'export function count(t: Tally): number {',
+        '  t.misses = 0;',
+        '  const seen = t.misses++;',
+        '  return t.hits + seen;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    expect(verdictOf(analyze(project), 'misses')).toBeUndefined();
+  });
+
+  it('will not discard a name match on the strength of another in-place write', () => {
+    // `balance` has no references. The only write of the name sits in an
+    // unrelated literal whose own `balance` is written and never read — which
+    // says nothing about whether this member is written through the gap. The
+    // analysis says so instead of claiming the write feeds another type.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'interface Ledger {',
+        '  entries: number;',
+        '  balance: number;',
+        '}',
+        'export function total(l: Ledger): number {',
+        '  return l.entries;',
+        '}',
+        'export function tally(): unknown {',
+        '  const running = { balance: 0 };',
+        '  running.balance = 5;',
+        '  return running;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    const member = verdictOf(analyze(project), 'balance');
+    expect(member?.verdict).toBe('write-only');
+    expect(member?.evidence).toContain('unverified name match');
+  });
+
   it('marks members of a JSON-parsed type as contract, transitively', () => {
     const project = new Project({ useInMemoryFileSystem: true });
     project.createSourceFile(

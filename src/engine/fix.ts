@@ -42,7 +42,7 @@ interface FixResult {
   filePaths: string[];
   fixed: number;
   /** Findings --fix leaves for the user: unused files, namespace findings, emptied types. */
-  skipped: number;
+  skipped: number; // norefs-ignore: the test suite reads it, outside this tsconfig
   /**
    * Comments that sit next to a fix but were kept: the leading comment of a
    * statement a fix edited without removing, or a comment one blank line

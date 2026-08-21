@@ -85,6 +85,10 @@ export interface MemberFinding extends FindingBase {
    * that deletes the member must delete these too — the value chain is the
    * finding, and a declaration removed without them leaves the writes running
    * into a shape no type describes.
+   *
+   * The verdict pass fills this in from the name matches it validated. The
+   * analysis fills it in first when the member's own references are the
+   * writes, which is proof of a kind no name match can reach.
    */
   writeSites?: Node[] | undefined;
   /** On a reported bridge wrapper: where the far side of the shared channel string lives. */

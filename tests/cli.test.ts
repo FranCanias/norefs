@@ -15,10 +15,12 @@ import { cli, inProject, runCli, TSCONFIG } from './helpers';
 const PROJECT: Record<string, string> = {
   'tsconfig.json': TSCONFIG,
   'src/index.ts': "import { helper } from './lib';\nexport const boot = (): string => helper();\n",
+  // `target` is the named dead member; `value` is an unnamed one, nested under
+  // a property something reads, which is what --anon has to add.
   'src/lib.ts': [
-    'type Props = { target: { value: string }; keep: string };',
+    'type Props = { target: string; keep: { text: string; value: string } };',
     'declare const props: Props;',
-    'export const helper = (): string => props.keep;',
+    'export const helper = (): string => props.keep.text;',
     "export const dead = (): string => 'dead';",
     '',
   ].join('\n'),
