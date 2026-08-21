@@ -231,3 +231,96 @@ function isStringKeyedElementAccess(parent: Node, expression: Node): boolean {
     (parent.getArgumentExpression()?.isKind(SyntaxKind.StringLiteral) ?? false)
   );
 }
+
+/**
+ * True when the value carrying this write keeps the member readable from here.
+ *
+ * A write proves nothing on its own if the value goes somewhere this run
+ * cannot read. `{ enter(node) { … } }` handed to graphql's `visit()` writes
+ * `enter`, and the library reads it back on every traversal — from a package
+ * whose source this run never holds, so no reference lands and the member
+ * looks filled-in and forgotten. `expect(result).toEqual({ greeting: 'Hi' })`
+ * is the same shape: the matcher reads `greeting` to compare it.
+ *
+ * The question is the callee, not the argument. A literal passed to a function
+ * this project declares *and* implements is read where the reference search
+ * already looks, and the verdict stands. One passed to a body this run does
+ * not hold — a package, an ambient declaration, an overload with no
+ * implementation — is not, and the member keeps the answer it had before.
+ *
+ * Everywhere else the value stays accountable. A literal assigned into a
+ * stored slot, held in a local binding, or returned is read back through the
+ * type that declares the member, which is what the reference search reads.
+ *
+ * Only a write inside an object literal is asked. An assignment writes through
+ * a binding whose own type answers for the member already.
+ */
+export function writeValueStaysLocal(site: Node): boolean {
+  const literal = enclosingObjectLiteral(site);
+  return literal === undefined || !reachesUnreadableCallee(literal, new Set());
+}
+
+/** The object literal this write fills in — a property, a shorthand, or a method. */
+function enclosingObjectLiteral(site: Node): Node | undefined {
+  const member = site.getParent();
+  if (!member) return undefined;
+  if (
+    member.isKind(SyntaxKind.PropertyAssignment) ||
+    member.isKind(SyntaxKind.ShorthandPropertyAssignment) ||
+    member.isKind(SyntaxKind.MethodDeclaration)
+  ) {
+    return member.getParentIfKind(SyntaxKind.ObjectLiteralExpression);
+  }
+  return undefined;
+}
+
+/** Follow a value forward to the calls it lands in, one hop at a time. */
+function reachesUnreadableCallee(value: Node, seen: Set<Node>): boolean {
+  if (seen.has(value)) return false;
+  seen.add(value);
+
+  const node = climbWrappers(value);
+  const parent = node.getParent();
+  if (!parent) return false;
+
+  // A cast leaves the literal a value; where that value goes is the question.
+  if (parent.isKind(SyntaxKind.AsExpression) || parent.isKind(SyntaxKind.SatisfiesExpression)) {
+    return reachesUnreadableCallee(parent, seen);
+  }
+  // A value inside another literal, or inside an array, travels with it.
+  if (parent.isKind(SyntaxKind.PropertyAssignment) || parent.isKind(SyntaxKind.ShorthandPropertyAssignment)) {
+    const outer = parent.getParentIfKind(SyntaxKind.ObjectLiteralExpression);
+    return outer !== undefined && reachesUnreadableCallee(outer, seen);
+  }
+  if (parent.isKind(SyntaxKind.ArrayLiteralExpression)) return reachesUnreadableCallee(parent, seen);
+  // The hop that matters: an argument is read by whatever the callee does.
+  if (parent.isKind(SyntaxKind.CallExpression) || parent.isKind(SyntaxKind.NewExpression)) {
+    return parent.getExpression() !== node && !calleeBodyIsReadable(parent.getExpression());
+  }
+  // A binding carries the value on to each of its own uses.
+  if (parent.isKind(SyntaxKind.VariableDeclaration)) {
+    const name = parent.getNameNode();
+    if (!name.isKind(SyntaxKind.Identifier)) return false;
+    return findReferencesAsNodes(name).some(ref => reachesUnreadableCallee(ref, seen));
+  }
+  return false;
+}
+
+/** True when this run holds an implementation of the callee to read. */
+function calleeBodyIsReadable(callee: Node): boolean {
+  const symbol = callee.getSymbol();
+  if (!symbol) return false;
+  // An import binds the name to a specifier; the declaration is at the far end.
+  const target = symbol.getAliasedSymbol() ?? symbol;
+  return target.getDeclarations().some(decl => !decl.getSourceFile().isDeclarationFile() && hasBody(decl));
+}
+
+function hasBody(decl: Node): boolean {
+  if (decl.isKind(SyntaxKind.VariableDeclaration)) {
+    const initializer = decl.getInitializer();
+    return initializer !== undefined && hasBody(initializer);
+  }
+  if (decl.isKind(SyntaxKind.ClassDeclaration) || decl.isKind(SyntaxKind.ClassExpression)) return true;
+  const body = 'getBody' in decl ? (decl as { getBody(): Node | undefined }).getBody() : undefined;
+  return body !== undefined;
+}

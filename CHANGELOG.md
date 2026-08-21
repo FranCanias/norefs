@@ -232,6 +232,39 @@ A read through *any* declaration still counts as a read. `satisfies` and
 lands on the property written there rather than on the member it was checked
 against — both stay.
 
+**A write only counts where the value stays readable.** Saying nothing reads a
+member means having looked everywhere a read could be, and a literal handed to
+a call is read by whatever the callee does with it:
+
+```ts
+const visitor: EnterLeaveVisitor<FragmentSpreadNode> = {
+  enter(node) { … },              // `enter` was reported write-only
+};
+visit(doc, { FragmentSpread: visitor });   // graphql calls it on every node
+```
+
+The verdict now asks whether this run holds that callee's body. A function the
+project declares *and* implements is read where the reference search already
+looks, and the verdict stands. A body norefs does not hold — a package, an
+ambient declaration, an overload with no implementation — is not, and the
+member keeps the answer it had before. `expect(result).toEqual({ greeting:
+'Hello' })` is the same shape wearing test clothes: the matcher reads
+`greeting` in order to compare it, and 138 of those assertions were being read
+as 138 writes and no reads.
+
+Everywhere else the value stays accountable, and the verdict is unchanged. A
+literal assigned into a stored slot, held in a local binding, or returned is
+read back through the type that declares the member. The `test-only` verdict is
+unchanged too: it says who touches the member, not whether anybody reads it.
+
+**A twin cluster grew.** `shadowed` went from 7 findings to 33 on the monorepo,
+almost all of them in sibling dialect files — `pg-core`, `gel-core`,
+`mysql-core` and `singlestore-core` each declare the same index config. They
+are new members reaching the report through the work above, and the twin they
+name is real. The reading to have is the verdict's own: the finding is the
+duplication, not the member.
+
+
 **A key the source computes credits the members it can reach.**
 `manifest[section]` names a member without writing it down, and until now the
 reference check saw nothing there. The key's type says how much is in reach: a

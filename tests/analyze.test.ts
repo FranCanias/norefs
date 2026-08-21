@@ -433,4 +433,12 @@ describe('members the code writes and never reads', () => {
     // reads resolve to the other declaration, and both have to stay.
     expect(reportedIn('write-only-shadowed.ts')).toEqual(['neverWritten']);
   });
+
+  it('asks nothing of a write whose value is handed on as an argument', () => {
+    // `garnish` and `grams` are written and never read here, but both values
+    // go into a call, and whoever takes them reads what they hold. Only
+    // `spareTrays`, whose value stays in a local binding, is write-only.
+    expect(reportedIn('write-only-escapes.ts')).toEqual(['spareTrays']);
+    expect(verdictIn('write-only-escapes.ts', 'spareTrays')).toBe('write-only');
+  });
 });
