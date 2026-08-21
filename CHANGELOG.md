@@ -7,7 +7,7 @@ versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 A user-visible change lands with its entry here, under **Unreleased**. A release
 renames the section and dates it — the writing is already done.
 
-## Unreleased
+## [0.11.0](https://github.com/FranCanias/norefs/releases/tag/v0.11.0) — 2026-08-21
 
 Two runs against a 3,700-file monorepo (drizzle-orm), each followed by a hand
 audit of every finding, drove this round. 41% of the first report was noise;
