@@ -325,6 +325,10 @@ class ReferenceIndex {
         ts.isMethodDeclaration(assignment)) &&
       ts.isObjectLiteralExpression(assignment.parent)
     ) {
+      if (isDestructuringPattern(assignment.parent)) {
+        this.indexPatternKey(node);
+        return;
+      }
       const types = this.attributableTypes(assignment.parent, contextualTypes);
       const filed = this.fileProperties(types, node);
       if (!filed) this.recordUnattributedWrite(propertyName(node), node, undefined, isConcreteKnowledge(types));
@@ -336,6 +340,27 @@ class ReferenceIndex {
       const filed = this.fileProperties(types, node);
       if (!filed) this.recordUnattributedWrite(propertyName(node), node, undefined, isConcreteKnowledge(types));
     }
+  }
+
+  /**
+   * The member a destructuring assignment's key reads.
+   *
+   * `({ count: t.count } = src)` reads `src.count`, and the usual contextual
+   * question cannot say so: a pattern sits on the left of the `=`, where
+   * nothing gives it a type to be read against. The checker matches the
+   * pattern to the value on the other side instead, and answers this one
+   * question directly — the same answer its own find-all-references leans on.
+   *
+   * A key it cannot answer for — a quoted name, an unresolved source — falls
+   * back to the unattributed write it would have been. That is a lead rather
+   * than a claim, which is the right shape for a site this index cannot read.
+   */
+  private indexPatternKey(node: ts.Node): void {
+    const property = ts.isIdentifier(node)
+      ? safely(() => this.checker.getPropertySymbolOfDestructuringAssignment(node))
+      : undefined;
+    if (property) this.fileUnder(property, node);
+    else this.recordUnattributedWrite(propertyName(node), node, undefined, false);
   }
 
   /**
@@ -1200,7 +1225,7 @@ const MAX_FLOW_HOPS = 4;
  * True when this reference fills the member in rather than reading it: an
  * object-literal property, a computed key, a JSX attribute. A contextual site
  * is one the type system matched to a member, and every one of them writes
- * except the destructuring, which reads.
+ * except the destructurings, which read.
  */
 export function isWriteReference(reference: Node): boolean {
   const node = reference.compilerNode;
@@ -1231,6 +1256,7 @@ function isReadOccurrence(node: ts.Node): boolean {
   const parent = node.parent;
   if (ts.isPropertyAccessExpression(parent) && parent.name === node) return true;
   if (ts.isBindingElement(parent) && (parent.propertyName ?? parent.name) === node) return true;
+  if (isPatternKey(node)) return true;
   return ts.isElementAccessExpression(parent) && parent.argumentExpression === node;
 }
 
@@ -1386,6 +1412,10 @@ function isMemberDeclarationName(node: ts.Node): boolean {
  *
  * A `delete` reads nothing either. It names the member to remove it, and it
  * has to go when the member goes — which is what a write site is for.
+ *
+ * So does the far side of a destructuring assignment. `({ count: t.count } =
+ * src)` looks like a read of `t.count` and is the opposite of one: the value
+ * arrives there.
  */
 function isInPlaceWrite(node: ts.Node): boolean {
   const access = node.parent;
@@ -1399,6 +1429,7 @@ function isInPlaceWrite(node: ts.Node): boolean {
 
   const around = access.parent;
   if (ts.isDeleteExpression(around)) return true;
+  if (isPatternTarget(access)) return true;
   if (ts.isBinaryExpression(around) && around.left === access) {
     const operator = around.operatorToken.kind;
     return operator >= ts.SyntaxKind.FirstAssignment && operator <= ts.SyntaxKind.LastAssignment;
@@ -1439,6 +1470,60 @@ function isContextualSite(node: ts.Node): boolean {
   }
   if (ts.isBindingElement(parent) && (parent.propertyName ?? parent.name) === node) return true;
   return ts.isJsxAttribute(parent) && parent.name === node;
+}
+
+/**
+ * True when this object or array literal stands on the left of an assignment:
+ * `({ count: t.count } = src)`, `[{ id: t.id }] = rows`, or the pattern a
+ * `for…of` binds.
+ *
+ * Such a literal is written as a value and read as a pattern. The names in it
+ * name members of whatever sits on the other side, and the expressions beside
+ * them are where those values land — so both halves mean the opposite of what
+ * their syntax says, and both are asked about here.
+ */
+function isDestructuringPattern(literal: ts.Node): boolean {
+  let node: ts.Node = literal;
+  for (;;) {
+    const parent: ts.Node | undefined = node.parent;
+    if (!parent) return false;
+    if (ts.isBinaryExpression(parent)) {
+      return parent.left === node && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+    }
+    if (ts.isForOfStatement(parent)) return parent.initializer === node;
+    // A pattern nests through its own elements and properties, and the
+    // assignment that makes it one is at the top.
+    if (ts.isArrayLiteralExpression(parent)) node = parent;
+    else if (
+      ts.isPropertyAssignment(parent) &&
+      parent.initializer === node &&
+      ts.isObjectLiteralExpression(parent.parent)
+    ) {
+      node = parent.parent;
+    } else return false;
+  }
+}
+
+/** True when this name is a key of a destructuring assignment, which reads the member it names. */
+function isPatternKey(node: ts.Node): boolean {
+  const parent = node.parent;
+  return (
+    (ts.isPropertyAssignment(parent) || ts.isShorthandPropertyAssignment(parent)) &&
+    parent.name === node &&
+    ts.isObjectLiteralExpression(parent.parent) &&
+    isDestructuringPattern(parent.parent)
+  );
+}
+
+/** True when this access is where a destructuring assignment puts a value, rather than a read of one. */
+function isPatternTarget(access: ts.Node): boolean {
+  const parent = access.parent;
+  if (ts.isPropertyAssignment(parent) && parent.initializer === access && ts.isObjectLiteralExpression(parent.parent)) {
+    return isDestructuringPattern(parent.parent);
+  }
+  if (ts.isArrayLiteralExpression(parent)) return isDestructuringPattern(parent);
+  if (ts.isForOfStatement(parent)) return parent.initializer === access;
+  return false;
 }
 
 /** The checker throws on some unresolved nodes; a missing answer is the answer. */

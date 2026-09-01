@@ -9,6 +9,20 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A destructuring assignment reads on one side and writes on the other.**
+`({ starred: card.starred } = wanted)` used to read as a read of
+`card.starred`, which is the opposite of what it does — the value lands there.
+Meanwhile the key beside it, which really does read `wanted.starred`, resolved
+to nothing at all: a pattern is written as a literal and sits where nothing
+gives it a type to be read against. So a member a pattern was the only reader
+of came back `write-only (unverified name match)` — a false positive, in four
+shapes: `({ starred } = card)`, the nested `({ badge: { starred } } = card)`,
+the array `[{ starred }] = cards`, and the pattern a `for…of` binds. Both
+halves are now read the way the code means them. The key names a member of the
+value on the other side of the `=` and reads it, and the far side is a write:
+a member nothing else touches earns `write-only`, reported and left for you,
+because no single edit takes an expression out of a pattern.
+
 **A `delete` is not a read.** `delete card.draft` used to keep `draft` alive:
 the reference search found the member and stopped there. A `delete` fills
 nothing in and asks for nothing back, so it now counts the way a write does,

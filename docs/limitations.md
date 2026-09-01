@@ -6,11 +6,12 @@ The test suite verifies that the reference check resolves all of these — none 
 
 - dot access (`v.prop`) and string-literal element access (`v['prop']`)
 - destructuring, in parameters and in bodies
+- a destructuring assignment's key: `({ count: shelf.count } = source)` and `({ count } = source)` both read `source`'s `count`. A pattern is written as a literal and has no contextual type to be read against, so the checker is asked what it matched the pattern to — which covers the nested and array forms (`({ badge: { count } } = card)`, `[{ count }] = cards`) and the pattern a `for…of` binds
 - a dynamic import destructured on the spot: `const { plate } = await import('./recipes')`, and the same pattern in the callback `import('./recipes').then(({ plate }) => …)` hands the module to
 - spreads, into both same-typed and fresh object types
 - mapped types (`Partial<T>`, `Pick<T, 'k'>`) and interface inheritance
 - usage from other files, quoted property names, implementing class members
-- property writes, told apart from reads: a member every reference only fills in — an annotated literal, a JSX attribute, `shelf.count = 1`, `shelf.count++` on a line of its own — earns the `write-only` verdict instead of counting as used, unless a read reaches it through some other declaration. A `delete shelf.count` reads nothing either, and counts the same way
+- property writes, told apart from reads: a member every reference only fills in — an annotated literal, a JSX attribute, `shelf.count = 1`, `shelf.count++` on a line of its own — earns the `write-only` verdict instead of counting as used, unless a read reaches it through some other declaration. A `delete shelf.count` reads nothing either, and counts the same way, and so does the far side of a destructuring assignment: `({ count: shelf.count } = source)` puts a value there, it does not take one
 - a literal probe like `'name' in v` counts as usage of exactly that property
 - class members reached through a declared `implements` or `extends` — TypeScript merges those reference groups
 - reads through a spread copy of a class instance resolve back to the class members
@@ -42,7 +43,7 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 ## Remaining blind spots
 
 - A relay renamed through a binding that declares no type (`const relay = dump`) loses the position that would have said what it will be given, and so does one handed to a parameter typed only `Function`. Annotating the binding restores it.
-- A destructuring assignment (`({ count: t.count } = src)`) reads as a read, so the member stays used. It is a write, but calling it one would lose a read: the key beside it — `count` — names a member of the source, and the reference search never lands on it, because an assignment target has no contextual type to resolve the key against. Where source and target share a declaration, that invisible read is the only one there is. Counting the target as a write would report a member the code plainly reads.
+- A destructuring assignment's key written as a quoted name (`({ 'count': t.count } = src)`) resolves to no member, so the read it holds is an unverified name match rather than a reference. The member stays reported as written, never as dead.
 - A write through a computed key credits the member the key names, the same as a read would.
 - Anonymous default-export classes (`export default class { … }`) are skipped: without a name there are no class references to run the escape checks on.
 - Declaration files (`.d.ts`) are not scanned.

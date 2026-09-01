@@ -716,3 +716,110 @@ describe('a member the code only deletes', () => {
     expect(verdictOf(analyze(project), 'draft')?.verdict).toBe('test-only');
   });
 });
+
+describe('a destructuring assignment', () => {
+  /** A recipe card and the pattern that pulls a flag off it. */
+  function box(...lines: string[]): Finding[] {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      ['interface Card {', '  title: string;', '  starred: boolean;', '}', ...lines, ''].join('\n')
+    );
+    return analyze(project);
+  }
+
+  it('reads the member its key names', () => {
+    const findings = box(
+      'export function pin(card: Card): boolean {',
+      '  let pinned = false;',
+      '  ({ starred: pinned } = card);',
+      '  return pinned && card.title.length > 0;',
+      '}'
+    );
+    // The key is the only thing that names the member, and it reads it.
+    expect(verdictOf(findings, 'starred')).toBeUndefined();
+  });
+
+  it('reads it through a shorthand key too', () => {
+    const findings = box(
+      'export function pin(card: Card): boolean {',
+      '  let starred = false;',
+      '  ({ starred } = card);',
+      '  return starred && card.title.length > 0;',
+      '}'
+    );
+    expect(verdictOf(findings, 'starred')).toBeUndefined();
+  });
+
+  it('reads it through an array pattern', () => {
+    const findings = box(
+      'export function pin(cards: Card[]): boolean {',
+      '  let pinned = false;',
+      '  [{ starred: pinned }] = cards;',
+      '  return pinned && cards.length > 0;',
+      '}'
+    );
+    expect(verdictOf(findings, 'starred')).toBeUndefined();
+  });
+
+  it('reads it through the pattern a `for…of` binds', () => {
+    const findings = box(
+      'export function pin(cards: Card[]): boolean {',
+      '  let pinned = false;',
+      '  for ({ starred: pinned } of cards) {}',
+      '  return pinned && cards.length > 0;',
+      '}'
+    );
+    expect(verdictOf(findings, 'starred')).toBeUndefined();
+  });
+
+  it('reads a nested key on the shape that holds it', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'interface Card {',
+        '  title: string;',
+        '  badge: { starred: boolean };',
+        '}',
+        'export function pin(card: Card): boolean {',
+        '  let pinned = false;',
+        '  ({ badge: { starred: pinned } } = card);',
+        '  return pinned && card.title.length > 0;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project);
+
+    expect(verdictOf(findings, 'badge')).toBeUndefined();
+    expect(verdictOf(findings, 'starred')).toBeUndefined();
+  });
+
+  it('keeps a member the key reads and the target writes', () => {
+    const findings = box(
+      'export function copy(a: Card, b: Card): string {',
+      '  ({ starred: a.starred } = b);',
+      '  return a.title + b.title;',
+      '}'
+    );
+    // Both halves name the same declaration. Counting the target as a write
+    // must not swallow the read the key holds beside it.
+    expect(verdictOf(findings, 'starred')).toBeUndefined();
+  });
+
+  it('writes the member on the far side of the pattern, and does not read it', () => {
+    const findings = box(
+      'export function pin(card: Card, wanted: { starred: boolean }): string {',
+      '  ({ starred: card.starred } = wanted);',
+      '  return card.title;',
+      '}'
+    );
+
+    const member = verdictOf(findings, 'starred');
+    expect(member?.verdict).toBe('write-only');
+    expect(member?.evidence).toContain('names this member, and nothing reads it');
+    // The target sits inside a pattern; no single edit takes it out.
+    expect(isFixable(member as Finding, true)).toBe(false);
+  });
+});
