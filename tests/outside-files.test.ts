@@ -121,10 +121,12 @@ describe('code beside the program', () => {
     expect(findings.map(f => [f.kind, f.name])).toEqual([['file', 'jars.ts']]);
   });
 
-  it('says nothing about the members an outside file reads', () => {
+  it('reports a member an outside file may read, and refuses to fix it', () => {
     // The names a clause takes are the whole of what the text gives up. A
     // property read needs a type checker, and the file the program excluded
-    // has no types — so a member the excluded test reads is still reported.
+    // has no types — so the claim stands and nothing this run does could
+    // prove a deletion safe. `--fix` says so by leaving it alone; a green
+    // "Verified" over a deleted member is what the alternative looks like.
     const { findings } = project({
       'tsconfig.json': CONFIG,
       'package.json': JSON.stringify({ name: 'box' }),
@@ -133,6 +135,76 @@ describe('code beside the program', () => {
       'src/shelf.test.ts': "import { shelf } from './shelf';\nshelf.lids;\n",
     });
     expect(findings.map(f => [f.kind, f.name])).toEqual([['member', 'lids']]);
+    expect(isFixable(findings[0] as Finding, false)).toBe(false);
+    // A human can still say otherwise, which is what --fix-unsafe is.
+    expect(isFixable(findings[0] as Finding, true)).toBe(true);
+  });
+
+  it('fixes a member no file outside the program can reach', () => {
+    // The control: the excluded test names nothing from `shelf.ts`, so the
+    // type check the fix runs holds every reader there is.
+    const { findings } = project({
+      'tsconfig.json': CONFIG,
+      'package.json': JSON.stringify({ name: 'box' }),
+      'src/index.ts': "import { shelf } from './shelf';\nexport const jars = shelf.jars;\n",
+      'src/shelf.ts': 'export const shelf = { jars: 1, lids: 2 };\n',
+      'src/index.test.ts': "import { jars } from './index';\njars;\n",
+    });
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['member', 'lids']]);
+    expect(isFixable(findings[0] as Finding, false)).toBe(true);
+  });
+  it('reads the code beside a config that holds no files of its own', () => {
+    // hono's shape: a solution-style tsconfig with `files: []` and references
+    // to the real ones. The program holds nothing, so the walk used to be
+    // switched off in exactly the case it was built for — and every package
+    // the sources import read as dead.
+    const { syntax } = project({
+      'tsconfig.json': JSON.stringify({ files: [], references: [{ path: './src' }] }),
+      'package.json': JSON.stringify({ name: 'box', dependencies: { 'jar-sealer': '1.0.0' } }),
+      'node_modules/jar-sealer/package.json': JSON.stringify({ name: 'jar-sealer', version: '1.0.0' }),
+      'node_modules/jar-sealer/index.js': 'module.exports = 1;\n',
+      'src/index.ts': "import sealer from 'jar-sealer';\nexport const box = sealer;\n",
+    });
+    expect(syntax.filter(f => f.kind === 'dependency')).toEqual([]);
+  });
+
+  it('leaves a build directory only the manifest names', () => {
+    // A `tsc` build names its output in the tsconfig; a bundler's is named
+    // nowhere the compiler reads. Left in the walk, yesterday's bundle imports
+    // every package today's sources dropped.
+    const { syntax } = project({
+      'tsconfig.json': JSON.stringify({ include: ['src'], compilerOptions: { noEmit: true } }),
+      'package.json': JSON.stringify({
+        name: 'box',
+        main: 'dist/index.js',
+        dependencies: { 'jar-sealer': '1.0.0' },
+      }),
+      'node_modules/jar-sealer/package.json': JSON.stringify({ name: 'jar-sealer', version: '1.0.0' }),
+      'node_modules/jar-sealer/index.js': 'module.exports = 1;\n',
+      'src/index.ts': 'export const box = 1;\n',
+      'dist/index.js': "const sealer = require('jar-sealer');\nmodule.exports = sealer;\n",
+    });
+    expect(syntax.map(f => [f.kind, f.name])).toEqual([['dependency', 'jar-sealer']]);
+  });
+
+  it('keeps a source directory the manifest happens to name', () => {
+    // `"source": "src/index.ts"` is a real field, and `"main": "index.js"`
+    // beside the sources names the package root. A directory holding a file
+    // the program holds is source, whatever the manifest calls it.
+    const { syntax } = project({
+      'tsconfig.json': JSON.stringify({ include: ['src'], exclude: ['**/*.test.ts'] }),
+      'package.json': JSON.stringify({
+        name: 'box',
+        source: 'src/index.ts',
+        main: 'src/index.js',
+        dependencies: { 'jar-sealer': '1.0.0' },
+      }),
+      'node_modules/jar-sealer/package.json': JSON.stringify({ name: 'jar-sealer', version: '1.0.0' }),
+      'node_modules/jar-sealer/index.js': 'module.exports = 1;\n',
+      'src/index.ts': 'export const box = 1;\n',
+      'src/index.test.ts': "import sealer from 'jar-sealer';\nsealer();\n",
+    });
+    expect(syntax.filter(f => f.kind === 'dependency')).toEqual([]);
   });
 });
 

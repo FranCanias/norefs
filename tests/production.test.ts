@@ -62,8 +62,9 @@ describe('--production, against the same project', () => {
 
   it('turns a member only the tests read into a dead one', () => {
     const files = {
-      '/index.ts': "import { Config } from './lib';\nexport const boot = (c: Config): string => c.shipped;\n",
-      '/lib.ts': 'export interface Config {\n  shipped: string;\n  probed: string;\n}\n',
+      '/index.ts': "import { ship } from './lib';\nexport const boot = (): string => ship();\n",
+      '/lib.ts':
+        'export interface Config {\n  shipped: string;\n  probed: string;\n}\ndeclare const held: Config;\nexport const ship = (): string => held.shipped;\n',
       '/lib.test.ts': "import type { Config } from './lib';\nexport const read = (c: Config): string => c.probed;\n",
     };
     expect(named(run(false, files))).toContainEqual(['member', 'probed', 'test-only']);

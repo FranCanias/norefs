@@ -127,7 +127,7 @@ describe('the write scan behind the dead verdict', () => {
         '  name: string;',
         '  legacyId: number;',
         '}',
-        'export const greet = (u: User) => u.name;',
+        'const greet = (u: User) => u.name;',
         '',
       ].join('\n')
     );
@@ -204,7 +204,7 @@ describe('the validation rule: a name match must survive the type its write feed
         '  retries: number;',
         '  timeout: number;',
         '}',
-        'export const read = (c: Config) => c.retries;',
+        'const read = (c: Config) => c.retries;',
         'declare function stash(payload: unknown): void;',
         'stash({ timeout: 250 });',
         '',
@@ -232,7 +232,7 @@ describe('the validation rule: a name match must survive the type its write feed
         'declare const base: { extra: number };',
         'declare function stash(p: unknown): void;',
         'stash({ ...base, used: 1 });',
-        'export const read = (p: Payload) => p.used;',
+        'const read = (p: Payload) => p.used;',
         '',
       ].join('\n')
     );

@@ -18,7 +18,7 @@ describe('verdicts', () => {
         '  hits: number;',
         '  misses: number;',
         '}',
-        'export function count(t: Tally): number {',
+        'function count(t: Tally): number {',
         '  t.misses = 0;',
         '  t.misses += 1;',
         '  return t.hits;',
@@ -45,7 +45,7 @@ describe('verdicts', () => {
         '  hits: number;',
         '  misses: number;',
         '}',
-        'export function count(t: Tally): number {',
+        'function count(t: Tally): number {',
         '  t.misses = 0;',
         '  const seen = t.misses++;',
         '  return t.hits + seen;',
@@ -69,10 +69,10 @@ describe('verdicts', () => {
         '  entries: number;',
         '  balance: number;',
         '}',
-        'export function total(l: Ledger): number {',
+        'function total(l: Ledger): number {',
         '  return l.entries;',
         '}',
-        'export function tally(): unknown {',
+        'function tally(): unknown {',
         '  const running = { balance: 0 };',
         '  running.balance = 5;',
         '  return running;',
@@ -99,8 +99,8 @@ describe('verdicts', () => {
         '  version: number;',
         '}',
         'declare const text: string;',
-        'export const load = (): LibraryFile => JSON.parse(text) as LibraryFile;',
-        'export const version = (f: LibraryFile) => f.version;',
+        'const load = (): LibraryFile => JSON.parse(text) as LibraryFile;',
+        'const version = (f: LibraryFile) => f.version;',
         '',
       ].join('\n')
     );
@@ -140,14 +140,14 @@ describe('verdicts', () => {
         '  recipe: BoxRecipe;',
         '  revision: number;',
         '}',
-        'export async function load(): Promise<BoxRecipe[]> {',
+        'async function load(): Promise<BoxRecipe[]> {',
         "  return (await api.invoke('recipeBox:list')) as BoxRecipe[];",
         '}',
-        'export function save(payload: SavePayload): Promise<unknown> {',
+        'function save(payload: SavePayload): Promise<unknown> {',
         "  return api.invoke('recipeBox:save', payload);",
         '}',
-        'export const show = (d: BoxRecipe) => d.label;',
-        'export const recipe = (p: SavePayload) => p.recipe;',
+        'const show = (d: BoxRecipe) => d.label;',
+        'const recipe = (p: SavePayload) => p.recipe;',
         '',
       ].join('\n')
     );
@@ -170,10 +170,10 @@ describe('verdicts', () => {
         '  timeout: number;',
         '}',
         'declare const response: { json(): Promise<any> };',
-        'export async function load(): Promise<Config> {',
+        'async function load(): Promise<Config> {',
         '  return (await response.json()) as Config;',
         '}',
-        'export const use = (c: Config) => c.timeout;',
+        'const use = (c: Config) => c.timeout;',
         '',
       ].join('\n')
     );
@@ -417,7 +417,7 @@ describe('verdicts', () => {
       [
         "import { cardFor as pantryCard } from './pantry';",
         "import { cardFor as larderCard } from './larder';",
-        'export function print(): string {',
+        'function print(): string {',
         '  const a = pantryCard("soup");',
         '  const b = larderCard("stew");',
         '  return a.label + b.label;',
@@ -451,11 +451,11 @@ describe('verdicts', () => {
       [
         "import { cardFor as pantryCard } from './pantry';",
         "import { cardFor as larderCard } from './larder';",
-        'export function open(title: string) {',
+        'function open(title: string) {',
         '  const card = larderCard(title);',
         '  return { title, card };',
         '}',
-        'export function print(): string {',
+        'function print(): string {',
         '  return pantryCard("soup").label + open("stew").card.label;',
         '}',
         '',
@@ -488,11 +488,11 @@ describe('verdicts', () => {
         'interface Wrapped {',
         '  card: { label: string; shelf: number };',
         '}',
-        'export function open(title: string): Wrapped {',
+        'function open(title: string): Wrapped {',
         '  const card = larderCard(title);',
         '  return { card };',
         '}',
-        'export function print(): string {',
+        'function print(): string {',
         '  return pantryCard("soup").label + open("stew").card.label;',
         '}',
         '',
@@ -513,7 +513,7 @@ describe('verdicts', () => {
         '  retries: number;',
         '  timeout: number;',
         '}',
-        'export const read = (c: Config) => c.retries;',
+        'const read = (c: Config) => c.retries;',
         'declare function stash(payload: unknown): void;',
         'stash({ timeout: 1 });',
         'stash({ timeout: 2 });',
@@ -542,7 +542,7 @@ describe('verdicts', () => {
         '  title: string;',
         '  label: string;',
         '}',
-        'export const read = (r: Recipe) => r.title;',
+        'const read = (r: Recipe) => r.title;',
         'declare function stash(payload: unknown): void;',
         ...writes,
         '',
@@ -566,7 +566,8 @@ describe('verdicts', () => {
         '  color: string;',
         '  zone: string;',
         '}',
-        `export const ${fn} = (d: ${name}): string => {`,
+        `declare const d: ${name};`,
+        `export const ${fn} = (): string => {`,
         "  d.zone = 'cold';",
         '  return d.label + d.color;',
         '};',
@@ -594,7 +595,7 @@ describe('verdicts', () => {
         '  name: string;',
         '  legacyId: number;',
         '}',
-        'export const greet = (u: User) => u.name;',
+        'const greet = (u: User) => u.name;',
         '',
       ].join('\n')
     );
@@ -650,7 +651,7 @@ describe('a name read through a cast off an untyped value', () => {
       [
         "import { seal } from './jar';",
         'type WithSeal = { sealedAt: number };',
-        'export function isSealed(jar: unknown): boolean {',
+        'function isSealed(jar: unknown): boolean {',
         '  return Boolean((jar as WithSeal).sealedAt);',
         '}',
         'export const lid = seal({}).lid;',
@@ -675,10 +676,10 @@ describe('a name read through a cast off an untyped value', () => {
       '/main.ts',
       [
         'type Sealed = { sealedAt: number; lid: string };',
-        'export function seal(jar: Sealed): string {',
+        'function seal(jar: Sealed): string {',
         '  return jar.lid;',
         '}',
-        'export function stamp(res: unknown): unknown {',
+        'function stamp(res: unknown): unknown {',
         '  return (res as any).sealedAt;',
         '}',
         '',
@@ -700,12 +701,7 @@ describe('a member the code only deletes', () => {
   }
 
   it('reports it, and calls the `delete` what it is', () => {
-    const findings = box(
-      'export function publish(card: Card): string {',
-      '  delete card.draft;',
-      '  return card.title;',
-      '}'
-    );
+    const findings = box('function publish(card: Card): string {', '  delete card.draft;', '  return card.title;', '}');
 
     const member = verdictOf(findings, 'draft');
     expect(member?.verdict).toBe('write-only');
@@ -719,7 +715,7 @@ describe('a member the code only deletes', () => {
 
   it('reads an index the same way', () => {
     const findings = box(
-      'export function publish(card: Card): string {',
+      'function publish(card: Card): string {',
       "  delete card['draft'];",
       '  return card.title;',
       '}'
@@ -729,7 +725,7 @@ describe('a member the code only deletes', () => {
 
   it('keeps a member that is read before it is deleted', () => {
     const findings = box(
-      'export function publish(card: Card): boolean | undefined {',
+      'function publish(card: Card): boolean | undefined {',
       '  const was = card.draft;',
       '  delete card.draft;',
       '  return was;',
@@ -740,7 +736,7 @@ describe('a member the code only deletes', () => {
 
   it('falls back to the write wording when a real write sits beside the delete', () => {
     const findings = box(
-      'export function publish(card: Card): string {',
+      'function publish(card: Card): string {',
       '  card.draft = true;',
       '  delete card.draft;',
       '  return card.title;',
@@ -767,13 +763,9 @@ describe('a member the code only deletes', () => {
     );
     project.createSourceFile(
       '/card.test.ts',
-      [
-        "import type { Card } from './card';",
-        'export function strip(c: Card): void {',
-        '  delete c.draft;',
-        '}',
-        '',
-      ].join('\n')
+      ["import type { Card } from './card';", 'function strip(c: Card): void {', '  delete c.draft;', '}', ''].join(
+        '\n'
+      )
     );
     // The harness touching a member says who reaches it, not that it is
     // written — and deleting it means deleting that test too.
@@ -794,7 +786,7 @@ describe('a destructuring assignment', () => {
 
   it('reads the member its key names', () => {
     const findings = box(
-      'export function pin(card: Card): boolean {',
+      'function pin(card: Card): boolean {',
       '  let pinned = false;',
       '  ({ starred: pinned } = card);',
       '  return pinned && card.title.length > 0;',
@@ -806,7 +798,7 @@ describe('a destructuring assignment', () => {
 
   it('reads it through a shorthand key too', () => {
     const findings = box(
-      'export function pin(card: Card): boolean {',
+      'function pin(card: Card): boolean {',
       '  let starred = false;',
       '  ({ starred } = card);',
       '  return starred && card.title.length > 0;',
@@ -817,7 +809,7 @@ describe('a destructuring assignment', () => {
 
   it('reads it through an array pattern', () => {
     const findings = box(
-      'export function pin(cards: Card[]): boolean {',
+      'function pin(cards: Card[]): boolean {',
       '  let pinned = false;',
       '  [{ starred: pinned }] = cards;',
       '  return pinned && cards.length > 0;',
@@ -828,7 +820,7 @@ describe('a destructuring assignment', () => {
 
   it('reads it through the pattern a `for…of` binds', () => {
     const findings = box(
-      'export function pin(cards: Card[]): boolean {',
+      'function pin(cards: Card[]): boolean {',
       '  let pinned = false;',
       '  for ({ starred: pinned } of cards) {}',
       '  return pinned && cards.length > 0;',
@@ -846,7 +838,7 @@ describe('a destructuring assignment', () => {
         '  title: string;',
         '  badge: { starred: boolean };',
         '}',
-        'export function pin(card: Card): boolean {',
+        'function pin(card: Card): boolean {',
         '  let pinned = false;',
         '  ({ badge: { starred: pinned } } = card);',
         '  return pinned && card.title.length > 0;',
@@ -862,7 +854,7 @@ describe('a destructuring assignment', () => {
 
   it('keeps a member the key reads and the target writes', () => {
     const findings = box(
-      'export function copy(a: Card, b: Card): string {',
+      'function copy(a: Card, b: Card): string {',
       '  ({ starred: a.starred } = b);',
       '  return a.title + b.title;',
       '}'
@@ -874,7 +866,7 @@ describe('a destructuring assignment', () => {
 
   it('writes the member on the far side of the pattern, and does not read it', () => {
     const findings = box(
-      'export function pin(card: Card, wanted: { starred: boolean }): string {',
+      'function pin(card: Card, wanted: { starred: boolean }): string {',
       '  ({ starred: card.starred } = wanted);',
       '  return card.title;',
       '}'
@@ -908,7 +900,7 @@ describe('a member a computed key only writes', () => {
   }
 
   it('reports it, and names the write', () => {
-    const findings = shelf('export function fill(s: Shelf, slot: Slot, n: number): void {', '  s[slot] = n;', '}');
+    const findings = shelf('function fill(s: Shelf, slot: Slot, n: number): void {', '  s[slot] = n;', '}');
 
     for (const name of ['jars', 'tins']) {
       const member = verdictOf(findings, name);
@@ -920,34 +912,25 @@ describe('a member a computed key only writes', () => {
   });
 
   it('leaves the member a read reaches through some other name', () => {
-    const findings = shelf(
-      'export function fill(s: Shelf, slot: Slot): number {',
-      '  s[slot] = 1;',
-      '  return s.jars;',
-      '}'
-    );
+    const findings = shelf('function fill(s: Shelf, slot: Slot): number {', '  s[slot] = 1;', '  return s.jars;', '}');
     expect(verdictOf(findings, 'jars')).toBeUndefined();
     expect(verdictOf(findings, 'tins')?.verdict).toBe('write-only');
   });
 
   it('says nothing at all when the key reads', () => {
-    const findings = shelf('export function count(s: Shelf, slot: Slot): number {', '  return s[slot] ?? 0;', '}');
+    const findings = shelf('function count(s: Shelf, slot: Slot): number {', '  return s[slot] ?? 0;', '}');
     expect(findings).toEqual([]);
   });
 
   it('counts an update whose value goes nowhere as a write', () => {
-    const findings = shelf(
-      'export function bump(s: Shelf, slot: Slot): void {',
-      '  s[slot] = (s[slot] ?? 0) + 1;',
-      '}'
-    );
+    const findings = shelf('function bump(s: Shelf, slot: Slot): void {', '  s[slot] = (s[slot] ?? 0) + 1;', '}');
     // The right-hand side reads the member back, so this one is used.
     expect(findings).toEqual([]);
   });
 
   it('calls a `delete` through a computed key what it is', () => {
     const findings = shelf(
-      "export function strip(s: Shelf, slot: 'tins'): number {",
+      "function strip(s: Shelf, slot: 'tins'): number {",
       '  delete s[slot];',
       '  return s.jars;',
       '}'

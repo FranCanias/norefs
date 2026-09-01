@@ -25,6 +25,8 @@ import { readOutside, takenOutside } from './outside';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
+import { WHOLE_MODULE } from './scan';
+import { shapesNamedBy } from './shapes';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 import { runtimeSibling } from './text';
 import { configReader } from './tool-configs';
@@ -54,6 +56,25 @@ interface ModuleAnalysis {
    * they nor their members can be called unused.
    */
   publicDecls: Set<Node>;
+  /**
+   * The shapes the public API names, and the shapes those name in turn.
+   *
+   * A consumer never imports these by name. It calls a public function, holds
+   * what comes back, and reads through it — so their members are as public as
+   * the declaration that handed them over, and reporting one is reporting a
+   * package's own API.
+   */
+  publicShapes: Set<Node>;
+  /**
+   * The same closure, rooted at the names a file beside the program takes.
+   *
+   * An import clause carries names, never members, so the scan outside proves
+   * nothing about a member either way — and the type check that vouches for a
+   * fix does not hold those files. Members here are reported and left to a
+   * human: the claim is honest, and no probe this run can run would witness
+   * the deletion.
+   */
+  outsideShapes: Set<Node>;
   /** Test, spec, stories, bench, and config files: never worth member findings. */
   harnessFiles: Set<SourceFile>;
 }
@@ -219,6 +240,8 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   const deadFiles = new Set<SourceFile>();
   const deadDecls = new Set<Node>();
   const publicDecls = publicApiDeclarations([...sourceFiles, ...ownDeclarations], rootDirs, entries);
+  const publicShapes = shapesNamedBy(publicDecls);
+  const outsideShapes = shapesNamedBy(namedOutside(reached, byPath, ownDeclarations));
   // A module handed to a runtime consumer as one object — `import * as schema`
   // then `orm(db, { schema })` — is read key by key by code no reference search
   // can see. Its exports stand on the same footing as public API.
@@ -328,7 +351,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       }
     )
   );
-  return { findings, deadFiles, deadDecls, publicDecls, harnessFiles };
+  return { findings, deadFiles, deadDecls, publicDecls, publicShapes, outsideShapes, harnessFiles };
 }
 
 /**
@@ -378,6 +401,29 @@ function shippingPath(
   return new Set(
     sourceFiles.filter(sourceFile => !reached.has(sourceFile)).map(sourceFile => sourceFile.getFilePath())
   );
+}
+
+/**
+ * The declarations a file beside the program names.
+ *
+ * An import clause is a list of names, which is where the outside scan's
+ * answer stops being a file and becomes a declaration. `*` — a namespace
+ * import, a `require`, a dynamic `import()` — takes the module whole, so every
+ * export of it is named.
+ */
+function namedOutside(reach: OutsideReach, byPath: Map<string, SourceFile>, ownDeclarations: SourceFile[]): Node[] {
+  const files = new Map(byPath);
+  for (const sourceFile of ownDeclarations) files.set(sourceFile.getFilePath(), sourceFile);
+  const found: Node[] = [];
+  for (const [filePath, names] of reach.names) {
+    const sourceFile = files.get(filePath);
+    if (!sourceFile) continue;
+    const whole = names.has(WHOLE_MODULE);
+    for (const [exportedAs, declarations] of sourceFile.getExportedDeclarations()) {
+      if (whole || names.has(exportedAs)) found.push(...declarations);
+    }
+  }
+  return found;
 }
 
 /**

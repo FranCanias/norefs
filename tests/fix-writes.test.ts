@@ -296,7 +296,7 @@ describe('--fix-unsafe on a proven write-only member', () => {
         'declare const payload: Payload;',
         'const value = wrap(() => ({ extra: 1, /* fallback */ used: 2 }));',
         'export const run = () => send(value);',
-        'export const read = () => payload.used;',
+        'const read = () => payload.used;',
         '',
       ].join('\n')
     );
@@ -325,7 +325,7 @@ describe('--fix-unsafe on a proven write-only member', () => {
         'declare const base: { extra: number };',
         'const value = wrap(() => ({ ...base, used: 1 }));',
         'export const run = () => send(value);',
-        'export const read = () => payload.used;',
+        'const read = () => payload.used;',
         '',
       ].join('\n')
     );
@@ -351,7 +351,7 @@ describe('--fix-unsafe on a proven write-only member', () => {
         '  retries: number;',
         '  timeout: number;',
         '}',
-        'export const read = (c: Config) => c.retries;',
+        'const read = (c: Config) => c.retries;',
         'declare function stash(payload: unknown): void;',
         'stash({ timeout: 250 });',
         '',

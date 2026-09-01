@@ -67,8 +67,11 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     // as a whole; listing every member inside it would only add noise.
     if (modules.deadFiles.has(member.getSourceFile())) continue;
     if (member.getAncestors().some(ancestor => modules.deadDecls.has(ancestor))) continue;
-    // A member of a public-API type is read by consumers outside this program.
-    if (member.getAncestors().some(ancestor => modules.publicDecls.has(ancestor))) continue;
+    // A member of a public-API type is read by consumers outside this program
+    // — whether the entry exports the type by name or hands it back from a
+    // function whose signature names it.
+    const ancestors = member.getAncestors();
+    if (ancestors.some(ancestor => modules.publicDecls.has(ancestor) || modules.publicShapes.has(ancestor))) continue;
     // Fixture types in tests and configs are noise, not dead code worth a report.
     if (modules.harnessFiles.has(member.getSourceFile())) continue;
     if (isFileSuppressed(member.getSourceFile())) continue;
@@ -94,6 +97,11 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
       // references are the proof, so the verdict pass has no name matching to
       // do — it reads them, words them, and hands them to the fix.
       ...(usage === 'write-only' ? { writeSites: memberWriteSites(member) } : {}),
+      // Code beside the program can hold this shape, and a member is not a
+      // name an import clause carries — so the scan out there settles nothing
+      // and neither does the type check, which never held those files. The
+      // finding stands; the fix waits for a human.
+      ...(ancestors.some(ancestor => modules.outsideShapes.has(ancestor)) ? { unwitnessed: true } : {}),
       ...(usage === 'test-only' ? { verdict: 'test-only' as const, evidence: 'only test files reference it' } : {}),
     };
     findings.push(finding);

@@ -91,6 +91,17 @@ export interface MemberFinding extends FindingBase {
    * writes, which is proof of a kind no name match can reach.
    */
   writeSites?: Node[] | undefined;
+  /**
+   * A file beside the program can hold the shape this member belongs to.
+   *
+   * The claim stands — nothing the run holds reads the member — but nothing
+   * the run can do would prove a deletion safe. An import clause carries
+   * names, never members, so the scan of the code outside says nothing either
+   * way, and the type check that vouches for a fix never held those files. So
+   * `--fix` reports it and stops, and `--fix-unsafe` is where a human says
+   * otherwise.
+   */
+  unwitnessed?: boolean | undefined;
   /** On a reported bridge wrapper: where the far side of the shared channel string lives. */
   strands?: string | undefined;
 }

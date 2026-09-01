@@ -80,6 +80,10 @@ export function isFixable(finding: Finding, unsafe: boolean): boolean {
   // with the writes that prove it — and when one of those writes cannot be
   // removed on its own, the whole finding waits for a human.
   if (unremovableWrites(finding).length > 0) return false;
+  // A member whose shape reaches code beside the program: the run holds
+  // neither the readers nor a type check that covers them, so "Verified" would
+  // be a green line over a deletion nothing witnessed.
+  if (finding.kind === 'member' && finding.unwitnessed) return unsafe;
   return finding.verdict === 'dead' || finding.verdict === 'over-exported' || unsafe;
 }
 

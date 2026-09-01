@@ -45,7 +45,7 @@ describe('asking for fewer kinds does not change the findings', () => {
       '  dead1: number;',
       '  dead2: number;',
       '}',
-      'export function useZone(zone: Zone): number {',
+      'function useZone(zone: Zone): number {',
       '  return 0;',
       '}',
       '',

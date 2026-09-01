@@ -30,7 +30,8 @@ describe("a project's own declaration file", () => {
         'export type Slot = number;',
         '',
       ].join('\n'),
-      '/main.ts': "import type { Card } from './box';\nexport const title = (c: Card): string => c.title;\n",
+      '/main.ts':
+        "import type { Card } from './box';\ndeclare const card: Card;\nexport const title = (): string => card.title;\n",
     });
     // The members answer for themselves too: a `.d.ts` is source.
     expect(named(findings)).toEqual(['member deadNote', 'type DeadShelf', 'type Slot']);
@@ -109,7 +110,7 @@ describe("a project's own declaration file", () => {
       '/main.ts',
       [
         "import type { EdgeData } from './shared';",
-        'export const tag = (e: EdgeData): string => e.label;',
+        'const tag = (e: EdgeData): string => e.label;',
         'interface LocalEdgeData {',
         '  label: string;',
         '  color: string;',
