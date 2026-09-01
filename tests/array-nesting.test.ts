@@ -209,3 +209,124 @@ describe('an array whose elements all empty', () => {
     expect(emptied?.swallowed).toBe(1);
   });
 });
+
+/** The same array, bound at the top level instead of held by a property. */
+function topLevel(...readers: string[]): string[] {
+  return [
+    'const cards = [',
+    "  { title: 'Focaccia', deadNote: 'draft' },",
+    "  { title: 'Congee', deadNote: 'draft' },",
+    '];',
+    ...readers,
+    '',
+  ];
+}
+
+describe('a top-level array binding', () => {
+  it('is read for its elements, the way a held one is', () => {
+    expect(
+      reported(topLevel('export function titles(): string[] {', '  return cards.map(c => c.title);', '}'))
+    ).toEqual(['member:deadNote', 'member:deadNote']);
+  });
+
+  it('reads an element by index', () => {
+    expect(reported(topLevel('export function first(): string {', '  return cards[0].title;', '}'))).toEqual([
+      'member:deadNote',
+      'member:deadNote',
+    ]);
+  });
+
+  it('reads an element through a for…of binding', () => {
+    expect(
+      reported(topLevel('export function shout(): void {', '  for (const card of cards) console.log(card.title);', '}'))
+    ).toEqual(['member:deadNote', 'member:deadNote']);
+  });
+
+  it('keeps its answer when the elements arrive `as const`', () => {
+    expect(
+      reported([
+        'const cards = [',
+        "  { title: 'Focaccia', deadNote: 'draft' },",
+        "  { title: 'Congee', deadNote: 'draft' },",
+        '] as const;',
+        'export function titles(): string[] {',
+        '  return cards.map(c => c.title);',
+        '}',
+        '',
+      ])
+    ).toEqual(['member:deadNote', 'member:deadNote']);
+  });
+
+  it('says nothing when the array is handed on whole', () => {
+    expect(
+      reported(
+        topLevel(
+          'export function ship(): unknown {',
+          '  return send(cards);',
+          '}',
+          'declare function send(v: unknown): unknown;'
+        )
+      )
+    ).toEqual([]);
+  });
+
+  it('says nothing when an element leaves through a callback written elsewhere', () => {
+    expect(
+      reported(
+        topLevel(
+          'export function ship(): void {',
+          '  cards.forEach(send);',
+          '}',
+          'declare function send(v: unknown): void;'
+        )
+      )
+    ).toEqual([]);
+  });
+
+  it('says nothing when the elements are not all literals', () => {
+    expect(
+      reported([
+        'declare const extra: { title: string; deadNote: string };',
+        "const cards = [{ title: 'Focaccia', deadNote: 'draft' }, extra];",
+        'export function titles(): string[] {',
+        '  return cards.map(c => c.title);',
+        '}',
+        '',
+      ])
+    ).toEqual([]);
+  });
+
+  it('hands a declared shape to the type that declares it', () => {
+    expect(
+      reported([
+        'interface Card {',
+        '  title: string;',
+        '  deadNote: string;',
+        '}',
+        "const cards: Card[] = [{ title: 'Focaccia', deadNote: 'draft' }];",
+        'export function titles(): string[] {',
+        '  return cards.map(c => c.title);',
+        '}',
+        '',
+      ])
+    ).toEqual(['member:deadNote']);
+  });
+
+  it('keeps a name alive on every element when one of them holds the read', () => {
+    expect(
+      reported([
+        'const cards = [',
+        "  { title: 'Focaccia', note: 'crisp' },",
+        "  { title: 'Congee', note: 'soft' },",
+        '];',
+        'export function first(): string {',
+        '  return cards[0].note;',
+        '}',
+        'export function titles(): string[] {',
+        '  return cards.map(c => c.title);',
+        '}',
+        '',
+      ])
+    ).toEqual([]);
+  });
+});

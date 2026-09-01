@@ -186,7 +186,7 @@ function arrayAccessStaysLocal(value: Node): boolean {
 }
 
 /** True when every use of this array binding keeps the elements local. */
-function arrayUsesStayLocal(name: Identifier): boolean {
+export function arrayUsesStayLocal(name: Identifier): boolean {
   for (const ref of findReferencesAsNodes(name)) {
     const parent = ref.getParent();
     if (!parent) continue;

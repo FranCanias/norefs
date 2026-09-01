@@ -143,6 +143,10 @@ describe('dynamic-consumption guards (stay silent rather than guess)', () => {
     expect(reportedIn('array-nested.ts')).toEqual(['deadNote', 'deadNote']);
   });
 
+  it('a top-level array binding is read for its elements too', () => {
+    expect(reportedIn('array-top-level.ts')).toEqual(['deadNote', 'deadNote']);
+  });
+
   it('an array whose elements escape reports nothing', () => {
     expect(reportedIn('array-nested-escapes.ts')).toEqual([]);
   });

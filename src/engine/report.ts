@@ -30,9 +30,18 @@ function describeFinding(finding: Finding): string {
       return describeMember(finding);
     case 'empty-type': {
       if (finding.context === 'returned object') {
-        return `nobody reads what \`${finding.name}\` returns: all ${finding.swallowed} properties are unused — the computation is dead weight${strandNote(finding)}`;
+        const properties =
+          finding.swallowed === 1 ? 'its only property is unused' : `all ${finding.swallowed} properties are unused`;
+        return `nobody reads what \`${finding.name}\` returns: ${properties} — the computation is dead weight${strandNote(finding)}`;
       }
-      const count = finding.swallowed ? `all ${finding.swallowed} members are` : 'every member is';
+      // A shape offering one member is common enough to deserve its own
+      // sentence: "all 1 members are dead" is not something a person writes.
+      const count =
+        finding.swallowed === 1
+          ? 'its only member is'
+          : finding.swallowed
+            ? `all ${finding.swallowed} members are`
+            : 'every member is';
       const claim = `${finding.context} \`${finding.name}\` becomes empty: ${count} ${memberClaim(finding)}`;
       const described =
         finding.verdict && finding.verdict !== 'dead' && finding.evidence ? `${claim} — ${finding.evidence}` : claim;

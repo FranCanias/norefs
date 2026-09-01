@@ -4,6 +4,7 @@ import type {
   ObjectLiteralElementLike,
   ObjectLiteralExpression,
   PropertyAssignment,
+  VariableDeclaration,
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { findReferencesAsNodes } from '../lookup/references';
@@ -109,7 +110,7 @@ function selfShapedValue(node: Node | undefined): Node | undefined {
 }
 
 /** The literal this expression puts in charge of its own shape. */
-export function selfShapedLiteral(node: Node | undefined): ObjectLiteralExpression | undefined {
+function selfShapedLiteral(node: Node | undefined): ObjectLiteralExpression | undefined {
   const value = selfShapedValue(node);
   return value?.isKind(SyntaxKind.ObjectLiteralExpression) ? value : undefined;
 }
@@ -141,12 +142,12 @@ export function arraySiblingShapes(literal: ObjectLiteralExpression): ObjectLite
 }
 
 /**
- * The shapes a property holds outright: one literal, or the elements of an
- * array of them. Structure only — whether the reads let the analysis inside is
- * the separate question `trackableNestedLiterals` asks.
+ * The shapes a property or a binding holds outright: one literal, or the
+ * elements of an array of them. Structure only — whether the reads let the
+ * analysis inside is a separate question each caller asks its own way.
  */
-export function shapesHeldBy(property: PropertyAssignment): HeldShapes | undefined {
-  const initializer = property.getInitializer();
+export function shapesHeldBy(holder: PropertyAssignment | VariableDeclaration): HeldShapes | undefined {
+  const initializer = holder.getInitializer();
   const single = selfShapedLiteral(initializer);
   if (single) return { literals: [single], array: false };
   const elements = elementLiterals(initializer);

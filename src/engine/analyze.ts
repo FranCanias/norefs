@@ -7,6 +7,7 @@ import type {
   PropertyDeclaration,
   PropertySignature,
   TypeAliasDeclaration,
+  VariableDeclaration,
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { collectCandidates } from '../collectors';
@@ -104,7 +105,7 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
   const folds = [
     ...emptyOwnerFindings(reportedMembers),
     ...emptyReturnedObjectFindings(reportedMembers),
-    ...emptyPropertyFindings(reportedMembers),
+    ...emptyInlineShapeFindings(reportedMembers),
   ];
   findings.push(...folds);
   const deadFilePaths = new Set<string>([...modules.deadFiles].map(sf => sf.getFilePath()));
@@ -245,33 +246,38 @@ function ownerMembers(owner: InterfaceDeclaration | TypeAliasDeclaration): Node[
   return typeNode?.isKind(SyntaxKind.TypeLiteral) ? typeNode.getMembers() : [];
 }
 
-/** A property carrying a shape of its own: `outer: { … }`, written as a value or as a type. */
-type ShapeHolder = PropertyAssignment | PropertySignature | PropertyDeclaration;
+/**
+ * Something carrying a shape of its own: `outer: { … }` written as a value or
+ * as a type, or the binding of `const box = { … }`.
+ */
+type ShapeHolder = PropertyAssignment | PropertySignature | PropertyDeclaration | VariableDeclaration;
 
 /**
- * A property that holds a shape and loses every member of it. The shape has no
- * declaration to answer for it — it is written inline, on the property — so
- * the property is what a reader would delete, and the property is the finding.
+ * A property or a binding that holds a shape and loses every member of it. The
+ * shape has no declaration to answer for it — it is written inline, on the
+ * holder — so the holder is what a reader would delete, and the holder is the
+ * finding.
  *
- * The property itself stays read: that is the only reason the analysis ever
+ * The holder itself stays read: that is the only reason the analysis ever
  * looked inside it. A nested shape is read member by member exactly where
  * every read of the holding property keeps the value local, so a fold here
- * always leaves a read behind that reaches nothing. Removing the property
+ * always leaves a read behind that reaches nothing. Removing the holder
  * means removing that read too, and only a human knows what it was for —
  * which is why `--fix` leaves this finding alone, as it does an emptied
  * interface. Without the fold, `--fix` would empty the brackets and leave
  * `outer: {}` sitting there, dead and now invisible to the next run.
  */
-function emptyPropertyFindings(reportedMembers: ReadonlyMap<Node, MemberFinding>): EmptyTypeFinding[] {
+function emptyInlineShapeFindings(reportedMembers: ReadonlyMap<Node, MemberFinding>): EmptyTypeFinding[] {
   const holders = new Set<ShapeHolder>();
   for (const member of reportedMembers.keys()) {
-    const holder = holdingProperty(member);
+    const holder = shapeHolderOf(member);
     // A holder reported dead in its own right already owns every death under it.
     if (holder && !reportedMembers.has(holder)) holders.add(holder);
   }
 
   const folds: EmptyTypeFinding[] = [];
   for (const holder of holders) {
+    if (!holderKeepsAReader(holder)) continue;
     const members = heldShapeMembers(holder);
     const first = members[0];
     if (!first || !members.every(member => reportedMembers.has(member))) continue;
@@ -285,7 +291,7 @@ function emptyPropertyFindings(reportedMembers: ReadonlyMap<Node, MemberFinding>
       line,
       column,
       name: holder.getName(),
-      context: 'property',
+      context: holder.isKind(SyntaxKind.VariableDeclaration) ? 'const' : 'property',
       // An inline shape is as nameless as the members inside it, so `--anon`
       // must hide the fold wherever it hid them.
       anonymous: reportedMembers.get(first)?.anonymous ?? false,
@@ -299,20 +305,21 @@ function emptyPropertyFindings(reportedMembers: ReadonlyMap<Node, MemberFinding>
 }
 
 /**
- * The property that holds the shape this member belongs to. A member of a
- * shape some declaration owns has none — that declaration answers for it.
+ * The property or binding that holds the shape this member belongs to. A
+ * member of a shape some declaration owns has none — that declaration answers
+ * for it.
  *
- * Only a shape the property holds outright counts. `outer: A | B` puts two
+ * Only a shape the holder holds outright counts. `outer: A | B` puts two
  * shapes behind one property, and emptying one says nothing about the other.
  */
-function holdingProperty(member: Node): ShapeHolder | undefined {
+function shapeHolderOf(member: Node): ShapeHolder | undefined {
   const shape = member.getParent();
   if (shape?.isKind(SyntaxKind.ObjectLiteralExpression)) {
-    const property = enclosingProperty(shape);
+    const holder = enclosingValueHolder(shape);
     // One of the same shapes the collector descended into — `as const`,
     // parentheses and the array brackets aside. A cast to a named type hands
     // the shape to that type, and the type collectors report it there.
-    return property && shapesHeldBy(property)?.literals.includes(shape) ? property : undefined;
+    return holder && shapesHeldBy(holder)?.literals.includes(shape) ? holder : undefined;
   }
   if (shape?.isKind(SyntaxKind.TypeLiteral)) {
     const parent = shape.getParent();
@@ -325,15 +332,16 @@ function holdingProperty(member: Node): ShapeHolder | undefined {
 }
 
 /**
- * The property assignment this literal is the value of, past the wrappers a
- * value may wear — and past the array brackets, where the property holds one
- * shape per element and they empty together or not at all.
+ * The property assignment or binding this literal is the value of, past the
+ * wrappers a value may wear — and past the array brackets, where the holder
+ * holds one shape per element and they empty together or not at all.
  */
-function enclosingProperty(literal: ObjectLiteralExpression): PropertyAssignment | undefined {
+function enclosingValueHolder(literal: ObjectLiteralExpression): PropertyAssignment | VariableDeclaration | undefined {
   let current: Node = literal;
   while (true) {
     const parent = current.getParent();
     if (parent?.isKind(SyntaxKind.PropertyAssignment)) return parent;
+    if (parent?.isKind(SyntaxKind.VariableDeclaration)) return parent;
     if (
       parent?.isKind(SyntaxKind.ParenthesizedExpression) ||
       parent?.isKind(SyntaxKind.AsExpression) ||
@@ -352,9 +360,25 @@ function enclosingProperty(literal: ObjectLiteralExpression): PropertyAssignment
  * never loses the members it carries along.
  */
 function heldShapeMembers(holder: ShapeHolder): Node[] {
-  if (holder.isKind(SyntaxKind.PropertyAssignment)) {
-    return shapesHeldBy(holder)?.literals.flatMap(literal => literal.getProperties()) ?? [];
+  if (holder.isKind(SyntaxKind.PropertySignature) || holder.isKind(SyntaxKind.PropertyDeclaration)) {
+    const typeNode = holder.getTypeNode();
+    return typeNode?.isKind(SyntaxKind.TypeLiteral) ? typeNode.getMembers() : [];
   }
-  const typeNode = holder.getTypeNode();
-  return typeNode?.isKind(SyntaxKind.TypeLiteral) ? typeNode.getMembers() : [];
+  return shapesHeldBy(holder)?.literals.flatMap(literal => literal.getProperties()) ?? [];
+}
+
+/**
+ * True when something still reaches this holder, which is what makes an
+ * emptied shape a finding rather than a deletion: the read that survives is
+ * the part no fix can answer for.
+ *
+ * A property is read by construction — the descent into its shape only happens
+ * where the reads keep the value local, and there has to be a read for that to
+ * mean anything. A binding is not: `const box = { … }` that nothing reads is
+ * dead in full, and `--fix` already removes the whole declaration once its
+ * members go. Folding there would stand in the way of a clean removal.
+ */
+function holderKeepsAReader(holder: ShapeHolder): boolean {
+  if (!holder.isKind(SyntaxKind.VariableDeclaration)) return true;
+  return findReferencesAsNodes(holder.getNameNode()).length > 0;
 }

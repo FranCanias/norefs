@@ -1,8 +1,8 @@
 import type { ObjectLiteralExpression, SourceFile, VariableDeclaration } from 'ts-morph';
 import { SyntaxKind, VariableDeclarationKind } from 'ts-morph';
 import type { Candidate, CollectContext } from './candidate';
-import { valueUsesStayLocal } from './escape';
-import { collectLiteralMembers, selfShapedLiteral } from './object-literals';
+import { arrayUsesStayLocal, valueUsesStayLocal } from './escape';
+import { collectLiteralMembers, namesReadElsewhere, shapesHeldBy } from './object-literals';
 
 /**
  * Members of a const object literal: `const Timeouts = { … } as const`.
@@ -21,26 +21,33 @@ import { collectLiteralMembers, selfShapedLiteral } from './object-literals';
  *
  * The same question goes to the literals nested inside, one property at a
  * time, for as long as the reads keep the values local.
+ *
+ * A binding can hold several shapes at once — an array of literals is one
+ * shape per element — and they answer together, the way an array nested under
+ * a property does.
  */
 export function collectConstObjectCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
   const candidates: Candidate[] = [];
   for (const statement of sourceFile.getVariableStatements()) {
     if (statement.getDeclarationKind() !== VariableDeclarationKind.Const) continue;
     for (const declaration of statement.getDeclarations()) {
-      const literal = trackableObjectLiteral(declaration, ctx);
-      if (!literal) continue;
+      const literals = trackableObjectLiterals(declaration, ctx);
+      if (!literals) continue;
       const name = declaration.getName();
       const label = (path: string[]): string => `const \`${[name, ...path].join('.')}\``;
-      candidates.push(...collectLiteralMembers(literal, ctx, false, label));
+      const answered = namesReadElsewhere(literals);
+      for (const literal of literals) {
+        candidates.push(...collectLiteralMembers(literal, ctx, false, label, answered));
+      }
     }
   }
   return candidates;
 }
 
 /**
- * The object literal this declaration binds, when its members can be counted:
- * a plain literal or an `as const` one, named by an identifier, with nothing
- * reaching its keys wholesale.
+ * The object literals this declaration binds, when their members can be
+ * counted: a plain literal or an `as const` one — or an array of them — named
+ * by an identifier, with nothing reaching the keys wholesale.
  *
  * A declared type is what makes this stop. `const config: Config = { … }`
  * writes members the interface owns, and `satisfies Handlers` writes members a
@@ -48,21 +55,24 @@ export function collectConstObjectCandidates(sourceFile: SourceFile, ctx: Collec
  * reads types reports it, and a second finding here would say the same thing
  * twice in a different voice.
  */
-function trackableObjectLiteral(
+function trackableObjectLiterals(
   declaration: VariableDeclaration,
   ctx: CollectContext
-): ObjectLiteralExpression | undefined {
+): ObjectLiteralExpression[] | undefined {
   if (declaration.getTypeNode()) return undefined;
   const nameNode = declaration.getNameNode();
   if (!nameNode.isKind(SyntaxKind.Identifier)) return undefined;
 
-  // `as const` leaves the literal in charge of its own shape. `as Config` and
-  // `satisfies Config` hand that to a named type, and fall out here.
-  const literal = selfShapedLiteral(declaration.getInitializer());
-  if (!literal) return undefined;
-  if (ctx.dynamic.suppressed.has(literal)) return undefined;
+  // `as const` leaves the literals in charge of their own shape. `as Config`
+  // and `satisfies Config` hand that to a named type, and fall out here.
+  const held = shapesHeldBy(declaration);
+  if (!held) return undefined;
+  if (held.literals.some(literal => ctx.dynamic.suppressed.has(literal))) return undefined;
 
   if (ctx.isKeyofTargeted(declaration, nameNode)) return undefined;
 
-  return valueUsesStayLocal(nameNode) ? literal : undefined;
+  // An array is read for its elements, and an element is the shape in
+  // question — so it answers a question of its own about where they go.
+  const staysLocal = held.array ? arrayUsesStayLocal(nameNode) : valueUsesStayLocal(nameNode);
+  return staysLocal ? held.literals : undefined;
 }

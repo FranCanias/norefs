@@ -229,3 +229,81 @@ describe('emptied nested shapes', () => {
     expect(findings.every(f => !isFixable(f, true))).toBe(true);
   });
 });
+
+describe('emptied top-level bindings', () => {
+  it('folds a const object whose shape empties onto the binding', () => {
+    const findings = analyzeSource(
+      [
+        'const box = {',
+        '  deadColor: 1,',
+        '  deadFont: 2,',
+        '};',
+        'export function legacy(): boolean {',
+        "  return 'legacy' in box;",
+        '}',
+        '',
+      ].join('\n')
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['empty-type', 'box']]);
+    const emptied = findings.find(f => f.kind === 'empty-type');
+    expect(emptied?.context).toBe('const');
+    expect(emptied?.swallowed).toBe(2);
+    // The probe still reaches the binding, and only a person knows what for.
+    expect(findings.some(f => isFixable(f, false))).toBe(false);
+  });
+
+  it('folds an array binding once, counting what the shape offers', () => {
+    const findings = analyzeSource(
+      [
+        'const cards = [',
+        "  { deadNote: 'draft' },",
+        "  { deadNote: 'draft' },",
+        '];',
+        'export function count(): number {',
+        '  return cards.length;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['empty-type', 'cards']]);
+    // Two elements writing one key offer one member between them.
+    expect(findings.find(f => f.kind === 'empty-type')?.swallowed).toBe(1);
+  });
+
+  it('leaves a binding nothing reads to the members, so the whole const can go', () => {
+    const findings = analyzeSource(
+      [
+        'const box = {',
+        '  deadColor: 1,',
+        '  deadFont: 2,',
+        '};',
+        'export function unrelated(): number {',
+        '  return 1;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    // No reader survives the removal, so `--fix` takes the declaration whole.
+    expect(findings.map(f => [f.kind, f.name])).toEqual([
+      ['member', 'deadColor'],
+      ['member', 'deadFont'],
+    ]);
+    expect(findings.every(f => isFixable(f, false))).toBe(true);
+  });
+
+  it('leaves a binding alone while one member still lives', () => {
+    const findings = analyzeSource(
+      [
+        'const box = {',
+        '  live: 1,',
+        '  deadFont: 2,',
+        '};',
+        'export function color(): number {',
+        '  return box.live;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['member', 'deadFont']]);
+  });
+});

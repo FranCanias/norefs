@@ -9,6 +9,21 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A top-level array binding is read for its elements.** `const cards = [{ title,
+deadNote }]` reported nothing: nesting reached an array through the property
+holding it, and this array had no holding property. A binding now holds one
+shape per element on the same terms a property does — the elements answer
+together, and an element that leaves takes the whole array's answer with it.
+
+**A const binding whose shape empties is one finding, and `--fix` leaves it.**
+`const box = { deadA, deadB }` that something still reads used to report both
+members, and `--fix` obliged: it deleted them and left `const box = { }`
+sitting there, dead and now invisible to the next run. It folds onto the
+binding instead — ``const `box` becomes empty: all 2 members are dead`` — the
+way an emptied interface or property already does. A binding nothing reads is
+untouched by this: nothing outlives the removal, so the members stay one
+finding each and `--fix` takes the whole declaration.
+
 **Nesting goes through an array of literals.** `{ cards: [{ title, deadNote },
 { title, deadNote }] }` reported nothing before: nesting followed a single
 literal only, so every member of every element was invisible. A property now

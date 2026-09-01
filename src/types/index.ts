@@ -100,9 +100,9 @@ export interface EmptyTypeFinding extends FindingBase {
   kind: 'empty-type';
   /**
    * What kind of owner empties: a declaration, a function's returned object,
-   * or the property that holds a shape nested inside another.
+   * or the property or binding that holds a shape written inline.
    */
-  context: 'interface' | 'type' | 'returned object' | 'property';
+  context: 'interface' | 'type' | 'returned object' | 'property' | 'const';
   /** How many member findings folded into this one. */
   swallowed: number;
   /** The member nodes whose findings folded in, for verdict and strand inheritance. */

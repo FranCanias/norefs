@@ -46,7 +46,9 @@ Because the check is reference-based, it follows structural typing correctly —
 
 When every member of a named interface or type alias is unused while the type itself is still referenced, the member findings fold into one: ``interface `X` becomes empty: all 6 members are dead``. That is one logical fact, so it is one finding, carrying the most cautious verdict of the members it swallowed. Removing the members would leave an empty `interface X {}` behind, and only you know whether its consumers should go too — `--fix` never touches these. An interface that extends another is exempt — empty, it still works as an alias.
 
-A shape written inline on a property folds the same way, and reads ``property `labels` becomes empty: all 2 members are dead``. `{ labels: { deadColor, deadFont } }` has no declaration to answer for the inner shape — the property is what a reader would delete, so the property is the finding, whether the shape is written as a value or as a type. The property itself is still read: that is the only reason norefs looked inside it, since a nested shape is only read member by member where every read of the holding property keeps the value local. So the fold always leaves a read behind that now reaches nothing, and removing the property means removing that read too — a human's call, exactly like an emptied interface's consumers. Without the fold, `--fix` would delete the members and leave `labels: {}` sitting there: dead, and invisible to the next run.
+A shape written inline on a property or on a binding folds the same way, and reads ``property `labels` becomes empty: all 2 members are dead``. `{ labels: { deadColor, deadFont } }` has no declaration to answer for the inner shape — the property is what a reader would delete, so the property is the finding, whether the shape is written as a value or as a type. The property itself is still read: that is the only reason norefs looked inside it, since a nested shape is only read member by member where every read of the holding property keeps the value local. So the fold always leaves a read behind that now reaches nothing, and removing the property means removing that read too — a human's call, exactly like an emptied interface's consumers. Without the fold, `--fix` would delete the members and leave `labels: {}` sitting there: dead, and invisible to the next run.
+
+A `const box = { … }` that loses every member folds onto the binding for the same reason — ``const `box` becomes empty: all 2 members are dead`` — but only while something still reads `box`. A binding nothing reads is not a fold: the members are reported one by one, and the cleanup pass takes the whole declaration with them. Nothing outlives that removal, so nothing needs your judgment.
 
 ## Three kinds by their `--only` names
 
@@ -56,7 +58,7 @@ Most `--only` names read as the checks above: `files`, `exports`, `types`, `memb
 | --- | --- |
 | `ns-exports` | An unused export whose namespace — a TS `namespace` or an `import * as` binding — is used, so the export may still be consumed dynamically |
 | `ns-types` | The same, for an exported type |
-| `empty-types` | A still-referenced type — or a property holding an inline shape — that becomes empty once its unused members go: the folded `becomes empty` finding above |
+| `empty-types` | A still-referenced type — or a property or binding holding an inline shape — that becomes empty once its unused members go: the folded `becomes empty` finding above |
 
 ## Production mode
 
