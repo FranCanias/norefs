@@ -71,6 +71,13 @@ use it. Only the cases where instantiation can reshape a type's members — a
 naked type parameter, a conditional type, a mapped type, a spread, a class
 component — still pay the checker's price.
 
+The one walk that fans out — the constraint index, which keeps an overridden
+member load-bearing by matching two types property by property, four levels
+down, across every arm of their unions — visits each pair of types once. The
+same pair turns up on many paths in a library whose properties are typed by
+unions of the same few types, and before the walk remembered, cheerio's
+thirty-six files cost twelve CPU minutes; they cost 1.2 seconds now.
+
 ## Synthetic shapes
 
 Some claims are about a shape, not a repository: what a relay costs, what

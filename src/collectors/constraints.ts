@@ -1,4 +1,4 @@
-import type { Node, Project, SourceFile, Type, TypeLiteralNode } from 'ts-morph';
+import type { Node, Project, SourceFile, Type, TypeLiteralNode, ts } from 'ts-morph';
 import { SymbolFlags, SyntaxKind } from 'ts-morph';
 import { forEachDescendantOfKinds } from '../lookup/descendants';
 import { isOwnDeclarationFile } from '../lookup/files';
@@ -21,6 +21,37 @@ import { isOwnDeclarationFile } from '../lookup/files';
 export type ConstraintIndex = Map<Node, Set<string>>;
 
 const MAX_DEPTH = 4;
+
+/**
+ * The pairs of types each index has already walked, and how deep the walk
+ * started. `constrain` fans out over every arm of two unions and every
+ * property of the result, four levels down, and the same pair turns up on
+ * many paths: cheerio's `Cheerio<T>` names a hundred properties whose types
+ * are unions of the same handful of element types, and one run spent twelve
+ * CPU minutes walking the same pairs again and again. A pair walked from
+ * depth `d` has covered everything a walk from any deeper start would, so
+ * only a shallower start walks it twice. Keyed by the index so a rebuild
+ * starts clean, and by the compiler's own type objects so the memory lives
+ * exactly as long as the program.
+ */
+const walked = new WeakMap<ConstraintIndex, WeakMap<ts.Type, Map<ts.Type, number>>>();
+
+function alreadyWalked(sub: Type, sup: Type, index: ConstraintIndex, depth: number): boolean {
+  let pairs = walked.get(index);
+  if (!pairs) {
+    pairs = new WeakMap();
+    walked.set(index, pairs);
+  }
+  let from = pairs.get(sub.compilerType);
+  if (!from) {
+    from = new Map();
+    pairs.set(sub.compilerType, from);
+  }
+  const seenAt = from.get(sup.compilerType);
+  if (seenAt !== undefined && seenAt <= depth) return true;
+  from.set(sup.compilerType, depth);
+  return false;
+}
 
 export function buildConstraintIndex(project: Project): ConstraintIndex {
   const index: ConstraintIndex = new Map();
@@ -472,7 +503,7 @@ function record(owner: Node, name: string, index: ConstraintIndex): void {
  * over-marking only costs findings, never correctness.
  */
 function constrain(sub: Type, sup: Type, index: ConstraintIndex, depth: number): void {
-  if (depth > MAX_DEPTH) return;
+  if (depth > MAX_DEPTH || alreadyWalked(sub, sup, index, depth)) return;
   for (const s of sub.isUnion() ? sub.getUnionTypes() : [sub]) {
     for (const t of sup.isUnion() ? sup.getUnionTypes() : [sup]) {
       constrainSingle(s, t, index, depth);
