@@ -117,7 +117,7 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
   ];
   findings.push(...folds);
   const deadFilePaths = new Set<string>([...modules.deadFiles].map(sf => sf.getFilePath()));
-  assignVerdicts(project, findings, cwd, filePath => deadFilePaths.has(filePath));
+  assignVerdicts(project, findings, cwd, filePath => deadFilePaths.has(filePath), modules.rootDirs);
   // A far side earns a finding on the same terms as everything else: nothing
   // already reported covers it, it sits inside the scope this run was asked
   // for, and nobody suppressed it.

@@ -77,6 +77,8 @@ interface ModuleAnalysis {
   outsideShapes: Set<Node>;
   /** Test, spec, stories, bench, and config files: never worth member findings. */
   harnessFiles: Set<SourceFile>;
+  /** The package directories the run settled on, resolved fallback included. */
+  rootDirs: string[];
 }
 
 export interface ModuleOptions {
@@ -351,7 +353,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       }
     )
   );
-  return { findings, deadFiles, deadDecls, publicDecls, publicShapes, outsideShapes, harnessFiles };
+  return { findings, deadFiles, deadDecls, publicDecls, publicShapes, outsideShapes, harnessFiles, rootDirs };
 }
 
 /**

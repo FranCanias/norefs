@@ -326,4 +326,26 @@ describe('the validation rule: a name match must survive the type its write feed
     expect(memberOf(findings, 'listRecipesByCategory')?.verdict).toBe('dead');
     expect(memberOf(findings, 'deleteRecipe')?.verdict).toBe('dead');
   });
+  it('will not offer a build config as a place to look', () => {
+    // remeda's shape: a semantic-release config writes `{ type: 'feat' }` and
+    // shares a word with the member. The line was honestly labelled a name
+    // match and still sent the reader to a file with no bearing on the type.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'interface Commit {',
+        '  message: string;',
+        '  type: string;',
+        '}',
+        'const read = (c: Commit) => c.message;',
+        'void read;',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile('/release.config.js', "module.exports = { releaseRules: [{ type: 'feat' }] };\n");
+    const member = memberOf(analyze(project, { rootDirs: ['/'] }), 'type');
+    expect(member?.verdict).toBe('dead');
+    expect(member?.evidence).not.toContain('release.config.js');
+  });
 });

@@ -17,6 +17,7 @@ import { isDeleteSite, isWriteReference, referenceIndex } from '../lookup/refere
 import { findReferencesAsNodes } from '../lookup/references';
 import type { Finding, MemberFinding, Verdict } from '../types';
 import { location } from './location';
+import { isToolConfig } from './tool-configs';
 
 /**
  * Turn the single "unused" label into a verdict per finding.
@@ -44,7 +45,9 @@ export function assignVerdicts(
    * nothing — the report already says that code is going away — so citing it
    * as `proven, never read` would point the evidence at a corpse.
    */
-  isDeadFile: (filePath: string) => boolean = () => false
+  isDeadFile: (filePath: string) => boolean = () => false,
+  /** The package directories, for telling a build's own configuration from source. */
+  rootDirs: string[] = []
 ): void {
   const memberFindings = findings.filter((f): f is MemberFinding => f.kind === 'member' && f.verdict === undefined);
   if (memberFindings.length === 0) {
@@ -111,7 +114,14 @@ export function assignVerdicts(
     const attributable = (site: Node): boolean => alive(site) && !siblings.has(site.compilerNode);
     const sites = {
       typed: found.typed.filter(attributable),
-      unverified: found.unverified.filter(attributable),
+      // A name match in a build's own configuration is a word two files
+      // share, not a place to look: `{ type: 'feat' }` in a semantic-release
+      // config has nothing to do with the type it happens to spell. An
+      // unverified match is offered as a lead, and a lead has to lead
+      // somewhere.
+      unverified: found.unverified.filter(
+        site => attributable(site) && !isToolConfig(site.getSourceFile().getFilePath(), rootDirs)
+      ),
       accounted: found.accounted.filter(attributable),
     };
     if (sites.typed.length > 0) {
