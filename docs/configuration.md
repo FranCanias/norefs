@@ -110,7 +110,7 @@ So norefs does not ask you to keep the list. Your build already has it, written 
 
 | Declared in | What is read |
 | --- | --- |
-| `package.json` | `main`, `bin`, and `exports`; paths into the compiled output map back to source through the tsconfig `outDir` and `rootDir` |
+| `package.json` | `main`, `types`, `bin`, and `exports`; paths into the compiled output map back to source through the tsconfig `outDir` and `rootDir`. A subpath pattern — `"./*": "./dist/*.js"` — publishes every module it matches and names none of them, so it is matched against the files the run holds, harness files excepted |
 | `package.json` scripts | any argument that names a project file — `tsx src/server.ts`, `--config=playwright.config.ts`. A directory is a place to look, not a module: `eslint src` names no entry point |
 | `*.html` | the `src` of every `<script>`; a leading `/` is the package root, as bundlers read it |
 | `*.config.*` | every quoted path that lands on a project file — Vite's `input`, Vitest's `setupFiles`, Playwright's `globalSetup`, an alias target, and the same in tools nobody has written a plugin for. A build with two targets writes the second one down the same way, so `vite.config.server.ts` beside the manifest is read too |

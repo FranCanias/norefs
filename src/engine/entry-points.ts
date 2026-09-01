@@ -1,6 +1,8 @@
 import path from 'node:path';
 import type { ts } from 'ts-morph';
+import { isHarnessFile } from './reachability';
 import { commandTokens, scriptsOf } from './scripts';
+import { escapeRegExp } from './text';
 import type { ConfigReader } from './tool-configs';
 
 /** An entry point and the thing that named it, so a run can be audited. */
@@ -32,7 +34,8 @@ export function packageEntryPoints(
   fallbackSourceRoot: string,
   compilerOptions: ts.CompilerOptions,
   known: Set<string>,
-  reader: ConfigReader
+  reader: ConfigReader,
+  rootDirs: string[] = [fallbackSourceRoot]
 ): EntryPoint[] {
   const outDir = compilerOptions.outDir ? path.resolve(packageDir, compilerOptions.outDir) : undefined;
   const sourceRoot = compilerOptions.rootDir ? path.resolve(packageDir, compilerOptions.rootDir) : fallbackSourceRoot;
@@ -42,8 +45,13 @@ export function packageEntryPoints(
     const resolved = resolveToKnown(candidate, fromDir, packageDir, outDir, sourceRoot, known, directoryIndex);
     if (resolved && !found.has(resolved)) found.set(resolved, source);
   };
+  const addPattern = (candidate: string, source: string): void => {
+    for (const filePath of expandPattern(candidate, packageDir, outDir, sourceRoot, known, rootDirs)) {
+      if (!found.has(filePath)) found.set(filePath, source);
+    }
+  };
 
-  collectManifest(packageDir, reader, add);
+  collectManifest(packageDir, reader, add, addPattern);
   for (const config of reader.configs(packageDir)) {
     const source = config.html ? `<script src> in ${config.label}` : `a path named in ${config.label}`;
     // What the config imports is already an edge in the graph, and the config is
@@ -65,7 +73,8 @@ export function packageEntryPoints(
 function collectManifest(
   packageDir: string,
   reader: ConfigReader,
-  add: (candidate: string, fromDir: string, source: string, directoryIndex?: boolean) => void
+  add: (candidate: string, fromDir: string, source: string, directoryIndex?: boolean) => void,
+  addPattern: (candidate: string, source: string) => void
 ): void {
   const text = reader.readFile(path.join(packageDir, 'package.json'));
   if (text === undefined) return;
@@ -78,10 +87,13 @@ function collectManifest(
   if (typeof manifest !== 'object' || manifest === null) return;
   const data = manifest as Record<string, unknown>;
 
-  for (const field of ['main', 'bin', 'exports']) {
+  for (const field of ['main', 'types', 'bin', 'exports']) {
     const paths = new Set<string>();
     collectStrings(data[field], paths);
-    for (const candidate of paths) add(candidate, packageDir, `package.json ${field}`);
+    for (const candidate of paths) {
+      if (candidate.includes('*')) addPattern(candidate, `package.json ${field}`);
+      else add(candidate, packageDir, `package.json ${field}`);
+    }
   }
 
   for (const { name, command } of scriptsOf(data)) {
@@ -92,7 +104,7 @@ function collectManifest(
 /** Strings in main ("dist/index.js"), bin ({name: path}), and exports (nested conditions). */
 function collectStrings(value: unknown, out: Set<string>): void {
   if (typeof value === 'string') {
-    if (!value.includes('*')) out.add(value);
+    out.add(value);
     return;
   }
   if (typeof value === 'object' && value !== null) {
@@ -132,6 +144,41 @@ function resolveToKnown(
     }
   }
   return undefined;
+}
+
+/**
+ * The files a subpath pattern publishes.
+ *
+ * `"./*": "./*.js"` says every module in the package is reachable from
+ * outside it, and names none of them. There is no list to read, so the
+ * pattern is matched against the files the run holds — through the same
+ * outDir and rootDir mapping a written path goes through, because a pattern
+ * points at built output for the same reason a path does.
+ *
+ * A harness file is never published, whatever the pattern's shape. A `*`
+ * matches across directories, the way the resolver reads one, so `./*.js`
+ * left to itself would take the test tree with it.
+ */
+function expandPattern(
+  candidate: string,
+  packageDir: string,
+  outDir: string | undefined,
+  sourceRoot: string,
+  known: Set<string>,
+  rootDirs: string[]
+): string[] {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(candidate)) return [];
+  const base = candidate.startsWith('/') ? path.join(packageDir, candidate) : path.resolve(packageDir, candidate);
+
+  const found: string[] = [];
+  for (const pattern of sourceCandidates(base, outDir, sourceRoot, true, false)) {
+    if (!pattern.includes('*')) continue;
+    const matcher = new RegExp(`^${pattern.split('*').map(escapeRegExp).join('.*')}$`);
+    for (const filePath of known) {
+      if (matcher.test(filePath) && !isHarnessFile(filePath, rootDirs)) found.push(filePath);
+    }
+  }
+  return found;
 }
 
 /** The source files a written path can correspond to, including the path itself. */

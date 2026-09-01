@@ -161,7 +161,8 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
         fallbackRoot,
         optionsForDir(options.packages ?? [], dir) ?? project.getCompilerOptions(),
         known,
-        reader
+        reader,
+        rootDirs
       ).map(entry => entry.filePath)
     ),
   ];

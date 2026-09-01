@@ -57,9 +57,27 @@ describe('package.json-aware entries', () => {
     expect(findings.map(f => [f.kind, f.name])).toEqual([['file', 'orphan.ts']]);
   });
 
-  it('skips exports patterns with wildcards', () => {
+  it('expands an exports pattern against the files the run holds', () => {
+    // `./*` publishes every subpath and names none of them, so the pattern is
+    // what has to be read. A harness file is never published, whatever shape
+    // the pattern takes.
     const findings = findingsOf(
-      { exports: { './*': './dist/*' } },
+      { exports: { './*': './dist/*.js' } },
+      {
+        '/src/anything.ts': 'export const anything = 1;\n',
+        '/src/deep/nested.ts': 'export const nested = 1;\n',
+        '/src/anything.test.ts': "import { anything } from './anything';\nexport const seen = anything;\n",
+      },
+      { outDir: 'dist', rootDir: 'src' }
+    );
+    // Both source files are published; the test file is not, and answers for
+    // its own dead export like the harness file it is.
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['export', 'seen']]);
+  });
+
+  it('leaves a pattern that matches nothing alone', () => {
+    const findings = findingsOf(
+      { exports: { './*': './built/*.js' } },
       { '/src/anything.ts': 'export const anything = 1;\n' },
       { outDir: 'dist', rootDir: 'src' }
     );

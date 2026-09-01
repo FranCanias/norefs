@@ -59,9 +59,14 @@ export function analyzeSyntax(
   const entries = [
     ...(options.entries ?? []),
     ...rootDirs.flatMap(dir =>
-      packageEntryPoints(dir, fallbackRoot, optionsForDir(packages, dir) ?? fallbackOptions, known, reader).map(
-        entry => entry.filePath
-      )
+      packageEntryPoints(
+        dir,
+        fallbackRoot,
+        optionsForDir(packages, dir) ?? fallbackOptions,
+        known,
+        reader,
+        rootDirs
+      ).map(entry => entry.filePath)
     ),
   ];
 
@@ -160,7 +165,8 @@ export function listEntryPoints(
       fallbackRoot,
       optionsForDir(packages, dir) ?? fallbackOptions,
       known,
-      reader
+      reader,
+      rootDirs
     )) {
       if (!discovered.has(entry.filePath)) discovered.set(entry.filePath, entry.source);
     }

@@ -9,6 +9,16 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A subpath pattern publishes what it matches.** `"exports": { "./*":
+"./dist/*.js" }` says every module in the package is reachable from outside
+it, and names none of them — so norefs used to drop the pattern and call the
+whole library internal. zustand and jotai both publish that way, and both had
+most of their public API reported as dead or test-only. The pattern is now
+matched against the files a run holds, through the same `outDir` and `rootDir`
+mapping a written path goes through. A harness file is never published,
+whatever shape the pattern takes. `types` is read beside `main` and `bin`
+while we are here.
+
 **A declaration file is source the whole way through.** The release that made
 a project's own `.d.ts` answer for its exports stopped short of the rest: a
 package whose published entry is `types: './index.d.ts'` had no entry point at
