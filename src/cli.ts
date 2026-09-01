@@ -89,7 +89,7 @@ interface Session {
   project(): Project;
   entryOptions(): Parameters<typeof listEntryPoints>[1];
   runAnalysis(): Finding[];
-  warnUnresolved(): void;
+  warnBefore(): void;
   printReport(findings: Finding[], baseline: ReturnType<typeof applyBaseline>): void;
 }
 
@@ -248,6 +248,19 @@ export function createSession(values: CliValues, cwd: string): Session {
   // checker is never built.
   const syntaxOnly = isSyntaxOnly(filterOptions.only) && !values.fix && !values.watch;
 
+  // Every entry point is public API and a root of the import graph, so a run
+  // that resolves none reports the whole project unused — cheerfully, and at
+  // whatever length. It is the same silence a config holding no files makes,
+  // one step further along.
+  const warnWithoutEntries = (): void => {
+    if (listEntryPoints(tsConfigPaths, entryOptions(), analyzeOptions).length > 0) return;
+    process.stderr.write(
+      'warning: no entry point resolves. Nothing is public API and no import chain has a root,\n' +
+        'so every file a test does not reach is reported unused. Name one with --entry, or check\n' +
+        'that the manifest "main", "exports", or "bin" points at a file this run holds.\n\n'
+    );
+  };
+
   const warnUnresolved = (): void => {
     // The warning is about references going missing, which a syntax-only run
     // never looks for — and asking would build the very program it skipped.
@@ -322,6 +335,11 @@ export function createSession(values: CliValues, cwd: string): Session {
     }
   };
 
+  const warnBefore = (): void => {
+    warnWithoutEntries();
+    warnUnresolved();
+  };
+
   return {
     values,
     cwd,
@@ -330,7 +348,7 @@ export function createSession(values: CliValues, cwd: string): Session {
     project,
     entryOptions,
     runAnalysis,
-    warnUnresolved,
+    warnBefore,
     printReport,
   };
 }
@@ -348,7 +366,7 @@ function listEntries(session: Session): void {
 }
 
 function runBaseline(session: Session): void {
-  session.warnUnresolved();
+  session.warnBefore();
   const findings = session.runAnalysis();
   const fileName = writeBaseline(findings, session.cwd);
   process.stderr.write(`Wrote ${fileName} with ${findings.length} finding(s)\n`);
@@ -359,7 +377,7 @@ function runWatch(session: Session): void {
   // save, an invalid baseline file): report the error and keep watching.
   const report = (): void => {
     try {
-      session.warnUnresolved();
+      session.warnBefore();
       let findings = session.runAnalysis();
       const baseline = applyBaseline(findings, session.cwd);
       if (baseline) findings = baseline.fresh;
@@ -384,7 +402,7 @@ function runWatch(session: Session): void {
 
 function runOnce(session: Session): void {
   const { values, cwd } = session;
-  session.warnUnresolved();
+  session.warnBefore();
   let findings = session.runAnalysis();
 
   const baseline = applyBaseline(findings, cwd);

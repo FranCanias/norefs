@@ -126,6 +126,8 @@ What a config *imports* is not an entry point, as long as the program holds the 
 
 Test, spec, stories, bench, and config files are reachability roots too, on their own rule, and so is anything under `test`, `tests`, `__tests__`, `__mocks__`, `bench`, `benchmarks`, `test-d`, or a name that puts a word and a separator before those — `type-tests`, `__performance_tests__`. They are not entry points: nothing outside imports them, so their exports stay open to report.
 
+When nothing resolves, the run says so before it reports anything. No entry point means nothing is public API and no import chain has a root, so every file a test does not reach is about to be called unused — a full report that is as meaningless as the clean one an empty tsconfig gives, and just as easy to believe.
+
 To see what a run decided, and why:
 
 ```sh

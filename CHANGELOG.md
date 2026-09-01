@@ -26,6 +26,11 @@ section it belongs in, and a property read still needs a type checker.
 `node_modules`, the dot-directories and each package's `outDir` stay out of
 the reading.
 
+**A run says when it resolves no entry point.** Nothing is public API, no
+import chain has a root, and the whole project is about to be reported
+unused. `norefs entries` has always printed that line; an ordinary run never
+reached it, and swr's 65 dead files arrived with no explanation.
+
 **A run says when its tsconfig makes the answer meaningless.** Two shapes used
 to end in a cheerful `No unused code found.` that nobody should believe. A
 solution-style config — `"files": []` beside `"references"` — holds no files

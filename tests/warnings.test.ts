@@ -1,12 +1,12 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { findConfigProblems } from '../src/engine/diagnostics';
-import { withTempDir, writeFiles } from './helpers';
+import { runCli, withTempDir, writeFiles } from './helpers';
 
-function problemsOf(files: Record<string, string>): string[] {
+function problemsOf(files: Record<string, string>, names: string[] = ['tsconfig.json']): string[] {
   return withTempDir('norefs-tsconfig-', dir => {
     writeFiles(dir, files);
-    return findConfigProblems([path.join(dir, 'tsconfig.json')]);
+    return findConfigProblems(names.map(name => path.join(dir, name)));
   });
 }
 
@@ -59,5 +59,35 @@ describe('a tsconfig that makes a run meaningless', () => {
       'src/main.ts': 'export const main = 1;\n',
     });
     expect(problems[0]).toContain('extends a config that is not there');
+  });
+});
+
+describe('a run that resolves no entry point', () => {
+  it('says so before it reports every file unused', () => {
+    // Nothing is public API and no import chain has a root, so the report is
+    // the whole project. `norefs entries` has always said this; an ordinary
+    // run never reached the line.
+    withTempDir('norefs-entries-', dir => {
+      writeFiles(dir, {
+        'tsconfig.json': JSON.stringify({ include: ['src'] }),
+        'package.json': JSON.stringify({ name: 'box' }),
+        'src/shelf.ts': 'export const shelf = 1;\n',
+      });
+      const run = runCli(dir);
+      expect(run.stderr).toContain('no entry point resolves');
+      expect(run.stdout).toContain('shelf.ts');
+    });
+  });
+
+  it('stays quiet when the manifest names one', () => {
+    withTempDir('norefs-entries-', dir => {
+      writeFiles(dir, {
+        'tsconfig.json': JSON.stringify({ include: ['src'] }),
+        'package.json': JSON.stringify({ name: 'box', main: 'src/shelf.ts' }),
+        'src/shelf.ts': 'export const shelf = 1;\n',
+      });
+      const run = runCli(dir);
+      expect(run.stderr).not.toContain('no entry point');
+    });
   });
 });
