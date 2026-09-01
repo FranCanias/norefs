@@ -666,6 +666,167 @@ describe('the ways a package is named without an import', () => {
     );
   }
 
+  it('reads a config written as data', () => {
+    // `stryker.config.json` configures Stryker exactly as `vitest.config.ts`
+    // configures vitest. Reading only `*.config.{js,ts}` left the plugin it
+    // names with nothing in the repository to show for it.
+    const findings = manifestFindings(
+      { devDependencies: { '@stryker-mutator/mocha-runner': '1.0.0' } },
+      {
+        '/stryker.config.json': '{ "plugins": ["@stryker-mutator/mocha-runner"] }\n',
+        '/node_modules/@stryker-mutator/mocha-runner/package.json': JSON.stringify({
+          name: '@stryker-mutator/mocha-runner',
+        }),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("reads a tool's own directory, hook and workflow alike", () => {
+    // `.husky/pre-commit` runs a command, `.github/workflows/*.yml` runs a
+    // command, and `.changeset/config.json` names its changelog generator.
+    // None of the three is a file named after the tool that reads it.
+    const findings = manifestFindings(
+      {
+        devDependencies: {
+          'lint-staged': '1.0.0',
+          'pkg-pr-new': '1.0.0',
+          '@changesets/changelog-github': '1.0.0',
+        },
+      },
+      {
+        '/.husky/pre-commit': 'pnpm exec lint-staged\n',
+        '/.github/workflows/preview.yml': '      - run: pnpm exec pkg-pr-new publish\n',
+        '/.changeset/config.json': '{ "changelog": ["@changesets/changelog-github", {}] }\n',
+        '/node_modules/lint-staged/package.json': JSON.stringify({ name: 'lint-staged' }),
+        '/node_modules/pkg-pr-new/package.json': JSON.stringify({ name: 'pkg-pr-new' }),
+        '/node_modules/@changesets/changelog-github/package.json': JSON.stringify({
+          name: '@changesets/changelog-github',
+        }),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('reads the command a workflow runs, not only the package that owns it', () => {
+    // `tsgo` is the binary `@typescript/native-preview` installs, and a
+    // workflow is the only place hono writes it.
+    const findings = manifestFindings(
+      { devDependencies: { '@typescript/native-preview': '1.0.0' } },
+      {
+        '/.github/actions/measure/action.yml': '        bun tsgo -p tsconfig.build.json\n',
+        '/node_modules/@typescript/native-preview/package.json': JSON.stringify({
+          name: '@typescript/native-preview',
+          bin: { tsgo: './bin/tsgo.js' },
+        }),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('leaves out the rest of .github, where naming a package is not using it', () => {
+    // Dependabot names a package to say not to touch it, which is the opposite
+    // of using it.
+    const findings = manifestFindings(
+      { devDependencies: { husky: '1.0.0' } },
+      {
+        '/.github/dependabot.yml': '    - dependency-name: "husky"\n',
+        '/node_modules/husky/package.json': JSON.stringify({ name: 'husky' }),
+      }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', 'husky']]);
+  });
+
+  it('reads the language service the tsconfig loads', () => {
+    // The compiler loads what `plugins` names exactly as it loads what `types`
+    // names, and no import will ever say so.
+    const findings = manifestFindings(
+      { devDependencies: { '@effect/language-service': '1.0.0' } },
+      {
+        '/tsconfig.json': '{ "compilerOptions": { "plugins": [{ "name": "@effect/language-service" }] } }\n',
+        '/node_modules/@effect/language-service/package.json': JSON.stringify({ name: '@effect/language-service' }),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('reads an ESLint resolver written as an object key', () => {
+    // `'import/resolver': { typescript: true }` is
+    // `eslint-import-resolver-typescript`, and it is written twice out of
+    // reach: a short name, and a bare key rather than a string.
+    const findings = manifestFindings(
+      { devDependencies: { 'eslint-import-resolver-typescript': '1.0.0' } },
+      {
+        '/eslint.config.mjs': "export default [{ settings: { 'import/resolver': { typescript: true } } }];\n",
+        '/node_modules/eslint-import-resolver-typescript/package.json': JSON.stringify({
+          name: 'eslint-import-resolver-typescript',
+        }),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("reads Jest's environment, in the config and in a docblock", () => {
+    // jest spells the package differently from the value it is given, and a
+    // file can name its own environment in the one comment that counts.
+    const project = new Project({ useInMemoryFileSystem: true });
+    const fileSystem = project.getFileSystem();
+    fileSystem.writeFileSync(
+      '/package.json',
+      JSON.stringify({
+        devDependencies: { 'jest-environment-jsdom': '1.0.0', '@edge-runtime/jest-environment': '1.0.0' },
+      })
+    );
+    fileSystem.writeFileSync('/jest.config.js', "module.exports = { testEnvironment: 'jsdom' };\n");
+    fileSystem.writeFileSync(
+      '/node_modules/jest-environment-jsdom/package.json',
+      JSON.stringify({ name: 'jest-environment-jsdom' })
+    );
+    fileSystem.writeFileSync(
+      '/node_modules/@edge-runtime/jest-environment/package.json',
+      JSON.stringify({ name: '@edge-runtime/jest-environment' })
+    );
+    project.createSourceFile(
+      '/serialize.test.ts',
+      '/**\n * @jest-environment @edge-runtime/jest-environment\n */\nexport const t = 1;\n'
+    );
+    const findings = analyze(project, { rootDirs: ['/'] }).filter(
+      f => f.kind === 'dependency' || f.kind === 'misplaced'
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('reads a package a script names behind an environment variable', () => {
+    // got runs `NODE_OPTIONS='--import=tsx/esm' ava`, and that is the whole of
+    // what says the project loads tsx.
+    const findings = manifestFindings(
+      { devDependencies: { tsx: '1.0.0' }, scripts: { test: "NODE_OPTIONS='--import=tsx/esm' ava" } },
+      { '/node_modules/tsx/package.json': JSON.stringify({ name: 'tsx', bin: { tsx: './cli.js' } }) }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("reads a plugin published under its host's name", () => {
+    // `@vitest/coverage-v8` runs behind `--coverage`, and vitest's peer list
+    // has never named it. Its own list names vitest, and the scope says whose
+    // plugin it is. A package with only one of the two halves stays reported.
+    const findings = manifestFindings(
+      {
+        scripts: { test: 'vitest run' },
+        devDependencies: { vitest: '1.0.0', '@vitest/coverage-v8': '1.0.0', '@vitest/alone': '1.0.0' },
+      },
+      {
+        '/node_modules/vitest/package.json': JSON.stringify({ name: 'vitest', bin: { vitest: './cli.js' } }),
+        '/node_modules/@vitest/coverage-v8/package.json': JSON.stringify({
+          name: '@vitest/coverage-v8',
+          peerDependencies: { vitest: '1.0.0' },
+        }),
+        '/node_modules/@vitest/alone/package.json': JSON.stringify({ name: '@vitest/alone' }),
+      }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', '@vitest/alone']]);
+  });
+
   it('reads a binary a script runs by its path', () => {
     // `node ./node_modules/.bin/tsd` is how a script hands node a flag the
     // shim would swallow. The package that owns the binary is still in use.

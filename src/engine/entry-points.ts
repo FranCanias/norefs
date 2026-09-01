@@ -80,6 +80,9 @@ export function packageEntryPoints(
 
   collectManifest(packageDir, reader, add, addPattern);
   for (const config of reader.configs(packageDir)) {
+    // A settings file is read for the packages it names, and a path in it is
+    // as often something to leave out as something to start from.
+    if (config.namesOnly) continue;
     const source = config.html ? `<script src> in ${config.label}` : `a path named in ${config.label}`;
     // What the config imports is already an edge in the graph, and the config is
     // already a root of it — but only when the program holds the config itself.

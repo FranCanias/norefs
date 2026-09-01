@@ -398,10 +398,30 @@ function readManifest(context: DependencyContext, dir: string): Manifest | undef
     pluggedInto: new Set(),
     private: sections['private'] === true,
   };
-  collectScriptUse(manifest, sections, context);
-  collectConfigUse(manifest, sections, context);
+  // One map of every command this project can run, built once and read by
+  // both: a script and a git hook name a binary the same way.
+  const commands = runnableCommands(manifest, context);
+  collectScriptUse(manifest, sections, commands);
+  collectConfigUse(manifest, sections, context, commands);
   collectEmittedHelpers(manifest, context);
   return manifest;
+}
+
+/**
+ * Every command name this project can run, and the package behind it.
+ *
+ * A package's own name counts, and so does each binary it declares — `tsgo` is
+ * `@typescript/native-preview`, and nothing but that package's manifest says
+ * so. What is not installed declares nothing, and a package whose binaries are
+ * unknown is never called unused: see `unusedIsProvable`.
+ */
+function runnableCommands(manifest: Manifest, context: DependencyContext): Map<string, string> {
+  const owner = new Map<string, string>();
+  for (const name of manifest.listed) {
+    owner.set(name, name);
+    for (const binary of declaredBinaries(manifest.dir, name, context)) owner.set(binary, name);
+  }
+  return owner;
 }
 
 /**
@@ -413,7 +433,12 @@ function readManifest(context: DependencyContext, dir: string): Manifest | undef
  * plain string a bundler input is written in. A string that matches no listed
  * package is dropped, which is every other string in the file.
  */
-function collectConfigUse(manifest: Manifest, sections: Record<string, unknown>, context: DependencyContext): void {
+function collectConfigUse(
+  manifest: Manifest,
+  sections: Record<string, unknown>,
+  context: DependencyContext,
+  commands: Map<string, string>
+): void {
   const written = [
     ...context.configStrings(manifest.dir),
     ...tsconfigPackages(manifest.dir, context),
@@ -426,6 +451,10 @@ function collectConfigUse(manifest: Manifest, sections: Record<string, unknown>,
     for (const token of [value, ...commandTokens(value)]) {
       const name = packageName(stripQuerySuffix(token));
       if (name && manifest.listed.has(name)) manifest.usedByConfig.add(name);
+      // A hook and a workflow run a command, the same as a script does, and
+      // a command is rarely spelled the way its package is.
+      const behind = commands.get(token);
+      if (behind) manifest.usedByConfig.add(behind);
     }
   }
 }
@@ -462,7 +491,7 @@ function collectStrings(value: unknown, out: string[]): void {
 /** The package's own tsconfig, parsed, or nothing when there is none to read. */
 interface TsConfig {
   extends?: unknown;
-  compilerOptions?: { types?: unknown; importHelpers?: unknown };
+  compilerOptions?: { types?: unknown; plugins?: unknown; importHelpers?: unknown };
 }
 
 function readTsConfig(dir: string, context: DependencyContext): TsConfig | undefined {
@@ -483,7 +512,9 @@ function readTsConfig(dir: string, context: DependencyContext): TsConfig | undef
  * `extends: "@sindresorhus/tsconfig"` is a package the build needs, and no
  * import will ever name it. `types: ["node", "@withfig/autocomplete-types"]`
  * is the compiler being told to load those, which is the same statement a
- * `/// <reference types>` makes and already counts as.
+ * `/// <reference types>` makes and already counts as. `plugins: [{ name:
+ * "@effect/language-service" }]` is a third: the compiler loads what that
+ * array names exactly as it loads what `types` names.
  *
  * It is read here rather than through the tool-config reader because a
  * tsconfig is not a tool config: its `include` globs are patterns, not paths
@@ -497,6 +528,13 @@ function tsconfigPackages(dir: string, context: DependencyContext): string[] {
   else if (Array.isArray(config.extends)) found.push(...config.extends.filter(entry => typeof entry === 'string'));
   const types = config.compilerOptions?.types;
   if (Array.isArray(types)) found.push(...types.filter(entry => typeof entry === 'string'));
+  const plugins = config.compilerOptions?.plugins;
+  if (Array.isArray(plugins)) {
+    for (const plugin of plugins) {
+      const name = (plugin as { name?: unknown } | null)?.name;
+      if (typeof name === 'string') found.push(name);
+    }
+  }
   return found;
 }
 
@@ -521,18 +559,29 @@ function collectEmittedHelpers(manifest: Manifest, context: DependencyContext): 
 /**
  * The plugins a host loads on its own.
  *
- * `@vitest/coverage-v8` runs behind `--coverage`, `bufferutil` behind `ws`,
- * `jsdom` behind a test environment: nothing imports them, no script names them,
- * and all three are in use. What they have in common is written in the host's
- * own manifest — a package that lists them as peer dependencies, which is how
- * the ecosystem says "that one loads me". So this reads the same evidence the
- * binaries came from, an installed package's own package.json, and only for a
- * host this project actually uses.
+ * `bufferutil` runs behind `ws` and `jsdom` behind a test environment: nothing
+ * imports them, no script names them, and both are in use. What they have in
+ * common is written in the host's own manifest — a package that lists them as
+ * peer dependencies, which is how the ecosystem says "that one loads me". So
+ * this reads the same evidence the binaries came from, an installed package's
+ * own package.json, and only for a host this project actually uses.
+ *
+ * The plugin says it too, and for `@vitest/coverage-v8` it is the only one who
+ * does: it runs behind `--coverage`, and vitest's peer list has never named
+ * it. Its own list names vitest. So a package answers here when both halves of
+ * the statement hold — it is published under the host's own name, and it
+ * declares that host as the peer it plugs into. One half alone is not enough:
+ * `@typescript/typescript6` shares typescript's scope and is a compiler of its
+ * own, and plenty of packages declare a peer without being anybody's plugin.
  */
 function collectPluginPeers(manifest: Manifest, context: DependencyContext): void {
   for (const host of manifest.listed) {
     const used = manifest.used.has(host) || manifest.usedByScript.has(host) || manifest.usedByConfig.has(host);
     if (!used) continue;
+    for (const name of manifest.listed) {
+      if (!name.startsWith(`@${host}/`)) continue;
+      if (declaresPeer(manifest.dir, name, host, context)) manifest.pluggedInto.add(name);
+    }
     const peers = (installedPackage(manifest.dir, host, context)?.data as { peerDependencies?: unknown })
       ?.peerDependencies;
     if (typeof peers !== 'object' || peers === null) continue;
@@ -551,27 +600,28 @@ function collectPluginPeers(manifest: Manifest, context: DependencyContext): voi
  * them: a token that matches a listed package's name, or a binary that package
  * declares, is that package being used.
  *
- * Every binary comes from the installed package's own manifest, so nothing here
- * is a guess about which tool owns which command. What is not installed has no
- * declared binaries to read, and a package whose binaries are unknown is never
- * called unused — see `unusedIsProvable`.
+ * Every command comes from `runnableCommands`, which reads each installed
+ * package's own manifest — so nothing here is a guess about which tool owns
+ * which command.
  */
-function collectScriptUse(manifest: Manifest, data: Record<string, unknown>, context: DependencyContext): void {
+function collectScriptUse(manifest: Manifest, data: Record<string, unknown>, owner: Map<string, string>): void {
   const scripts = scriptsOf(data);
   if (scripts.length === 0) return;
 
-  const owner = new Map<string, string>();
-  for (const name of manifest.listed) {
-    owner.set(name, name);
-    for (const binary of declaredBinaries(manifest.dir, name, context)) owner.set(binary, name);
-  }
-
   for (const { command } of scripts) {
     for (const token of commandTokens(command)) {
-      const name = owner.get(token) ?? owner.get(binaryPathName(token));
+      // A token can be a deep path into a package — `--import=tsx/esm` loads
+      // tsx — so the package it names counts as well as the token itself.
+      const name = owner.get(token) ?? owner.get(binaryPathName(token)) ?? owner.get(packageName(token) ?? '');
       if (name) manifest.usedByScript.add(name);
     }
   }
+}
+
+/** True when this installed package declares `host` among its own peers. */
+function declaresPeer(fromDir: string, name: string, host: string, context: DependencyContext): boolean {
+  const peers = (installedPackage(fromDir, name, context)?.data as { peerDependencies?: unknown })?.peerDependencies;
+  return typeof peers === 'object' && peers !== null && host in peers;
 }
 
 /**

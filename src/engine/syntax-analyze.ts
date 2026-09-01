@@ -112,7 +112,7 @@ export function analyzeSyntax(
         internal: entry.resolved && !entry.external,
       });
     }
-    for (const reference of sources.typeReferencesOf(filePath)) {
+    for (const reference of sources.namedInCommentsOf(filePath)) {
       uses.push({ filePath, text: reference.text, start: reference.start, typeOnly: true, internal: false });
     }
 

@@ -35,8 +35,8 @@ export interface FileScan {
   /** 1-based lines whose first non-blank character opens a comment. */
   commentLines: number[];
   specifiers: Specifier[];
-  /** The packages `/// <reference types="…" />` names. */
-  typeReferences: Specifier[];
+  /** The packages the file's opening comments name. */
+  namedInComments: Specifier[];
 }
 
 /** The name standing for every name a module has: `import * as`, `export *`, `import()`. */
@@ -44,6 +44,13 @@ export const WHOLE_MODULE = '*';
 
 /** A triple-slash directive naming a types package, as TypeScript writes it. */
 const TYPE_REFERENCE = /\/\/\/\s*<reference\s+types\s*=\s*["']([^"']+)["']/g;
+
+/**
+ * A Jest docblock naming the environment to run this file in. The value can be
+ * a short name — `node`, `jsdom` — or a package, and only a package matches
+ * anything the manifest lists.
+ */
+const JEST_ENVIRONMENT = /@jest-environment\s+([@\w][\w./@-]*)/g;
 
 type Kind = 'ident' | 'str' | 'punct' | 'number' | 'other';
 
@@ -563,32 +570,35 @@ export function scanText(text: string): FileScan {
     suppressedLines,
     commentLines,
     specifiers: specifiersOf(text, tokens),
-    typeReferences: typeReferencesOf(text.slice(0, firstTokenStart)),
+    namedInComments: namedInComments(text.slice(0, firstTokenStart)),
   };
 }
 
 /**
- * The packages a triple-slash directive names.
+ * The packages a file's opening comments name.
  *
- * A reference directive is a file saying it needs that package installed, in
- * the one place the import graph never looks: a comment. Nothing imports the
- * package, no script runs it, and the report used to call it dead. The
- * compiler erases the directive, so what it names is needed to build and never
- * at run time.
+ * A comment is the one place the import graph never looks, and two of them
+ * carry a package the run needs. `/// <reference types="pantry-types" />` says
+ * the build needs that package; `@jest-environment @edge-runtime/jest-environment`
+ * says the test run loads that one. Nothing imports either, no script runs
+ * either, and the report used to call both dead. Neither survives compilation,
+ * so what they name is needed to build and never at run time.
  *
  * Only the prologue is read — everything before the first token — because that
- * is the only place TypeScript honours a directive. The same words further
- * down are prose.
+ * is the only place either one is honoured. The same words further down are
+ * prose.
  */
-function typeReferencesOf(prologue: string): Specifier[] {
+export function namedInComments(prologue: string): Specifier[] {
   const found: Specifier[] = [];
-  for (const match of prologue.matchAll(TYPE_REFERENCE)) {
-    // TYPE_REFERENCE's one group is not optional: every match captures it.
-    const name = match[1]!;
-    const start = match[0].lastIndexOf(name) + match.index;
-    found.push({ text: name, start, end: start + name.length, typeOnly: true, names: [] });
+  for (const pattern of [TYPE_REFERENCE, JEST_ENVIRONMENT]) {
+    for (const match of prologue.matchAll(pattern)) {
+      // Each pattern's one group is not optional: every match captures it.
+      const name = match[1]!;
+      const start = match[0].lastIndexOf(name) + match.index;
+      found.push({ text: name, start, end: start + name.length, typeOnly: true, names: [] });
+    }
   }
-  return found;
+  return found.sort((a, b) => a.start - b.start);
 }
 
 /**
@@ -689,7 +699,7 @@ export function scanFiles(filePaths: string[]): FileScan[] {
         suppressedLines: [],
         commentLines: [],
         specifiers: [],
-        typeReferences: [],
+        namedInComments: [],
       };
     }
     return scanText(text);

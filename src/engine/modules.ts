@@ -25,7 +25,7 @@ import { readOutside, takenOutside } from './outside';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
-import { WHOLE_MODULE } from './scan';
+import { namedInComments, WHOLE_MODULE } from './scan';
 import { shapesNamedBy } from './shapes';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 import { runtimeSibling } from './text';
@@ -815,14 +815,11 @@ function dependencyUses(project: Project): DependencyUse[] {
         internal: target !== undefined && !target.isInNodeModules(),
       });
     }
-    for (const reference of sourceFile.getTypeReferenceDirectives()) {
-      found.push({
-        filePath,
-        text: reference.getFileName(),
-        start: reference.getPos(),
-        typeOnly: true,
-        internal: false,
-      });
+    // The prologue is read as text rather than as parse trees: a Jest docblock
+    // is a comment the parser keeps no node for, and the directive beside it
+    // reads the same way.
+    for (const named of namedInComments(sourceFile.getFullText().slice(0, sourceFile.getStart()))) {
+      found.push({ filePath, text: named.text, start: named.start, typeOnly: true, internal: false });
     }
     for (const literal of resolveCallLiterals(sourceFile)) {
       found.push({

@@ -32,6 +32,25 @@ came back dead — 39 findings, every one a live file. When the tsconfig's
 mapping lands on nothing, the package's source roots are tried instead. Two
 roots answering at once is no answer, so nothing is named and the run says so.
 
+**Eight more ways a package is named without an import.** A config written
+as data (`stryker.config.json`); a directory a tool owns outright (`.husky/`,
+`.changeset/`, `.github/workflows/`, `.github/actions/`); a command a hook or
+a workflow runs, resolved through the binaries a package declares, so `tsgo`
+is `@typescript/native-preview`; `compilerOptions.plugins`; ESLint's resolver
+short name, which is written as a bare object key rather than a string; Jest's
+environment short name, which jest spells differently from the package;
+`@jest-environment` in a file's opening docblock; and a script's own
+environment prefix, so `NODE_OPTIONS='--import=tsx/esm' ava` reads as loading
+tsx. A plugin published under a used package's own scope that declares that
+package as its peer counts too — `@vitest/coverage-v8` runs behind
+`--coverage`, and vitest's peer list has never named it, so the route the docs
+described did not exist. Sixteen wrong findings across the audit corpus.
+
+A config written as data is read for the packages it names and never for the
+paths, and so is a file in a tool's directory. `ignore`, `exclude`, `scope`
+and `mutate` are paths that are the opposite of an entry point, and a workflow
+that runs a file does not publish that file's exports.
+
 **Public API is closed over the types it names.** The exemption stopped at
 the declarations an entry file exports, and a consumer does not stop there.
 ts-pattern's entry exports `match()`, whose return type is a `Match`

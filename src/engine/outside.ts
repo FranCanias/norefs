@@ -134,7 +134,7 @@ export function readOutside(seen: ReadonlySet<string>, options: OutsideOptions):
       });
     }
     if (!mine) continue;
-    for (const reference of index.typeReferencesOf(filePath)) {
+    for (const reference of index.namedInCommentsOf(filePath)) {
       uses.push({
         filePath,
         text: reference.text,

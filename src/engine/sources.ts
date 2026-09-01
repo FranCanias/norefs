@@ -69,8 +69,8 @@ export class SourceIndex {
   }
 
   /** The packages this file's `/// <reference types>` directives name. */
-  typeReferencesOf(filePath: string): Specifier[] {
-    return this.scans.get(filePath)?.typeReferences ?? [];
+  namedInCommentsOf(filePath: string): Specifier[] {
+    return this.scans.get(filePath)?.namedInComments ?? [];
   }
 
   isFileSuppressed(filePath: string): boolean {
