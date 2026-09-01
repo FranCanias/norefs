@@ -201,6 +201,21 @@ describe('dependency checks', () => {
     expect(findings.map(f => [f.kind, f.name])).toEqual([['unlisted', 'somepkg']]);
   });
 
+  it("leaves a bundler's virtual module and a `~` alias alone", () => {
+    // vueuse imports `uno.css`, which unocss makes up the way unplugin-icons
+    // makes up `virtual:icons/…`; the scheme form was read as a scheme and the
+    // bare name was asked to be listed. `~icons/…` is the same plugin's other
+    // spelling, and no package name can start with `~`.
+    const findings = depFindings(
+      { dependencies: {} },
+      {
+        '/main.ts':
+          "import 'uno.css';\nimport 'virtual:uno.css';\nimport Logo from '~icons/logos/github-icon';\nexport const y = Logo;\n",
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
   it('honors a norefs-ignore comment on an unlisted import line', () => {
     const findings = depFindings(
       { dependencies: {} },
@@ -529,6 +544,32 @@ describe('a dependency in the wrong section', () => {
     expect(findings).toEqual([]);
   });
 
+  it('knows the rest of the family: a build.config, and a bundler run from the script alone', () => {
+    // h3 builds with obuild, whose `build.config.ts` shares unbuild's name and
+    // whose rolldown config externalizes `dependencies` and `peerDependencies`
+    // and nothing else. And a tsup with no config — `"build": "tsup
+    // src/index.ts --format esm,cjs"` — inlines exactly as one with a config
+    // does. Both reported the devDependency as something an install misses.
+    const obuild = withConfigs(
+      { devDependencies: { inlined: '1.0.0', obuild: '1.0.0' }, scripts: { build: 'obuild' } },
+      {
+        '/build.config.ts':
+          "import { defineBuildConfig } from 'obuild/config';\nexport default defineBuildConfig({ entries: ['src/index.ts'] });\n",
+      },
+      { '/main.ts': "import 'inlined';\nexport const x = 1;\n" },
+      { inlined: { name: 'inlined' }, obuild: { name: 'obuild', bin: { obuild: 'cli.mjs' } } }
+    );
+    expect(obuild).toEqual([]);
+
+    const script = withConfigs(
+      { devDependencies: { inlined: '1.0.0', tsup: '1.0.0' }, scripts: { build: 'tsup main.ts --format esm,cjs' } },
+      {},
+      { '/main.ts': "import 'inlined';\nexport const x = 1;\n" },
+      { inlined: { name: 'inlined' }, tsup: { name: 'tsup', bin: { tsup: 'cli.js' } } }
+    );
+    expect(script).toEqual([]);
+  });
+
   it('reads the array a bundler config spreads into its external list', () => {
     // `external: [...driversPackages]` is how a build keeps one list for
     // several outputs. Reading only the strings between the brackets would
@@ -688,6 +729,44 @@ describe('a dependency in the wrong section', () => {
     expect(plain.map(f => [f.kind, f.name])).toEqual([['misplaced', 'plain-lib']]);
   });
 
+  it('never asks for a module a listed package declares into the program', () => {
+    // unplugin imports `bun`, which no package provides: bun-types writes
+    // `declare module "bun"` across the files its entry references, and the
+    // run time brings the module. The import was called unlisted, and
+    // `--fix-unsafe` would have written a package npm does not have.
+    const project = new Project({ useInMemoryFileSystem: true });
+    const fileSystem = project.getFileSystem();
+    fileSystem.writeFileSync(
+      '/package.json',
+      JSON.stringify({ devDependencies: { 'bun-types': '1.0.0', pinia: '1.0.0' } })
+    );
+    fileSystem.writeFileSync(
+      '/node_modules/bun-types/package.json',
+      JSON.stringify({ name: 'bun-types', types: 'index.d.ts' })
+    );
+    fileSystem.writeFileSync('/node_modules/bun-types/index.d.ts', '/// <reference path="./bun.d.ts" />\n');
+    fileSystem.writeFileSync(
+      '/node_modules/bun-types/bun.d.ts',
+      'declare module "bun" {\n  export interface BunPlugin { name: string }\n}\n'
+    );
+    // A module file's `declare module` augments a package that exists, and
+    // says nothing about whether it is installed.
+    fileSystem.writeFileSync(
+      '/node_modules/pinia/package.json',
+      JSON.stringify({ name: 'pinia', types: 'index.d.ts' })
+    );
+    fileSystem.writeFileSync(
+      '/node_modules/pinia/index.d.ts',
+      "export declare const pinia: unknown;\ndeclare module 'vue' {\n  interface ComponentCustomProperties { $pinia: unknown }\n}\n"
+    );
+    project.createSourceFile(
+      '/main.ts',
+      "import type { BunPlugin } from 'bun';\nimport { ref } from 'vue';\nexport const plugin: BunPlugin = { name: String(ref) };\n"
+    );
+    const findings = analyze(project, { rootDirs: ['/'] }).filter(f => f.kind === 'unlisted');
+    expect(findings.map(f => f.name)).toEqual(['vue']);
+  });
+
   it('reads an ambient declaration in one direction only', () => {
     // `declare module` is also how a library older than ES modules ships its
     // types — @xterm/headless, node-pty and toml all write it, and all three are
@@ -830,6 +909,66 @@ describe('the ways a package is named without an import', () => {
     expect(findings).toEqual([]);
   });
 
+  it("leaves the keys of a legacy config's env, globals and settings alone", () => {
+    // `env: { node: true, jest: true }` names ESLint's built-in environments
+    // and `settings: { react: {…} }` a plugin's settings, and each key expanded
+    // to a plugin the check could then never report. The resolver under
+    // `'import/resolver'` is still a key, one block further in.
+    const findings = manifestFindings(
+      {
+        devDependencies: {
+          'eslint-plugin-node': '1.0.0',
+          'eslint-plugin-jest': '1.0.0',
+          'eslint-plugin-react': '1.0.0',
+          'eslint-import-resolver-typescript': '1.0.0',
+        },
+      },
+      {
+        '/.eslintrc.cjs':
+          "module.exports = {\n  env: { node: true, jest: true },\n  globals: { jest: 'readonly' },\n  settings: { react: { version: 'detect' }, 'import/resolver': { typescript: true } },\n};\n",
+        '/node_modules/eslint-plugin-node/package.json': JSON.stringify({ name: 'eslint-plugin-node' }),
+        '/node_modules/eslint-plugin-jest/package.json': JSON.stringify({ name: 'eslint-plugin-jest' }),
+        '/node_modules/eslint-plugin-react/package.json': JSON.stringify({ name: 'eslint-plugin-react' }),
+        '/node_modules/eslint-import-resolver-typescript/package.json': JSON.stringify({
+          name: 'eslint-import-resolver-typescript',
+        }),
+      }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([
+      ['dependency', 'eslint-plugin-node'],
+      ['dependency', 'eslint-plugin-jest'],
+      ['dependency', 'eslint-plugin-react'],
+    ]);
+  });
+
+  it('reads the plugins a PostCSS config loads by key, and the tool a config is named after', () => {
+    // valtio's website writes the `postcss.config.js` Tailwind's own guide
+    // writes — `plugins: { tailwindcss: {}, autoprefixer: {} }` — and all
+    // three packages every Tailwind site lists came back dead. The keys are
+    // how PostCSS loads a plugin, and the file's name is how the project
+    // writes postcss down; `tailwind.config.js` names tailwindcss the same way.
+    const findings = manifestFindings(
+      { devDependencies: { tailwindcss: '1.0.0', autoprefixer: '1.0.0', postcss: '1.0.0', 'pantry-plugin': '1.0.0' } },
+      {
+        '/postcss.config.js': 'module.exports = { plugins: { tailwindcss: {}, autoprefixer: {} } };\n',
+        '/node_modules/tailwindcss/package.json': JSON.stringify({ name: 'tailwindcss' }),
+        '/node_modules/autoprefixer/package.json': JSON.stringify({ name: 'autoprefixer' }),
+        '/node_modules/postcss/package.json': JSON.stringify({ name: 'postcss' }),
+        '/node_modules/pantry-plugin/package.json': JSON.stringify({ name: 'pantry-plugin' }),
+      }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', 'pantry-plugin']]);
+
+    const tailwind = manifestFindings(
+      { devDependencies: { tailwindcss: '1.0.0' } },
+      {
+        '/tailwind.config.js': "module.exports = { content: ['./src/**/*.tsx'] };\n",
+        '/node_modules/tailwindcss/package.json': JSON.stringify({ name: 'tailwindcss' }),
+      }
+    );
+    expect(tailwind).toEqual([]);
+  });
+
   it('reads a short name off a code config only where it is written as a key', () => {
     // Every flat config is an ES module, so reading its bare words made
     // `import` expand to `eslint-plugin-import` in every one of them, and the
@@ -888,6 +1027,22 @@ describe('the ways a package is named without an import', () => {
       }
     );
     expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', 'pantry-plugin']]);
+  });
+
+  it("reads a site's dot-directory wherever the site sits", () => {
+    // The layout vitepress's own scaffolder writes: `docs/.vitepress/config.ts`
+    // with no `docs/package.json`. The directory was known by its path from
+    // the package root, so a site one directory down went unread and every
+    // plugin it loads was called dead.
+    const findings = manifestFindings(
+      { devDependencies: { 'markdown-it-footnote': '1.0.0' } },
+      {
+        '/docs/.vitepress/config.ts':
+          "import footnote from 'markdown-it-footnote';\nexport default { markdown: { config: (md) => md.use(footnote) } };\n",
+        '/node_modules/markdown-it-footnote/package.json': JSON.stringify({ name: 'markdown-it-footnote' }),
+      }
+    );
+    expect(findings).toEqual([]);
   });
 
   it("reads Jest's environment, in the config and in a docblock", () => {
@@ -982,6 +1137,23 @@ describe('the ways a package is named without an import', () => {
       { '/tsconfig.json': '{ "compilerOptions": { "importHelpers": true } }\n' }
     );
     expect(findings).toEqual([]);
+  });
+
+  it('reads the JSX runtime the tsconfig points every component at', () => {
+    // `jsxImportSource: "@emotion/react"` makes every file with JSX in it come
+    // out importing `@emotion/react/jsx-runtime`, and no source file writes
+    // the import. Plain `react-jsx` does the same with `react`.
+    const emotion = manifestFindings(
+      { dependencies: { '@emotion/react': '1.0.0' } },
+      { '/tsconfig.json': '{ "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "@emotion/react" } }\n' }
+    );
+    expect(emotion).toEqual([]);
+
+    const react = manifestFindings(
+      { dependencies: { react: '1.0.0' } },
+      { '/tsconfig.json': '{ "compilerOptions": { "jsx": "react-jsx" } }\n' }
+    );
+    expect(react).toEqual([]);
   });
 
   it('reads the type packages the tsconfig loads by name', () => {

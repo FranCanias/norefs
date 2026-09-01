@@ -13,6 +13,16 @@ interface Workspace {
   source: string;
   /** Declared packages holding no tsconfig.json. Nothing analyzes them. */
   withoutTsConfig: string[];
+  /**
+   * The root's own tsconfig.json, when the declaration lists only the packages
+   * under it. The root is a package of its own workspace whether or not the
+   * declaration says so — pnpm's `ignoreWorkspaceRootCheck` exists because
+   * the root is one — and unplugin keeps its library there: `packages:
+   * [docs]`, a root tsconfig, and a run that analyzed the docs alone and
+   * warned about them. It comes back on its own because a root tsconfig can
+   * be a solution file holding nothing, which is the caller's to tell apart.
+   */
+  rootTsConfig: string | undefined;
 }
 
 /**
@@ -52,11 +62,18 @@ export function findWorkspace(rootDir: string, fileSystem: ReadOnlyFileSystem = 
     else tsConfigPaths.push(tsConfig);
   }
   if (tsConfigPaths.length === 0 && withoutTsConfig.length === 0) return undefined;
+  let rootTsConfig: string | undefined;
+  if (!packageDirs.includes(rootDir) && fileSystem.readFile(path.join(rootDir, 'package.json')) !== undefined) {
+    packageDirs.push(rootDir);
+    const tsConfig = path.join(rootDir, 'tsconfig.json');
+    if (fileSystem.readFile(tsConfig) !== undefined) rootTsConfig = tsConfig;
+  }
   return {
     tsConfigPaths: tsConfigPaths.sort(),
     packageDirs: packageDirs.sort(),
     source: declaration.source,
     withoutTsConfig: withoutTsConfig.sort(),
+    rootTsConfig,
   };
 }
 

@@ -165,6 +165,39 @@ describe('a monorepo that declares its own packages', () => {
     expect(run.stderr).not.toMatch(/^\s+at /m);
   });
 
+  it('analyzes the root too when the declaration lists only the packages under it', () => {
+    // unplugin: `packages: [docs]`, and the library at the root under its own
+    // tsconfig. The run said "1 workspace package(s)", warned that no entry
+    // point resolved — in docs — and never named what it skipped.
+    const files: Record<string, string> = {
+      'pnpm-workspace.yaml': 'ignoreWorkspaceRootCheck: true\npackages:\n  - docs\n',
+      'package.json': JSON.stringify({ name: 'pantry', main: 'src/index.ts' }),
+      'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true }, include: ['src'] }),
+      'src/index.ts': 'export const plate = 1;\n',
+      'src/orphan.ts': 'export const orphan = 1;\n',
+      'docs/package.json': JSON.stringify({ name: 'docs', private: true, main: 'src/site.ts' }),
+      'docs/tsconfig.json': JSON.stringify({ compilerOptions: { strict: true }, include: ['src'] }),
+      'docs/src/site.ts': 'export const site = 1;\n',
+    };
+    const run = inProject('norefs-workspace-root-', files, dir => runCli(dir));
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(
+      '1 workspace package(s) from pnpm-workspace.yaml, plus the root, whose tsconfig.json holds files of its own'
+    );
+    expect(run.stdout).toContain('src/orphan.ts');
+
+    // A root tsconfig that only references the packages holds nothing, and is
+    // left out without a word: nobody asked for it.
+    const solution = inProject(
+      'norefs-workspace-solution-',
+      { ...files, 'tsconfig.json': JSON.stringify({ files: [], references: [{ path: 'docs' }] }) },
+      dir => runCli(dir)
+    );
+    expect(solution.stderr).toContain('1 workspace package(s) from pnpm-workspace.yaml\n');
+    expect(solution.stderr).not.toContain('warning');
+    expect(solution.stdout).not.toContain('src/orphan.ts');
+  });
+
   it('lets an explicit --project win over the declaration', () => {
     const run = inWorkspace('-p', 'packages/core/tsconfig.json');
     expect(run.stderr).not.toContain('workspace package(s)');

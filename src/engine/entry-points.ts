@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { minimatch } from 'minimatch';
 import type { ts } from 'ts-morph';
 import { isHarnessFile } from './reachability';
 import { commandTokens, scriptsOf } from './scripts';
@@ -55,8 +56,8 @@ export function packageEntryPoints(
 
   // Only a mapping that finds nothing pays for this, so it is read once and
   // only when it is asked for.
-  let rebuiltRoots: string[] | undefined;
-  const roots = (): string[] => (rebuiltRoots ??= sourceRootsOf(packageDir, known));
+  let rebuiltRoots: SourceRoots | undefined;
+  const roots = (): SourceRoots => (rebuiltRoots ??= sourceRootsOf(packageDir, known));
 
   const found = new Map<string, { source: string; shipping: boolean }>();
   const add = (candidate: string, fromDir: string, source: string, directoryIndex = false, shipping = true): void => {
@@ -71,6 +72,17 @@ export function packageEntryPoints(
 
   collectManifest(packageDir, reader, add, addPattern);
   for (const config of reader.configs(packageDir)) {
+    // A file its tool loads by name — `.vitepress/config.ts`, `.storybook/main.ts`
+    // — is an entry point when the program holds it, and its exports are the
+    // tool's to read. It ships nothing: a site's config is not the package.
+    if (config.loadedBy && known.has(config.filePath) && !found.has(config.filePath)) {
+      found.set(config.filePath, { source: `a file ${config.loadedBy} loads by name`, shipping: false });
+    }
+    // Storybook reads every named export of a story as a story, and its
+    // config says which files those are, as globs from its own directory.
+    for (const filePath of storyFiles(config.storyGlobs, config.dir, known)) {
+      if (!found.has(filePath)) found.set(filePath, { source: `a story listed in ${config.label}`, shipping: false });
+    }
     // A settings file is read for the packages it names, and a path in it is
     // as often something to leave out as something to start from.
     if (config.namesOnly) continue;
@@ -122,6 +134,26 @@ function collectManifest(
   }
 }
 
+/**
+ * The files Storybook's `stories` globs match among the ones the run holds.
+ *
+ * radix-ui's `stories: ['../stories/…/*.stories.@(js|jsx|mjs|ts|tsx)']` is
+ * written relative to `.storybook/`, `**` and extglob and all, so each held
+ * file is spelled the same way before the glob is asked. A story is a harness file already;
+ * what the glob adds is that its named exports are what the tool loads, and
+ * so are never dead.
+ */
+function storyFiles(globs: string[], configDir: string, known: Set<string>): string[] {
+  if (globs.length === 0) return [];
+  const patterns = globs.map(glob => path.posix.normalize(glob));
+  const found: string[] = [];
+  for (const filePath of known) {
+    const relative = path.relative(configDir, filePath).split(path.sep).join('/');
+    if (patterns.some(pattern => minimatch(relative, pattern))) found.push(filePath);
+  }
+  return found.sort();
+}
+
 /** Strings in main ("dist/index.js"), bin ({name: path}), and exports (nested conditions). */
 function collectStrings(value: unknown, out: Set<string>): void {
   if (typeof value === 'string') {
@@ -147,7 +179,7 @@ function resolveToKnown(
   sourceRoot: string,
   known: Set<string>,
   directoryIndex: boolean,
-  roots: () => string[]
+  roots: () => SourceRoots
 ): string | undefined {
   if (candidate.length === 0 || candidate.includes('*') || /^[a-z][a-z0-9+.-]*:/i.test(candidate)) return undefined;
 
@@ -188,12 +220,12 @@ function resolveToKnown(
  * source by demonstration, and a path into it that resolved to nothing is a
  * missing file rather than a built one.
  */
-function builtDirOf(base: string, packageDir: string, roots: string[]): string | undefined {
+function builtDirOf(base: string, packageDir: string, roots: SourceRoots): string | undefined {
   const relative = path.relative(packageDir, base);
   const [first, second] = relative.split(path.sep);
   if (!first || first === '..' || second === undefined) return undefined;
   const dir = path.join(packageDir, first);
-  return roots.includes(dir) ? undefined : dir;
+  return roots.under.includes(dir) ? undefined : dir;
 }
 
 /**
@@ -209,53 +241,62 @@ function builtDirOf(base: string, packageDir: string, roots: string[]): string |
  * and a whole source tree is called dead.
  *
  * So the second guess drops `rootDir` and tries the package's source roots
- * instead. Two roots answering at once is no answer — the file that ships
- * would be a coin toss — so that case is left alone, and the warning about a
- * run with no entry point stands.
+ * instead. The package root comes first, and answers alone: a package whose
+ * source sits beside its manifest — vueuse's `packages/electron/index.ts`,
+ * built to `dist/index.js` — keeps its whole tree there, and the directories
+ * under it are that tree's branches rather than roots of their own. Below
+ * the root, two directories answering at once is no answer — the file that
+ * ships would be a coin toss — so that case is left alone, and the warning
+ * about a run with no entry point stands.
  */
 function rebuiltFrom(
   base: string,
   outDir: string,
-  roots: string[],
+  roots: SourceRoots,
   known: Set<string>,
   shapedLikeAPath: boolean,
   directoryIndex: boolean
 ): string | undefined {
   if (base !== outDir && !base.startsWith(`${outDir}${path.sep}`)) return undefined;
   const built = path.relative(outDir, base);
-  const hits = new Set<string>();
-  for (const root of roots) {
-    for (const sourcePath of sourceCandidates(
-      path.join(root, built),
-      undefined,
-      root,
-      shapedLikeAPath,
-      directoryIndex
-    )) {
-      if (known.has(sourcePath)) hits.add(sourcePath);
-    }
-  }
+  const hitsUnder = (root: string): string[] =>
+    sourceCandidates(path.join(root, built), undefined, root, shapedLikeAPath, directoryIndex).filter(sourcePath =>
+      known.has(sourcePath)
+    );
+  const [atRoot] = roots.own === undefined ? [] : hitsUnder(roots.own);
+  if (atRoot !== undefined) return atRoot;
+  const hits = new Set(roots.under.flatMap(hitsUnder));
   const [only] = hits;
   return hits.size === 1 ? only : undefined;
 }
 
+/** Where a package could be keeping its source. */
+interface SourceRoots {
+  /** The package directory itself, when a file this run reads sits directly in it. */
+  own: string | undefined;
+  /** Each directory directly under the package that holds a file this run reads. */
+  under: string[];
+}
+
 /**
- * Where a package could be keeping its source: each directory directly under
- * it that holds a file this run reads. The package root itself is left out,
- * because every built path under it is the built path itself. The configured
- * `rootDir` stays in — it is the guess that already failed, so it can answer
- * nothing new, and leaving it in costs one lookup that misses.
+ * Where a package could be keeping its source: the package root, when a file
+ * this run reads sits directly in it, and each directory directly under the
+ * package that holds one. The configured `rootDir` stays in — it is the guess
+ * that already failed, so it can answer nothing new, and leaving it in costs
+ * one lookup that misses.
  */
-function sourceRootsOf(packageDir: string, known: Set<string>): string[] {
-  const roots = new Set<string>();
+function sourceRootsOf(packageDir: string, known: Set<string>): SourceRoots {
+  const under = new Set<string>();
+  let own: string | undefined;
   const prefix = packageDir.endsWith(path.sep) ? packageDir : `${packageDir}${path.sep}`;
   for (const filePath of known) {
     if (!filePath.startsWith(prefix)) continue;
     const [first, second] = filePath.slice(prefix.length).split(path.sep);
-    if (first === undefined || second === undefined) continue;
-    roots.add(path.join(packageDir, first));
+    if (first === undefined) continue;
+    if (second === undefined) own = packageDir;
+    else under.add(path.join(packageDir, first));
   }
-  return [...roots].sort();
+  return { own, under: [...under].sort() };
 }
 
 /**
@@ -278,7 +319,7 @@ function expandPattern(
   sourceRoot: string,
   known: Set<string>,
   rootDirs: string[],
-  roots: () => string[]
+  roots: () => SourceRoots
 ): string[] {
   if (/^[a-z][a-z0-9+.-]*:/i.test(candidate)) return [];
   const base = candidate.startsWith('/') ? path.join(packageDir, candidate) : path.resolve(packageDir, candidate);
@@ -288,7 +329,10 @@ function expandPattern(
   const mappings: Array<[string | undefined, string]> = [[outDir, sourceRoot]];
   if (outDir === undefined) {
     const builtIn = builtDirOf(base, packageDir, roots());
-    if (builtIn !== undefined) for (const root of roots()) mappings.push([builtIn, root]);
+    if (builtIn !== undefined) {
+      const { own, under } = roots();
+      for (const root of own === undefined ? under : [own, ...under]) mappings.push([builtIn, root]);
+    }
   }
 
   const found: string[] = [];

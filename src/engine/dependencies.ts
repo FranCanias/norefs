@@ -80,6 +80,19 @@ interface Manifest {
   /** Plugins a used package's peer list says that package loads. */
   pluggedInto: Set<string>;
   /**
+   * The modules the listed packages' own types declare into the program, read
+   * once and only when an import resolves to nothing. See `ambientModules`.
+   */
+  ambient?: Set<string>;
+  /**
+   * The package the tsconfig makes every JSX file import its runtime from:
+   * `jsxImportSource`, or `react` under plain `react-jsx`. See
+   * `creditJsxRuntime`.
+   */
+  jsxRuntime: string | undefined;
+  /** True once a shipped `.tsx` or `.jsx` file of this package has been seen. */
+  shipsJsx: boolean;
+  /**
    * True for `"private": true`: a package npm refuses to publish. Nobody
    * installs it, so which section a name sits in decides nothing.
    */
@@ -177,11 +190,15 @@ export function analyzeDependencies(
       if (!shipped) continue;
       owner.usedInProduction.add(name);
       if (!use.typeOnly) owner.neededAtRuntime.add(name);
+      if (JSX_FILE.test(use.filePath)) owner.shipsJsx = true;
     }
 
     if (use.internal || use.outside || aliased) continue;
     if (listedAnywhere.has(name) || listedAnywhere.has(typesPackage(name))) continue;
     if (reportedUnlisted.has(name) || isIgnored(name, ignore)) continue;
+    // `import { serve } from 'bun'` lands on no package: bun-types declares
+    // the module, and the run time brings it. Nothing npm has could be listed.
+    if (owningManifests(use.filePath, manifests).some(owner => ambientModules(owner, context).has(name))) continue;
     if (scopeDir && !use.filePath.startsWith(scopeDir)) continue;
     if (context.isSuppressedAt(use.filePath, use.start)) continue;
     reportedUnlisted.add(name);
@@ -198,8 +215,11 @@ export function analyzeDependencies(
   }
 
   // Which hosts load which plugins depends on which hosts are used, so it is
-  // answered once the uses are all in.
-  for (const manifest of manifests) collectPluginPeers(manifest, context);
+  // answered once the uses are all in — and so is whether JSX ships.
+  for (const manifest of manifests) {
+    creditJsxRuntime(manifest);
+    collectPluginPeers(manifest, context);
+  }
 
   for (const manifest of manifests) {
     const sections = production ? (['dependencies'] as const) : (['dependencies', 'devDependencies'] as const);
@@ -352,6 +372,59 @@ function providedByEnvironment(dir: string, name: string, context: DependencyCon
   return new RegExp(`declare\\s+module\\s+['"]${quoted}['"]`).test(text);
 }
 
+/**
+ * The modules a manifest's listed packages declare into the program.
+ *
+ * `import { serve } from 'bun'` resolves to no file in node_modules. bun-types
+ * writes `declare module "bun"`, the way electron's types declare `electron`,
+ * and the compiler resolves the import against that declaration while the
+ * run time brings the module. The name is nothing npm could install, so an
+ * unlisted claim about it asks for a line nobody can write — and
+ * `--fix-unsafe` would write it.
+ *
+ * Only a script file's declaration counts. A module file — one with an import
+ * or an export at its top level — writes `declare module` to augment a package
+ * that exists, and pinia's `declare module 'vue'` says nothing about whether
+ * vue is installed. The types entry is read along with the files its `///
+ * <reference path>` directives pull in, which is how bun-types spreads itself
+ * over twenty files. It is read once per manifest, and only for a run that
+ * holds an import no package answers to.
+ */
+function ambientModules(manifest: Manifest, context: DependencyContext): Set<string> {
+  if (manifest.ambient) return manifest.ambient;
+  const found = new Set<string>();
+  for (const name of manifest.listed) {
+    const installed = installedPackage(manifest.dir, name, context);
+    if (!installed) continue;
+    const data = installed.data as { types?: unknown; typings?: unknown };
+    const types = [data.types, data.typings].find(entry => typeof entry === 'string') ?? 'index.d.ts';
+    collectDeclaredModules(path.resolve(installed.dir, types), context, found, new Set());
+  }
+  manifest.ambient = found;
+  return found;
+}
+
+const DECLARED_MODULE = /\bdeclare\s+module\s+['"]([^'"*]+)['"]/g;
+const REFERENCE_PATH = /\/\/\/\s*<reference\s+path\s*=\s*['"]([^'"]+)['"]/g;
+
+function collectDeclaredModules(
+  filePath: string,
+  context: DependencyContext,
+  found: Set<string>,
+  seen: Set<string>
+): void {
+  if (seen.has(filePath) || seen.size > 200) return;
+  seen.add(filePath);
+  const text = context.fileExists(filePath) ? context.readFile(filePath) : undefined;
+  if (text === undefined) return;
+  if (!/^(?:import|export)\s/m.test(text)) {
+    for (const match of text.matchAll(DECLARED_MODULE)) found.add(match[1]!);
+  }
+  for (const match of text.matchAll(REFERENCE_PATH)) {
+    collectDeclaredModules(path.resolve(path.dirname(filePath), match[1]!), context, found, seen);
+  }
+}
+
 /** A package.json at this directory, parsed, or nothing when there is none to read. */
 function readSections(
   context: DependencyContext,
@@ -405,6 +478,8 @@ function readManifest(context: DependencyContext, dir: string): Manifest | undef
     usedByConfig: new Set(),
     pluggedInto: new Set(),
     private: sections['private'] === true,
+    jsxRuntime: jsxRuntimeOf(dir, context),
+    shipsJsx: false,
   };
   // One map of every command this project can run, built once and read by
   // both: a script and a git hook name a binary the same way.
@@ -499,7 +574,13 @@ function collectStrings(value: unknown, out: string[]): void {
 /** The package's own tsconfig, parsed, or nothing when there is none to read. */
 interface TsConfig {
   extends?: unknown;
-  compilerOptions?: { types?: unknown; plugins?: unknown; importHelpers?: unknown };
+  compilerOptions?: {
+    types?: unknown;
+    plugins?: unknown;
+    importHelpers?: unknown;
+    jsx?: unknown;
+    jsxImportSource?: unknown;
+  };
 }
 
 function readTsConfig(dir: string, context: DependencyContext): TsConfig | undefined {
@@ -522,7 +603,9 @@ function readTsConfig(dir: string, context: DependencyContext): TsConfig | undef
  * is the compiler being told to load those, which is the same statement a
  * `/// <reference types>` makes and already counts as. `plugins: [{ name:
  * "@effect/language-service" }]` is a third: the compiler loads what that
- * array names exactly as it loads what `types` names.
+ * array names exactly as it loads what `types` names. The JSX runtime the
+ * tsconfig names is read apart from these, because it is not a tool being
+ * configured but the built output importing a package: see `jsxRuntimeOf`.
  *
  * It is read here rather than through the tool-config reader because a
  * tsconfig is not a tool config: its `include` globs are patterns, not paths
@@ -544,6 +627,44 @@ function tsconfigPackages(dir: string, context: DependencyContext): string[] {
     }
   }
   return found;
+}
+
+const JSX_FILE = /\.[jt]sx$/;
+
+/**
+ * The package the compiler makes every JSX file import.
+ *
+ * `jsxImportSource: "@emotion/react"` puts `import { jsx } from
+ * "@emotion/react/jsx-runtime"` into every file with JSX in it, and plain
+ * `react-jsx` does the same with `react`. No source file writes the import,
+ * so a project on the emotion, preact or solid runtime — where the import
+ * source is the whole point — had the package called dead, and a component
+ * library whose files hold JSX and no hook had `react` called dead.
+ */
+function jsxRuntimeOf(dir: string, context: DependencyContext): string | undefined {
+  const { jsx, jsxImportSource } = readTsConfig(dir, context)?.compilerOptions ?? {};
+  if (typeof jsxImportSource === 'string') return jsxImportSource;
+  return jsx === 'react-jsx' || jsx === 'react-jsxdev' ? 'react' : undefined;
+}
+
+/**
+ * The JSX runtime is the built output importing a package, the way
+ * `importHelpers` is, so it answers the section question the way an import
+ * would — where a shipped JSX file has been seen. Where none has, the package
+ * is still in use and the section is left alone: a `.tsx` with no import of
+ * its own never reaches this check, so "nothing shipped needs it" is a claim
+ * this run cannot ground.
+ */
+function creditJsxRuntime(manifest: Manifest): void {
+  const name = manifest.jsxRuntime;
+  if (name === undefined || !manifest.listed.has(name)) return;
+  if (!manifest.shipsJsx) {
+    manifest.usedOutside.add(name);
+    return;
+  }
+  manifest.used.add(name);
+  manifest.usedInProduction.add(name);
+  manifest.neededAtRuntime.add(name);
 }
 
 /**
@@ -708,9 +829,18 @@ function matchesAlias(specifier: string, patterns: string[]): boolean {
   });
 }
 
+/**
+ * Modules a bundler plugin makes up. `uno.css` is how unocss hands a site its
+ * generated stylesheet, the way unplugin-icons writes `virtual:icons/…` — the
+ * scheme form is read as a scheme, and the bare name has to be known by name.
+ */
+const VIRTUAL_MODULES = new Set(['uno.css']);
+
 function packageName(specifier: string): string | undefined {
-  // '.'/'/' are file paths, '#' is a Node subpath import: all project code.
-  if (/^[./#]/.test(specifier)) return undefined;
+  // '.'/'/' are file paths, '#' is a Node subpath import, and '~' is a
+  // bundler's alias — `~/lib`, `~icons/…` — that no package name can start
+  // with: all project code.
+  if (/^[./#~]/.test(specifier) || VIRTUAL_MODULES.has(specifier)) return undefined;
   // A scheme names the host, not a package: `node:fs`, `bun:sqlite`,
   // `cloudflare:workers`. npm resolves none of them, so no manifest can list
   // one and calling it unlisted asks for a line nobody can write.

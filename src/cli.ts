@@ -11,6 +11,7 @@ import { findConfigProblems, findUnresolvedImports } from './engine/diagnostics'
 import { runFixCampaign } from './engine/fix-campaign';
 import { loadPackages, loadProject, optionsForDir } from './engine/project';
 import { formatGitHub, formatJson, formatMarkdown, formatSarif, formatText } from './engine/report';
+import { projectFiles } from './engine/sources';
 import { analyzeSyntax, isSyntaxOnly, listEntryPoints } from './engine/syntax-analyze';
 import { watchProject } from './engine/watch';
 import { findWorkspace } from './engine/workspaces';
@@ -203,11 +204,19 @@ export function createSession(values: CliValues, cwd: string): Session {
   const workspace = tsConfigPaths.length === 0 ? findWorkspace(cwd) : undefined;
   if (workspace) {
     tsConfigPaths.push(...workspace.tsConfigPaths);
+    // The root is a package of its own workspace, listed or not, and the
+    // library is often what sits there. A root tsconfig that holds files is a
+    // project; one that only references the others is left alone, quietly —
+    // nobody asked for it, so nobody is told it was empty.
+    const { rootTsConfig } = workspace;
+    const rootHoldsFiles = rootTsConfig !== undefined && projectFiles([rootTsConfig]).sources.length > 0;
+    if (rootTsConfig !== undefined && rootHoldsFiles) tsConfigPaths.push(rootTsConfig);
     // Which packages a run covers decides what every finding means, so a run
     // that decided it for you says so.
     const missing = workspace.withoutTsConfig;
     process.stderr.write(
       `${workspace.tsConfigPaths.length} workspace package(s) from ${workspace.source}` +
+        `${rootHoldsFiles ? ', plus the root, whose tsconfig.json holds files of its own' : ''}` +
         `${missing.length > 0 ? `; skipped ${missing.join(', ')} — no tsconfig.json` : ''}\n`
     );
   }

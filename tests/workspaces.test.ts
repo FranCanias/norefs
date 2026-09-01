@@ -34,6 +34,8 @@ function found(files: Record<string, string>) {
     source: workspace?.source,
     packages: workspace?.tsConfigPaths.map(p => path.relative('/repo', p)),
     skipped: workspace?.withoutTsConfig,
+    dirs: workspace?.packageDirs.map(dir => path.relative('/repo', dir) || '.'),
+    root: workspace?.rootTsConfig === undefined ? undefined : path.relative('/repo', workspace.rootTsConfig),
   };
 }
 
@@ -124,6 +126,23 @@ describe('the packages a workspace declares', () => {
     });
     expect(result.packages).toEqual(['tsconfig.json', 'website/tsconfig.json']);
     expect(result.skipped).toEqual([]);
+  });
+
+  it('counts the root as a package when the declaration lists only what is under it', () => {
+    // unplugin's shape: `packages: [docs]` beside `ignoreWorkspaceRootCheck:
+    // true`, and the library at the root with a tsconfig of its own. The one
+    // declared package was analyzed, the warning was about it, and the
+    // library the reader came for was never mentioned.
+    const result = found({
+      '/repo/pnpm-workspace.yaml': 'ignoreWorkspaceRootCheck: true\npackages:\n  - docs\n',
+      '/repo/package.json': '{"name":"pantry"}',
+      '/repo/tsconfig.json': TSCONFIG,
+      '/repo/docs/package.json': '{"name":"docs"}',
+      '/repo/docs/tsconfig.json': TSCONFIG,
+    });
+    expect(result.packages).toEqual(['docs/tsconfig.json']);
+    expect(result.dirs).toEqual(['.', 'docs']);
+    expect(result.root).toBe('tsconfig.json');
   });
 
   it('finds nothing when no workspace is declared', () => {

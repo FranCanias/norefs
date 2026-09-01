@@ -601,6 +601,17 @@ export function namedInComments(prologue: string): Specifier[] {
   return found.sort((a, b) => a.start - b.start);
 }
 
+/** A bare word written as an object key, and the key of the object holding it. */
+export interface ConfigKey {
+  name: string;
+  /**
+   * The key whose value is the object this key sits in, when that object is
+   * a key's value at all: `settings` for the `react` in `settings: { react:
+   * {} }`, and nothing for a key at the top level or inside an array.
+   */
+  under: string | undefined;
+}
+
 /**
  * Every string a file writes, the module specifiers among them, and the bare
  * words it writes as object keys.
@@ -611,22 +622,46 @@ export function namedInComments(prologue: string): Specifier[] {
  * cancels a real entry point, or keeps a dead dependency looking alive.
  *
  * The keys are for a short name written without quotes. ESLint's
- * `'import/resolver': { typescript: true }` names a resolver as a key, and
- * `plugins: { import: importPlugin }` names a plugin the same way. Only a key
- * is read — the word before a colon, after a brace or a comma — because every
- * other bare word in a file of code is the code. `import js from '@eslint/js'`
- * is not the import plugin, and a config with a `typescript` binding in it is
- * not using a resolver.
+ * `'import/resolver': { typescript: true }` names a resolver as a key,
+ * `plugins: { import: importPlugin }` names a plugin the same way, and a
+ * PostCSS config names every plugin it loads as one. Only a key is read — the
+ * word before a colon, after a brace or a comma — because every other bare
+ * word in a file of code is the code. `import js from '@eslint/js'` is not the
+ * import plugin, and a config with a `typescript` binding in it is not using a
+ * resolver.
+ *
+ * Each key comes with the key of the block it sits in, because which block
+ * decides what the word means: under ESLint's `env`, `node` is an environment
+ * rather than `eslint-plugin-node`, and under PostCSS's `plugins`, every key
+ * is a package.
  */
-export function configLiterals(text: string): { strings: string[]; specifiers: string[]; keys: string[] } {
+export function configLiterals(text: string): { strings: string[]; specifiers: string[]; keys: ConfigKey[] } {
   const { tokens } = tokenize(text);
   const strings: string[] = [];
-  const keys: string[] = [];
+  const keys: ConfigKey[] = [];
+  // The key each open brace is the value of, innermost last. A brace that is
+  // not a key's value — a block, an argument, an array element — holds nothing.
+  const blocks: Array<string | undefined> = [];
   for (const [index, token] of tokens.entries()) {
     if (token.kind === 'str') strings.push(text.slice(token.innerStart, token.innerEnd));
-    else if (token.kind === 'ident' && isObjectKey(tokens, index)) keys.push(word(text, token));
+    else if (token.kind === 'ident' && isObjectKey(tokens, index)) {
+      keys.push({ name: word(text, token), under: blocks[blocks.length - 1] });
+    }
+    if (token.kind !== 'punct') continue;
+    if (token.punct === '{') blocks.push(keyBefore(text, tokens, index));
+    else if (token.punct === '}') blocks.pop();
   }
   return { strings, specifiers: specifiersOf(text, tokens).map(specifier => specifier.text), keys };
+}
+
+/** The key this brace is the value of: the word or string before the colon before it. */
+function keyBefore(text: string, tokens: Token[], open: number): string | undefined {
+  const colon = tokens[open - 1];
+  const key = tokens[open - 2];
+  if (colon?.punct !== ':' || key === undefined) return undefined;
+  if (key.kind === 'ident') return word(text, key);
+  if (key.kind === 'str') return text.slice(key.innerStart, key.innerEnd);
+  return undefined;
 }
 
 /** True when the identifier at `index` is written as an object literal's key. */

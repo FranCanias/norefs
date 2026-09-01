@@ -59,17 +59,63 @@ asks for one to be listed.
 
 **Two more directories a tool owns.** `.vitepress/config.ts` imports a site's
 markdown plugins and `.storybook/main.ts` lists its addons, and the compiler
-never holds a dot-directory whatever `include` says. Both are read now, and
-unplugin-icons' `~icons/logos/…` expands to `@iconify-json/logos` on the way
-through. Four wrong findings in changesets' site.
+holds a dot-directory only when `include` spells it out, which most never do.
+Both are read now, wherever they sit — vitepress's own scaffolder writes
+`docs/.vitepress/` with no manifest beside it, and a site one directory down
+went unread — and unplugin-icons' `~icons/logos/…` expands to
+`@iconify-json/logos` on the way through. Four wrong findings in changesets'
+site, every plugin unplugin's docs load, and vueuse's `@vue/repl`, which
+`packages/.vitepress/vite.config.ts` imports from a directory the walk never
+entered.
 
-**tsup and tsdown inline devDependencies by default.** Only `dependencies`
-and `peerDependencies` are external to those bundlers, and everything else the
-shipped code imports is compiled into the output. changesets lists
-`@changesets/color` in devDependencies, imports it from shipped code and builds
-with tsdown, and the report said an install without dev dependencies would be
-missing it — it would not. A `tsup.config.*` or `tsdown.config.*` at the
-package root now declares that default, and an explicit `external` adds to it.
+**A file a tool loads by name is an entry point when the run holds it.**
+changesets' site writes `"include": [".vitepress/**/*"]`, which is how vue-tsc
+is pointed at a site, and the run reported `config.ts` and `theme/index.ts`
+dead — the two files every vitepress site has, loaded by name and imported by
+nothing. vueuse's root tsconfig does the same and ten of its findings were
+these. vitepress's `config.*` and `theme/index.*` and Storybook's `main.*`,
+`preview.*` and `manager.*` are entry points now, when the program holds them.
+
+**A story a Storybook config lists is an entry point.** Storybook reads every
+named export of a story as a story, and `.storybook/main.ts` says which files
+those are: `stories: ['../stories/**/*.stories.@(js|jsx|mjs|ts|tsx)']`. The
+glob sat in a file the run already read for package names, and radix-ui's
+report was 303 story exports called dead out of 424 findings — with `--fix`
+ready to delete every story in the repository. The globs are matched now,
+relative to `.storybook/` the way Storybook reads them, and a story's exports
+are the tool's to read. The story stays a harness file, so the component only
+it renders is still `test-only`.
+
+**A package whose source sits beside its manifest finds its built entry.**
+vueuse's `packages/electron/index.ts` builds to `dist/index.js`, and only the
+directories *under* a package were ever offered as its source roots — every
+one of which holds an `index.ts` of its own, so two roots answered at once and
+the package came back dead whole, four times over. Nine `misplaced` findings
+rode on it: `packages/nuxt/module.ts` left the shipping path the same way, and
+`@nuxt/kit` was said to ship for nothing. The package root is tried first now,
+and answers alone, because a tree rooted there has branches rather than rival
+roots.
+
+**The root of a workspace is a package whether or not the declaration lists
+it.** unplugin writes `packages: [docs]` beside `ignoreWorkspaceRootCheck:
+true` — pnpm's own flag for a root that is a package — and keeps the library
+at the root under its own tsconfig. The run analyzed `docs`, warned that no
+entry point resolved there, and never said what it skipped. The root's
+manifest answers for its files now, and its `tsconfig.json` is a project when
+it holds any; a solution-style root that only references the packages is
+left out without a word, since nobody asked for it.
+
+**tsup, tsdown, bunchee, unbuild and obuild inline devDependencies by
+default.** Only `dependencies` and `peerDependencies` are external to those
+bundlers, and everything else the shipped code imports is compiled into the
+output. changesets lists `@changesets/color` in devDependencies, imports it
+from shipped code and builds with tsdown, and the report said an install
+without dev dependencies would be missing it — it would not. h3 builds with
+obuild and was told the same about `cookie-es`, and a tsup run from the script
+alone — `"build": "tsup src/index.ts --format esm,cjs"` — was not recognized
+either. A `tsup.config.*`, `tsdown.config.*` or `build.config.*` at the
+package root declares the default now, and so does a script that runs any of
+the five; an explicit `external` adds to it.
 
 **A code config's bare words are the code.** Every ESLint flat config is an ES
 module, and every bare word in it was offered as a short name — so `import`
@@ -78,7 +124,46 @@ plugin could never be called unused; a binding called `typescript` did the same
 for the resolver. A short name written without quotes is an object key —
 `plugins: { import: importPlugin }`, `'import/resolver': { typescript: true }`
 — so in a config written as code, only the keys are read. A data config's bare
-scalars are read as before.
+scalars are read as before. Three blocks of a legacy config are left out: the
+keys of `env`, `globals` and `settings` name environments, variables and a
+plugin's settings, and `env: { node: true, jest: true }` expanded to two
+plugins the check could then never report — in most legacy configs there are.
+
+**A PostCSS config names its plugins as keys, and a config names its tool.**
+valtio's website writes the `postcss.config.js` Tailwind's own guide writes —
+`plugins: { tailwindcss: {}, autoprefixer: {} }` — and the keys are how
+PostCSS loads a plugin, so `autoprefixer` and `postcss` came back dead in the
+layout every Tailwind site has. The keys of that block are read now. And the
+name of a config counts beside what it writes: `postcss.config.js` is postcss
+being used and `tailwind.config.js` is tailwindcss, which is often the one
+place a project writes the tool down. The name resolves through the binaries
+each installed package declares, the way a script's command does, so
+`rspack.config.js` is `@rspack/cli` — which clears two of unplugin's dead
+claims the last round had judged right for want of a script. Present since
+the check existed.
+
+**`jsxImportSource` names a package no import ever will.** The compiler emits
+`import { jsx } from "@emotion/react/jsx-runtime"` into every file with JSX in
+it, and a project on the emotion, preact or solid runtime — where the import
+source is the whole point — had the package called dead. The tsconfig is read
+for it now, and `react` stands in under plain `react-jsx`, so a component
+library whose files hold JSX and no hook still uses it.
+
+**A module a listed package declares into the program is never unlisted.**
+unplugin imports `bun`, which no package provides: bun-types writes `declare
+module "bun"` across the files its entry references, and the run time brings
+the module — the shape electron's types write for `electron`. The claim was
+withheld in the direction the docs described, and the unlisted claim was still
+made, with `--fix-unsafe` ready to write a package npm does not have. The types
+entry of every listed package is read now, `/// <reference path>` chain and
+all, and a script file's `declare module` answers for the name. A module
+file's does not: pinia's `declare module 'vue'` augments a package that
+exists, and says nothing about whether it is installed.
+
+**Two specifier shapes no package can own.** `uno.css` is a module unocss
+makes up, the way `virtual:icons/…` is one unplugin-icons makes up, and vueuse
+was asked to list it. A `~` opens a bundler's alias — `~/lib`, `~icons/…` —
+and no package name can start with one. Neither is asked for now.
 
 **A type query is erased, so it does not decide a manifest section.**
 `import('undici').Dispatcher`, written where a type goes, is a dynamic
@@ -121,6 +206,17 @@ A config written as data is read for the packages it names and never for the
 paths, and so is a file in a tool's directory. `ignore`, `exclude`, `scope`
 and `mutate` are paths that are the opposite of an entry point, and a workflow
 that runs a file does not publish that file's exports.
+
+**A constraint walk visits each pair of types once.** cheerio took twelve
+CPU minutes and was cut off unfinished, on thirty-six source files that
+scan in a quarter of a second without the type checker. The walk that keeps
+an overridden member load-bearing fans out over every arm of two unions and
+every property of the result, four levels down, and `Cheerio<T>` names a
+hundred properties whose types are unions of the same handful of element
+types — so the same pair of types was walked again on every path that
+reached it. A pair walked once from a given depth has covered everything a
+deeper start would, and is not walked again. cheerio finishes in 1.2 seconds
+now, with the same findings everywhere else in the corpus.
 
 **A value that leaves through `throw` takes its shape with it.** `catch
 (error)` types the caught value `unknown`, so every property the catcher reads

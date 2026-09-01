@@ -330,6 +330,70 @@ describe('entry points the build declares', () => {
     expect(names(findings)).toEqual(['whisk.ts', 'whisk.ts']);
   });
 
+  it('finds the source of a built entry when the source sits beside the manifest', () => {
+    // vueuse's shape: `packages/electron/index.ts` beside `package.json`, built
+    // to `dist/index.js`, and `useIpc/index.ts` under it, in a workspace read
+    // under the root tsconfig. Only the directories under the package were
+    // ever offered as source roots, and every one of them holds an `index.ts`
+    // — two roots answering at once was no answer, so the package came back
+    // dead whole. The root answers first, and alone.
+    const project = new Project({ useInMemoryFileSystem: true });
+    const fileSystem = project.getFileSystem();
+    fileSystem.writeFileSync('/package.json', JSON.stringify({ private: true, workspaces: ['packages/*'] }));
+    fileSystem.writeFileSync('/packages/electron/package.json', JSON.stringify({ main: './dist/index.js' }));
+    project.createSourceFile('/packages/electron/index.ts', "export { useIpc } from './useIpc/index';\n");
+    project.createSourceFile('/packages/electron/useIpc/index.ts', 'export const useIpc = 1;\n');
+    project.createSourceFile('/packages/electron/useZoom/index.ts', 'export const useZoom = 1;\n');
+    const findings = analyze(project, { rootDirs: ['/'] });
+    expect(findings.filter(f => f.kind === 'file').map(f => f.filePath)).toEqual([
+      '/packages/electron/useZoom/index.ts',
+    ]);
+  });
+
+  it('a story a Storybook config lists is an entry point, so its named exports are stories', () => {
+    // radix-ui's `.storybook/main.ts` writes
+    // `stories: ['../stories/**/*.stories.@(js|jsx|mjs|ts|tsx)']`, and
+    // Storybook reads every named export of a matching file as a story. The
+    // glob sat in a file the run already read for package names, and 303 of
+    // the 424 findings were story exports called dead.
+    const findings = findingsWith(
+      { main: 'src/index.ts' },
+      { '/.storybook/main.ts': "export default { stories: ['../src/**/*.stories.@(js|jsx|mjs|ts|tsx)'] };\n" },
+      {
+        '/src/index.ts': 'export const shelf = 1;\n',
+        '/src/Plate.tsx': 'export function Plate(): null {\n  return null;\n}\n',
+        '/src/Plate.stories.tsx':
+          "import { Plate } from './Plate';\nexport default { title: 'Plate', component: Plate };\nexport const Primary = {};\n",
+      }
+    );
+    // The story is a harness file still, so the component only it renders is
+    // test-only — and the story's own export is nobody's finding.
+    expect(findings.map(f => [f.name, f.verdict])).toEqual([['Plate', 'test-only']]);
+  });
+
+  it('a file a tool loads by name is an entry point when the program holds it', () => {
+    // changesets' site writes `"include": [".vitepress/**/*"]`, which is how
+    // vue-tsc is pointed at a site, and the run reported `config.ts` and
+    // `theme/index.ts` dead — the two files every vitepress site has, loaded
+    // by name and imported by nothing.
+    const site: Record<string, string> = {
+      '/.vitepress/config.ts': "export default { title: 'pantry' };\n",
+      '/.vitepress/theme/index.ts': "import { sync } from './sync';\nexport default { sync };\n",
+      '/.vitepress/theme/sync.ts': 'export const sync = 1;\n',
+      '/.vitepress/theme/orphan.ts': 'export const orphan = 1;\n',
+    };
+    // The tool's directory is walked on disk and the program holds the same
+    // files, which is what an `include` naming the directory comes to.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.getFileSystem().writeFileSync('/package.json', '{}');
+    for (const [filePath, text] of Object.entries(site)) {
+      project.getFileSystem().writeFileSync(filePath, text);
+      project.addSourceFileAtPath(filePath);
+    }
+    project.createSourceFile('/src/index.ts', 'export const plate = 1;\n');
+    expect(names(analyze(project, { rootDirs: ['/'] }))).toEqual(['orphan.ts']);
+  });
+
   it('build output is never walked for configs', () => {
     const findings = findingsWith(
       {},
