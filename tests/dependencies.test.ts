@@ -801,4 +801,26 @@ describe('what counts as the shipping path', () => {
     expect(box("export default { test: { coverage: { exclude: ['src/vitest'] } } };\n")).toEqual([]);
   });
 
+  it('leaves out a build script a wildcard export pattern reaches', () => {
+    // typeorm's shape. `"./*"` publishes every module and names none, so a
+    // `gulpfile.ts` beside the sources answers to it as readily as the sources
+    // do — and the build tools it imports came back as things the install
+    // needs. The pattern still keeps the file from being called dead.
+    const project = new Project({ useInMemoryFileSystem: true });
+    const fileSystem = project.getFileSystem();
+    fileSystem.writeFileSync(
+      '/package.json',
+      JSON.stringify({
+        name: 'box',
+        exports: { '.': './src/index.ts', './*': { require: './*.js', import: './*' } },
+        devDependencies: { gulp: '1.0.0' },
+      })
+    );
+    fileSystem.writeFileSync('/node_modules/gulp/package.json', JSON.stringify({ name: 'gulp' }));
+    project.createSourceFile('/src/index.ts', 'export const box = 1;\n');
+    project.createSourceFile('/gulpfile.ts', "import 'gulp';\nexport const build = 1;\n");
+    const findings = analyze(project, { rootDirs: ['/'] });
+    expect(findings.filter(f => f.kind === 'misplaced' || f.kind === 'dependency')).toEqual([]);
+    expect(findings.filter(f => f.kind === 'file')).toEqual([]);
+  });
 });

@@ -196,7 +196,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   // paths that are the opposite of an entry point.
   const shippingEntries = [
     ...(options.entries ?? []),
-    ...declared.filter(entry => !entry.harness).map(entry => entry.filePath),
+    ...declared.filter(entry => entry.shipping).map(entry => entry.filePath),
   ];
   // What the tsconfig left out still imports the project. Nothing in those
   // files is analyzed, and what they import is used all the same.

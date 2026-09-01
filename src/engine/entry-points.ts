@@ -11,15 +11,18 @@ export interface EntryPoint {
   /** Where it came from: `package.json scripts.dev`, `vite.config.ts`, … */
   source: string;
   /**
-   * A tool's config named it, rather than the manifest.
+   * The manifest named this file, so the package ships it.
    *
-   * Nothing here evaluates a config, so a path in one is read at face value —
-   * and vitest's `coverage.exclude` lists paths that are the opposite of an
-   * entry point. That is strong enough to keep a file alive, which costs a
-   * finding when it is wrong, and too weak to say the file is what the
-   * package ships, which costs a claim about somebody's install.
+   * Two kinds of entry point keep a file alive without saying that much. A
+   * tool's config names paths that nothing here evaluates, and vitest's
+   * `coverage.exclude` lists the opposite of an entry point. A `"./*"` subpath
+   * pattern names no file at all — it says every module is reachable, and a
+   * `gulpfile.ts` beside the sources answers to it as readily as the sources
+   * do. Either one is strong enough to keep a file from being called dead,
+   * which costs a finding when it is wrong, and too weak to put the file on
+   * the shipping path, which costs a claim about somebody's install.
    */
-  harness: boolean;
+  shipping: boolean;
 }
 
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'];
@@ -50,14 +53,14 @@ export function packageEntryPoints(
   const outDir = compilerOptions.outDir ? path.resolve(packageDir, compilerOptions.outDir) : undefined;
   const sourceRoot = compilerOptions.rootDir ? path.resolve(packageDir, compilerOptions.rootDir) : fallbackSourceRoot;
 
-  const found = new Map<string, { source: string; harness: boolean }>();
-  const add = (candidate: string, fromDir: string, source: string, directoryIndex = false, harness = false): void => {
+  const found = new Map<string, { source: string; shipping: boolean }>();
+  const add = (candidate: string, fromDir: string, source: string, directoryIndex = false, shipping = true): void => {
     const resolved = resolveToKnown(candidate, fromDir, packageDir, outDir, sourceRoot, known, directoryIndex);
-    if (resolved && !found.has(resolved)) found.set(resolved, { source, harness });
+    if (resolved && !found.has(resolved)) found.set(resolved, { source, shipping });
   };
   const addPattern = (candidate: string, source: string): void => {
     for (const filePath of expandPattern(candidate, packageDir, outDir, sourceRoot, known, rootDirs)) {
-      if (!found.has(filePath)) found.set(filePath, { source, harness: false });
+      if (!found.has(filePath)) found.set(filePath, { source, shipping: false });
     }
   };
 
@@ -73,10 +76,10 @@ export function packageEntryPoints(
       if (isRoot && config.imported.has(written)) continue;
       // A config writes a module path the way an import writes it, so the
       // directory whose `index` is the module counts here.
-      add(written, config.dir, source, true, true);
+      add(written, config.dir, source, true, false);
     }
   }
-  return [...found].map(([filePath, { source, harness }]) => ({ filePath, source, harness }));
+  return [...found].map(([filePath, { source, shipping }]) => ({ filePath, source, shipping }));
 }
 
 /** `main`, `bin`, `exports`, and any script that runs a source file by path. */

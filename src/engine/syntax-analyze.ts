@@ -67,7 +67,7 @@ export function analyzeSyntax(
   // paths that are the opposite of an entry point.
   const shippingEntries = [
     ...(options.entries ?? []),
-    ...declared.filter(entry => !entry.harness).map(entry => entry.filePath),
+    ...declared.filter(entry => entry.shipping).map(entry => entry.filePath),
   ];
 
   // What the tsconfig left out still imports the project. Nothing in those
@@ -199,13 +199,13 @@ export function listEntryPoints(
   const entries: EntryPoint[] = [];
   for (const filePath of [...filePaths, ...declarations]) {
     if (asked.some(entry => filePath === entry || filePath.startsWith(`${entry}/`))) {
-      entries.push({ filePath, source: 'asked for with --entry', harness: false });
+      entries.push({ filePath, source: 'asked for with --entry', shipping: true });
       continue;
     }
     const discoveredEntry = discovered.get(filePath);
     if (discoveredEntry) entries.push(discoveredEntry);
     else if (isEntryFile(filePath, rootDirs, [])) {
-      entries.push({ filePath, source: 'index/main/cli beside a tsconfig', harness: false });
+      entries.push({ filePath, source: 'index/main/cli beside a tsconfig', shipping: true });
     }
   }
   return entries;

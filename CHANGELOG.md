@@ -17,6 +17,13 @@ import, so ofetch was told to ship `undici` in `dependencies` — weight for a
 type that is gone before anything runs. Written where a value goes, the same
 words still load the module, and that one is still needed at run time.
 
+**A wildcard export pattern no longer decides what production code is.** A
+`"./*"` subpath says every module in the package is reachable and names none
+of them, so a `gulpfile.ts` beside the sources answers to it as readily as the
+sources do. typeorm's build tools came back as things the install needs. A
+pattern still keeps a file from being called dead — it just never puts one on
+the shipping path, which is the claim about somebody's install.
+
 **Public API is closed over the types it names.** The exemption stopped at
 the declarations an entry file exports, and a consumer does not stop there.
 ts-pattern's entry exports `match()`, whose return type is a `Match`
