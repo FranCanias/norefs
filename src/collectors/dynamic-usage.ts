@@ -1,4 +1,4 @@
-import type { Identifier } from 'ts-morph';
+import type { Identifier, Node } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { findReferencesAsNodes } from '../lookup/references';
 
@@ -9,7 +9,16 @@ import { findReferencesAsNodes } from '../lookup/references';
  * must stay silent.
  */
 export function isKeyofTargeted(nameNode: Identifier): boolean {
-  for (const ref of findReferencesAsNodes(nameNode)) {
+  return keyofTargetedBy(findReferencesAsNodes(nameNode));
+}
+
+/**
+ * The same question, asked of references already in hand. A declaration with
+ * no name — the class a module exports as its default — is reached another
+ * way, and the answer must not depend on how it was found.
+ */
+export function keyofTargetedBy(references: Node[]): boolean {
+  for (const ref of references) {
     const wrapper = ref.getParentIfKind(SyntaxKind.TypeReference) ?? ref.getParentIfKind(SyntaxKind.TypeQuery);
     const operator = wrapper?.getParentIfKind(SyntaxKind.TypeOperator);
     if (operator?.getOperator() === SyntaxKind.KeyOfKeyword) return true;

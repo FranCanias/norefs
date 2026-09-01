@@ -20,6 +20,15 @@ and `--fix` removes the statement together with the default imports left
 pointing at it. A harness file is exempt: a vitest config or a storybook story
 takes its input through the default export, and no import will ever name it.
 
+**And so are its members.** `export default class { … }` used to be skipped
+whole: the escape checks need the class's references, and a class with no name
+was thought to have none. It answers to `default` like everything else, so its
+members are now checked on exactly the terms a named class lives by — silent
+when an instance escapes into an interface it never declared, when a subclass
+lets one out, or when something enumerates its keys. The report names the file
+rather than a class: ``dead property `deadLatch` in the default-exported
+class``.
+
 **A relay answers to every name it is given.** A function that hands its
 parameter to `Object.keys` makes that type untrackable at every call site, and
 norefs goes quiet about it. `const scan = dump` used to end the trail: the

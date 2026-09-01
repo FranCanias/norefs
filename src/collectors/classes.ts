@@ -9,10 +9,11 @@ import type {
   Type,
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
-import { findReferencesAsNodes } from '../lookup/references';
+import { findDefaultExportReferences, findReferencesAsNodes } from '../lookup/references';
 import type { Candidate, CollectContext } from './candidate';
 import { toCandidate } from './candidate';
 import { mergeNames } from './constraints';
+import { keyofTargetedBy } from './dynamic-usage';
 import { callableEscapes, getCallableNameNode } from './escape';
 
 export function collectClassCandidates(sourceFile: SourceFile, ctx: CollectContext): Candidate[] {
@@ -22,12 +23,17 @@ export function collectClassCandidates(sourceFile: SourceFile, ctx: CollectConte
     if (hasDecorators(cls)) continue;
 
     const nameNode = cls.getNameNode();
-    if (!nameNode) continue;
-    if (ctx.isKeyofTargeted(cls, nameNode)) continue;
+    // A class with no name is the one a module exports as its default. It is
+    // asked about the other way round, and the memo has nothing to save: a
+    // file holds one of these at most, and this is the only collector that
+    // reads it.
+    const references = classReferences(cls);
+    if (!references) continue;
+    if (nameNode ? ctx.isKeyofTargeted(cls, nameNode) : keyofTargetedBy(references)) continue;
     if (classEscapesTracking(cls, ctx.classEscapes)) continue;
 
     const skip = mergeNames(ctx.dynamic.probed.get(cls), ctx.constrained.get(cls));
-    const context = `class \`${cls.getName()}\``;
+    const context = nameNode ? `class \`${cls.getName()}\`` : 'the default-exported class';
     for (const member of cls.getMembers()) {
       const candidate = toCandidate(member, context, false, skip);
       if (candidate) candidates.push(candidate);
@@ -79,16 +85,31 @@ function classEscapesTracking(cls: ClassDeclaration, cache: Map<Node, boolean>):
 }
 
 /**
+ * Every reference to a class, whatever it is called.
+ *
+ * A class writes its own name, except the one a module exports as its
+ * default: `export default class { … }` names nothing, and the importers name
+ * it whatever they like. The module system settles the argument — it calls
+ * that class `default`, and the index files every importer under it.
+ *
+ * Nothing comes back where there is no way to ask, and a class nothing can be
+ * asked about keeps every member it has.
+ */
+function classReferences(cls: ClassDeclaration): Node[] | undefined {
+  const nameNode = cls.getNameNode();
+  if (nameNode) return findReferencesAsNodes(nameNode);
+  return cls.isDefaultExport() ? findDefaultExportReferences(cls) : undefined;
+}
+
+/**
  * The classes that directly extend this one, found through the project-wide
  * reference index. ts-morph's own `getDerivedClasses` asks the language
  * service per class, which rebuilds an import tracker every call. Recursion
  * in `classEscapesTracking` covers the transitive subclasses.
  */
 function derivedClasses(cls: ClassDeclaration): ClassDeclaration[] {
-  const nameNode = cls.getNameNode();
-  if (!nameNode) return [];
   const derived: ClassDeclaration[] = [];
-  for (const ref of findReferencesAsNodes(nameNode)) {
+  for (const ref of classReferences(cls) ?? []) {
     const expression = ref.getParentWhileKind(SyntaxKind.PropertyAccessExpression) ?? ref;
     const heritage = expression.getParentIfKind(SyntaxKind.ExpressionWithTypeArguments)?.getParent();
     if (!heritage?.isKind(SyntaxKind.HeritageClause) || heritage.getToken() !== SyntaxKind.ExtendsKeyword) continue;
@@ -110,11 +131,11 @@ const NEUTRAL_REF_PARENTS = new Set<SyntaxKind>([
 ]);
 
 function classItselfEscapes(cls: ClassDeclaration, cache: Map<Node, boolean>): boolean {
-  const nameNode = cls.getNameNode();
-  if (!nameNode) return true;
+  const references = classReferences(cls);
+  if (!references) return true;
   const allowed = allowedTypeSymbols(cls);
 
-  for (const ref of findReferencesAsNodes(nameNode)) {
+  for (const ref of references) {
     const parent = ref.getParent();
     if (!parent) continue;
     if (NEUTRAL_REF_PARENTS.has(parent.getKind())) continue;

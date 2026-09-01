@@ -121,6 +121,103 @@ describe('a default export with no name', () => {
   });
 });
 
+describe('the members of a default-exported class with no name', () => {
+  /** A lid whose latch nobody lifts. */
+  const latch = [
+    'export default class {',
+    '  open(): string {',
+    '    return "open";',
+    '  }',
+    '  deadLatch(): string {',
+    '    return "stuck";',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+
+  it('reports the one nothing reads', () => {
+    const findings = analyzeFiles({
+      '/box.ts': latch,
+      '/main.ts': "import Box from './box';\nexport const open = new Box().open();\n",
+    });
+    expect(named(findings)).toEqual(['member deadLatch']);
+    // There is no class name to print, so the sentence says where it lives.
+    expect(formatText(findings, '/')).toContain('dead property `deadLatch` in the default-exported class');
+  });
+
+  it('reports a parameter property the same way', () => {
+    const findings = analyzeFiles({
+      '/box.ts': [
+        'export default class {',
+        '  constructor(private readonly deadTag: string) {}',
+        '  open(): string {',
+        '    return "open";',
+        '  }',
+        '}',
+        '',
+      ].join('\n'),
+      '/main.ts': 'import Box from \'./box\';\nexport const open = new Box("brass").open();\n',
+    });
+    expect(named(findings)).toEqual(['member deadTag']);
+  });
+
+  it('stays silent when the instance escapes into an interface', () => {
+    // A structural implementation is called through the interface, so its
+    // members collect no references while being used. The escape check has to
+    // reach this class the same way it reaches a named one.
+    const findings = analyzeFiles({
+      '/box.ts': `export interface Lid {\n  open(): string;\n}\n${latch}`,
+      '/main.ts': [
+        "import Box, { type Lid } from './box';",
+        'export const lid: Lid = new Box();',
+        'export const open = lid.open();',
+        '',
+      ].join('\n'),
+    });
+    expect(named(findings)).toEqual([]);
+  });
+
+  it('stays silent when a subclass lets the instance out', () => {
+    const findings = analyzeFiles({
+      '/box.ts': latch,
+      '/crate.ts': [
+        "import Box from './box';",
+        'export interface Lid {',
+        '  open(): string;',
+        '}',
+        'export class Crate extends Box {}',
+        'export const lid: Lid = new Crate();',
+        '',
+      ].join('\n'),
+      '/main.ts': "import { lid } from './crate';\nexport const open = lid.open();\n",
+    });
+    expect(named(findings).filter(name => name.startsWith('member'))).toEqual([]);
+  });
+
+  it('stays silent when something enumerates its keys', () => {
+    const findings = analyzeFiles({
+      '/box.ts': [
+        'export default class {',
+        '  static open(): string {',
+        '    return "open";',
+        '  }',
+        '  static deadLatch(): string {',
+        '    return "stuck";',
+        '  }',
+        '}',
+        '',
+      ].join('\n'),
+      '/main.ts': [
+        "import Box from './box';",
+        'export type Keys = keyof typeof Box;',
+        'export const open = Box.open();',
+        '',
+      ].join('\n'),
+    });
+    expect(named(findings)).toEqual([]);
+  });
+});
+
 describe('--fix on a default export with no name', () => {
   function fixed(files: Record<string, string>): Record<string, string> {
     const project = new Project({ useInMemoryFileSystem: true });
