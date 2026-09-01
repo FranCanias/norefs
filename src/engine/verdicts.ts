@@ -3,6 +3,7 @@ import type {
   Node,
   ObjectLiteralExpression,
   Project,
+  PropertyAccessExpression,
   SourceFile,
   TypeAliasDeclaration,
   TypeNode,
@@ -54,6 +55,7 @@ export function assignVerdicts(
   const boundary = boundaryClosure(project);
   const twins = new TwinIndex(project);
   const index = referenceIndex(project);
+  const castReads = untracedCastReads(project);
 
   for (const finding of memberFindings) {
     const owner = namedTypeAncestor(finding.node);
@@ -81,6 +83,16 @@ export function assignVerdicts(
       continue;
     }
     const alive = (site: Node): boolean => !isDeadFile(site.getSourceFile().getFilePath());
+    // A name reached through a cast off a value nothing types belongs to
+    // whichever declaration the writer had in mind. This one may be it.
+    const casts = (castReads.get(finding.name) ?? []).filter(alive);
+    const cast = casts[0];
+    if (cast) {
+      finding.verdict = 'shadowed';
+      const more = casts.length > 1 ? ` and ${casts.length - 1} more site${casts.length > 2 ? 's' : ''}` : '';
+      finding.evidence = `it is read at ${location(cast, cwd)}${more} through a cast off a value the types do not follow, and another declaration of the name answered for that read`;
+      continue;
+    }
     // Writes the analysis already proved: it reported this member because
     // every reference to it is one. No name match can be that sure, so these
     // are read first, and nothing below them is asked.
@@ -357,6 +369,56 @@ function collectBoundarySeeds(sourceFile: SourceFile, add: (decl: Node, evidence
       }
     }
   }
+}
+
+// ------------------------------------------------------ untraced casts
+
+/**
+ * Member names reached through a cast off a value the types do not follow.
+ *
+ * `(api as WithDispatch).dispatchFromDevtools` is a person telling the
+ * compiler what a value is, where the compiler knows nothing: `api` is
+ * `unknown`, and the shape the cast names is one declaration of many that
+ * could describe what actually arrives. The reference lands on that shape,
+ * and every other declaration of the same name — including the one the value
+ * really came from — collects nothing.
+ *
+ * Both halves are needed for the read to prove nothing about the declaration
+ * beside it: the value has to be untyped, and the cast has to name a type
+ * that declares the member. `(res as any).data` names no declaration at all,
+ * so it shadows none.
+ */
+function untracedCastReads(project: Project): Map<string, Node[]> {
+  const reads = new Map<string, Node[]>();
+  for (const sourceFile of project.getSourceFiles()) {
+    if (sourceFile.isDeclarationFile()) continue;
+    for (const cast of descendantsOfKind(sourceFile, SyntaxKind.AsExpression)) {
+      const source = cast.getExpression().getType();
+      if (!source.isAny() && !source.isUnknown()) continue;
+      const access = accessOn(cast);
+      if (!access) continue;
+      const name = access.getName();
+      if (!cast.getType().getProperty(name)) continue;
+      const sites = reads.get(name);
+      if (sites) sites.push(access.getNameNode());
+      else reads.set(name, [access.getNameNode()]);
+    }
+  }
+  return reads;
+}
+
+/** The property access reading this expression, past the parentheses around it. */
+function accessOn(node: Node): PropertyAccessExpression | undefined {
+  let current: Node = node;
+  for (let parent = current.getParent(); parent; parent = current.getParent()) {
+    if (parent.isKind(SyntaxKind.ParenthesizedExpression) || parent.isKind(SyntaxKind.AsExpression)) {
+      current = parent;
+      continue;
+    }
+    if (parent.isKind(SyntaxKind.PropertyAccessExpression) && parent.getExpression() === current) return parent;
+    return undefined;
+  }
+  return undefined;
 }
 
 /** True when the callee resolves to a declaration file inside the project. */

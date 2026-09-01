@@ -624,6 +624,70 @@ describe('verdicts', () => {
   });
 });
 
+describe('a name read through a cast off an untyped value', () => {
+  it('shadows the declaration the cast did not name', () => {
+    // The cast tells the compiler what a value is where the compiler knows
+    // nothing. The read lands on the shape the cast names, and the
+    // declaration the value really came from collects nothing — so calling
+    // that one dead, and deleting it, is the cast's word against the code's.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/jar.ts',
+      [
+        'export type Sealed = {',
+        '  sealedAt: number;',
+        '  deadStamp: string;',
+        '  lid: string;',
+        '};',
+        'export function seal(jar: unknown): Sealed {',
+        '  return jar as Sealed;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/main.ts',
+      [
+        "import { seal } from './jar';",
+        'type WithSeal = { sealedAt: number };',
+        'export function isSealed(jar: unknown): boolean {',
+        '  return Boolean((jar as WithSeal).sealedAt);',
+        '}',
+        'export const lid = seal({}).lid;',
+        '',
+      ].join('\n')
+    );
+    const findings = analyze(project, { entries: ['/main.ts'] });
+
+    const shadowed = verdictOf(findings, 'sealedAt');
+    expect(shadowed?.verdict).toBe('shadowed');
+    expect(shadowed?.evidence).toContain('through a cast off a value the types do not follow');
+    expect(isFixable(shadowed as Finding, false)).toBe(false);
+    // A name no cast names is untouched: the rule needs both halves, an
+    // untyped value and a cast to a type that declares the member.
+    expect(verdictOf(findings, 'deadStamp')?.verdict).toBe('dead');
+  });
+
+  it('keeps its distance from a cast that names no declaration', () => {
+    // `(res as any).sealedAt` says nothing about any shape, so it shadows none.
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'type Sealed = { sealedAt: number; lid: string };',
+        'export function seal(jar: Sealed): string {',
+        '  return jar.lid;',
+        '}',
+        'export function stamp(res: unknown): unknown {',
+        '  return (res as any).sealedAt;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    expect(verdictOf(analyze(project), 'sealedAt')?.verdict).toBe('dead');
+  });
+});
+
 describe('a member the code only deletes', () => {
   /** A recipe card whose `draft` flag is never read — only stripped off. */
   function box(...lines: string[]): Finding[] {

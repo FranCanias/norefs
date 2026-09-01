@@ -304,6 +304,14 @@ class ReferenceIndex {
   private indexOccurrence(node: ts.Node): void {
     const direct = this.checker.getSymbolAtLocation(node);
     if (direct) this.fileUnder(direct, node);
+    // A write to a property of a value the types stopped following —
+    // `(api as any).flag = true` — names a member and points at no
+    // declaration. It is the same kind of lead as a write whose contextual
+    // type was out of reach, and worth exactly as much: the member it names
+    // may be this one, or may be none at all.
+    else if (this.members && isInPlaceWrite(node) && this.memberNames.has(propertyName(node))) {
+      this.recordUnattributedWrite(propertyName(node), node, undefined, false);
+    }
 
     const parent = node.parent;
     if (ts.isShorthandPropertyAssignment(parent) && parent.name === node) {

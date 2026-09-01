@@ -176,6 +176,13 @@ describe('assignability constraints (zero-reference members stay when required)'
   it('a type predicate keeps the narrowed type assignable to its parameter', () => {
     expect(reportedIn('predicate-narrow.ts')).toEqual(['deadRadius']);
   });
+
+  it('one arm of a union keeps the placeholder that excludes the arm beside it', () => {
+    // A guard narrows to one arm and the read lands there, so the `undefined`
+    // twin in the other arm collects nothing — and dropping it would let a
+    // value carrying both members through.
+    expect(reportedIn('union-exclusive.ts')).toEqual(['deadCrumbs']);
+  });
 });
 
 describe('type-level reads (the type system reads it, the runtime never does)', () => {

@@ -75,6 +75,7 @@ function constrainOverride(member: Node, name: string, heritage: Type[], index: 
 /** Every node kind the merged walk below dispatches on: one pass finds them all. */
 const WALKED_KINDS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.TypePredicate,
+  SyntaxKind.UnionType,
   SyntaxKind.ConditionalType,
   SyntaxKind.TypeReference,
   SyntaxKind.CallExpression,
@@ -110,6 +111,10 @@ function collectWalkConstraints(sourceFile: SourceFile, index: ConstraintIndex):
         constrain(asserted.getType(), narrowed, index, 0);
         creditLiterals(asserted, narrowed, index);
       }
+      return;
+    }
+    if (node.isKind(SyntaxKind.UnionType)) {
+      creditUnionOverlap(node.getTypeNodes(), index);
       return;
     }
     if (node.isKind(SyntaxKind.ConditionalType)) {
@@ -149,6 +154,56 @@ function creditConstraints(args: Node[], target: Node, index: ConstraintIndex): 
     creditLiterals(constraint, arg.getType(), index);
     if (mentionsTypeParameter(constraint, parameterNames)) creditEveryMember(arg.getType(), index);
   }
+}
+
+/**
+ * A name two arms of one union both declare.
+ *
+ * `{value: T; issues?: undefined} | {issues: Issue[]; value?: undefined}` is
+ * how an exclusive union is written: each arm names the other's member and
+ * gives it `undefined`, so the union accepts one shape or the other and never
+ * a mixture. Nothing reads those placeholders — a guard narrows to one arm,
+ * and the read lands on that arm's declaration alone — and deleting one
+ * changes what the type accepts and what a guard can narrow.
+ *
+ * So a name is load-bearing on the arm that declares it wherever an arm
+ * beside it declares the same name. This is the fourth position of the same
+ * kind as `extends`, `implements` and a type predicate: a member no reference
+ * reaches, holding a declared relation up.
+ *
+ * Only shapes are read. `string | undefined` has arms with members of their
+ * own — every method of `String` — and no declaration this could credit, so
+ * a union of anything but written shapes is left where it is.
+ */
+function creditUnionOverlap(typeNodes: Node[], index: ConstraintIndex): void {
+  const shaped = typeNodes.filter(node => isShapeNode(node));
+  if (shaped.length < 2) return;
+  const arms = shaped.map(node => {
+    const type = node.getType();
+    const owners = new Set<Node>();
+    collectOwners(type, owners, 0);
+    return { owners, names: new Set(type.getProperties().map(symbol => symbol.getName())) };
+  });
+  for (const [i, arm] of arms.entries()) {
+    if (arm.owners.size === 0) continue;
+    for (const name of arm.names) {
+      if (!arms.some((other, j) => j !== i && other.names.has(name))) continue;
+      for (const owner of arm.owners) record(owner, name, index);
+    }
+  }
+}
+
+/** A union arm written as a shape: a literal, a name that may stand for one, or either wrapped. */
+function isShapeNode(node: Node): boolean {
+  if (node.isKind(SyntaxKind.ParenthesizedType)) {
+    const inner = node.getTypeNode();
+    return inner !== undefined && isShapeNode(inner);
+  }
+  return (
+    node.isKind(SyntaxKind.TypeLiteral) ||
+    node.isKind(SyntaxKind.TypeReference) ||
+    node.isKind(SyntaxKind.IntersectionType)
+  );
 }
 
 /**

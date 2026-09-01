@@ -31,6 +31,19 @@ import chain has a root, and the whole project is about to be reported
 unused. `norefs entries` has always printed that line; an ordinary run never
 reached it, and swr's 65 dead files arrived with no explanation.
 
+**A member declared twice, read through the other declaration.** Two shapes
+made this finding, and both ended in `--fix` deleting load-bearing code. An
+exclusive union writes each arm with the other arm's member set to
+`undefined` — `{value: T; issues?: undefined} | {issues: Issue[]; value?:
+undefined}` — so a guard narrows to one arm and the placeholder beside it
+collects nothing, while deleting it changes what the type accepts. A name two
+arms of one union both declare is now kept on both, the way an `extends`
+clause already kept one. And a cast off a value the types do not follow —
+`(api as WithDispatch).dispatchFromDevtools`, where `api` is `unknown` —
+lands the read on the shape the cast names and never on the declaration the
+value came from. That declaration is `shadowed` now, evidence and all,
+instead of dead.
+
 **A run says when its tsconfig makes the answer meaningless.** Two shapes used
 to end in a cheerful `No unused code found.` that nobody should believe. A
 solution-style config — `"files": []` beside `"references"` — holds no files

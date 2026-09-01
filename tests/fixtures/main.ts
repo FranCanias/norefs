@@ -82,6 +82,7 @@ import './serialized';
 import './spread';
 import './string-index';
 import './type-literal-alias';
+import './union-exclusive';
 import './write-only-escapes';
 import './write-only-member';
 import './write-only-shadowed';
