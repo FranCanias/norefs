@@ -48,3 +48,19 @@ describe('reachability-based unused files', () => {
     expect(findings).toEqual([]);
   });
 });
+
+describe('harness directories', () => {
+  it('reads a name that carries its word on either side of the separator', () => {
+    // `test-d` is tsd's own directory, and a suffix is as much a separator as
+    // a prefix. `latest` and `testing` have no separator at all, so they stay
+    // ordinary source.
+    const findings = analyzeFiles({
+      '/main.ts': 'export const keep = 1;\n',
+      '/test-d/card.ts': 'export const checked = 1;\n',
+      '/type-tests/card.ts': 'export const typed = 1;\n',
+      '/latest/card.ts': 'export const newest = 1;\n',
+    });
+    expect(findings.filter(f => f.kind === 'file').map(f => f.name)).toEqual(['card.ts']);
+    expect(findings.find(f => f.kind === 'file')?.filePath).toBe('/latest/card.ts');
+  });
+});

@@ -9,6 +9,11 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A harness directory can carry its word on either side.** `test-d` is tsd's
+own directory and read as source, which made 221 of type-fest's files read as
+dead. A separator is a separator whichever end it sits on — `type-tests` and
+`test-d` both count, while `latest` and `testing` still do not.
+
 **A subpath pattern publishes what it matches.** `"exports": { "./*":
 "./dist/*.js" }` says every module in the package is reachable from outside
 it, and names none of them — so norefs used to drop the pattern and call the

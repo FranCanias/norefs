@@ -7,11 +7,12 @@ const ENTRY_NAME = /^(index|main|cli)\.[cm]?[jt]sx?$/;
 const HARNESS_NAME = /\.(test|spec|stories|bench)\.[cm]?[jt]sx?$/;
 /**
  * A directory a harness keeps its files in. Projects name them more than one
- * way — `tests`, `__tests__`, `type-tests`, `js-tests` — so the shape is read
- * rather than a list of words: `test` or `tests`, alone or behind a prefix and
- * a separator. The separator is what keeps `latest` out.
+ * way — `tests`, `__tests__`, `type-tests`, `test-d` — so the shape is read
+ * rather than a list of words: `test` or `tests`, alone or beside a word and a
+ * separator, on either side. The separator is what keeps `latest` and
+ * `testing` out.
  */
-const HARNESS_DIR = /^(?:__tests__|__mocks__|benchmarks?|(?:[\w.]+[-_])?tests?)$/;
+const HARNESS_DIR = /^(?:__tests__|__mocks__|benchmarks?|(?:[\w.]+[-_])?tests?(?:[-_][\w.]+)?)$/;
 
 export function isEntryFile(filePath: string, rootDirs: string[], entries: string[]): boolean {
   if (entries.some(entry => filePath === entry || filePath.startsWith(`${entry}/`))) return true;
