@@ -9,6 +9,17 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A relay answers to every name it is given.** A function that hands its
+parameter to `Object.keys` makes that type untrackable at every call site, and
+norefs goes quiet about it. `const scan = dump` used to end the trail: the
+calls behind the second name were never read, so a type only ever dumped
+through `scan` had its members reported — a false positive, and the tool's
+worst kind. A renaming binding is now followed, and so is a relay held on a
+property (`const pantry = { sift: dump }`), across files and through as many
+renames as there are. The old advice to annotate the binding is gone with the
+bug; it never worked, because a relay's declared parameter is wide by
+construction and it is the call sites that say what arrives.
+
 **A destructuring assignment reads on one side and writes on the other.**
 `({ starred: card.starred } = wanted)` used to read as a read of
 `card.starred`, which is the opposite of what it does — the value lands there.

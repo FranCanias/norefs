@@ -241,6 +241,14 @@ describe('sinks reached through a helper', () => {
     expect(reportedIn('relayed-sink-callback.ts')).toEqual(['deadAroma']);
   });
 
+  it('silences what reaches the relay under a second name', () => {
+    // `const scan = dump` and `const pantry = { sift: dump }` are the relay
+    // again. What the callers hand in is the type the sink reads, whether or
+    // not the name they hand it to declares one — a relay's own parameter is
+    // wide by construction. `deadSpout` went to a helper with no sink in it.
+    expect(reportedIn('relayed-sink-renamed.ts')).toEqual(['deadSpout']);
+  });
+
   it('silences the relaying parameter and nothing beside it', () => {
     // `quietSubtitle` rode in on the relay. `deadColor` fed the parameter next
     // to it, and `deadPlating` went through a helper with no sink in it —

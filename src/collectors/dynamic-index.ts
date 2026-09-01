@@ -3,6 +3,7 @@ import type {
   ElementAccessExpression,
   FunctionDeclaration,
   FunctionExpression,
+  Identifier,
   MethodDeclaration,
   Node,
   ParameterDeclaration,
@@ -157,6 +158,11 @@ function consumed(value: Node, suppressed: Set<Node>, relaying: Set<ParameterDec
  * A caller that forwards its own parameter is a relay in turn, and the walk
  * keeps going until it finds no new one. Each parameter is followed once,
  * which is what ends it.
+ *
+ * A relay answers to every name it is given, so `const scan = dump` and
+ * `const kit = { scan: dump }` are followed as well. The calls behind the
+ * second name hand in values just the same, and the sink at the far end reads
+ * them all.
  */
 function suppressThroughCallers(relaying: Set<ParameterDeclaration>, suppressed: Set<Node>): void {
   const pending = [...relaying];
@@ -167,27 +173,60 @@ function suppressThroughCallers(relaying: Set<ParameterDeclaration>, suppressed:
     if (!nameNode) continue;
     const position = owner.getParameters().indexOf(parameter);
     const rest = parameter.isRestParameter();
-    for (const ref of findReferencesAsNodes(nameNode)) {
-      const call = callTo(ref);
-      if (!call) {
-        // Handed on as a value instead of called. Nothing here says which
-        // values will arrive, but the position it lands in does.
-        for (const type of contextualParameterTypes(ref, position, rest)) addTypeDeclarations(type, suppressed);
-        continue;
-      }
-      const args = call.getArguments();
-      // A rest parameter collects every argument from its position on.
-      const handed = rest ? args.slice(position) : args.slice(position, position + 1);
-      for (const value of handed) {
-        addTypeDeclarations(value.getType(), suppressed);
-        const forwarded = parameterBehind(value);
-        if (forwarded && !relaying.has(forwarded)) {
-          relaying.add(forwarded);
-          pending.push(forwarded);
+    const names = [nameNode];
+    const found = new Set(names);
+    for (let name = names.pop(); name; name = names.pop()) {
+      for (const ref of findReferencesAsNodes(name)) {
+        const call = callTo(ref);
+        if (!call) {
+          // Handed on as a value instead of called. Nothing here says which
+          // values will arrive, but the position it lands in does — and a
+          // binding that takes the relay under a new name carries it on.
+          for (const type of contextualParameterTypes(ref, position, rest)) addTypeDeclarations(type, suppressed);
+          const renamed = secondName(ref);
+          if (renamed && !found.has(renamed)) {
+            found.add(renamed);
+            names.push(renamed);
+          }
+          continue;
+        }
+        const args = call.getArguments();
+        // A rest parameter collects every argument from its position on.
+        const handed = rest ? args.slice(position) : args.slice(position, position + 1);
+        for (const value of handed) {
+          addTypeDeclarations(value.getType(), suppressed);
+          const forwarded = parameterBehind(value);
+          if (forwarded && !relaying.has(forwarded)) {
+            relaying.add(forwarded);
+            pending.push(forwarded);
+          }
         }
       }
     }
   }
+}
+
+/**
+ * The second name this reference gives the relay: the `scan` of
+ * `const scan = dump`, and the one of `const kit = { scan: dump }`.
+ *
+ * Whether the holder declares a type is beside the point, and that is the
+ * whole reason to read the name rather than the annotation. An annotation says
+ * what the relay accepts — `(o: object) => string[]`, wide by construction,
+ * since a relay takes whatever it is handed. The concrete type the sink will
+ * read is written at the call sites, and those are behind the new name.
+ */
+function secondName(reference: Node): Identifier | undefined {
+  const holder = reference.getParent();
+  // A shorthand names the relay with the reference itself; the calls through
+  // it resolve to the property, not to the function it was written from.
+  if (holder?.isKind(SyntaxKind.ShorthandPropertyAssignment)) return holder.getNameNode();
+  if (holder?.isKind(SyntaxKind.VariableDeclaration) || holder?.isKind(SyntaxKind.PropertyAssignment)) {
+    if (holder.getInitializer() !== reference) return undefined;
+    const name = holder.getNameNode();
+    return name.isKind(SyntaxKind.Identifier) ? name : undefined;
+  }
+  return undefined;
 }
 
 /**

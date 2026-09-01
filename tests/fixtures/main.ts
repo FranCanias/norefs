@@ -68,6 +68,7 @@ import './quoted-names';
 import './relayed-sink';
 import './relayed-sink-callback';
 import './relayed-sink-narrow';
+import './relayed-sink-renamed';
 import './returned-object';
 import './returned-object-branches';
 import './returned-object-branches-alike';
