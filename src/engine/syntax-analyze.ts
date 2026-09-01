@@ -7,6 +7,7 @@ import { analyzeDependencies } from './dependencies';
 import type { EntryPoint } from './entry-points';
 import { packageEntryPoints } from './entry-points';
 import { diskFileSystem } from './file-system';
+import { readOutside } from './outside';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
@@ -14,7 +15,6 @@ import { projectFiles, SourceIndex } from './sources';
 import { configReader } from './tool-configs';
 
 /** The findings the syntax alone decides — no type checker is involved. */
-// norefs-ignore: the test suite imports it, outside this tsconfig
 export const SYNTAX_KINDS: FindingKind[] = ['file', 'dependency', 'unlisted', 'misplaced'];
 
 /** True when every requested kind can be answered without a type checker. */
@@ -70,11 +70,21 @@ export function analyzeSyntax(
     ),
   ];
 
+  // What the tsconfig left out still imports the project. Nothing in those
+  // files is analyzed, and what they import is used all the same.
+  const outside = readOutside(known, {
+    rootDirs,
+    packages,
+    fallbackOptions,
+    production: options.production,
+  });
+
   const reachable = reachableFiles(
     filePaths,
     filePath =>
       isEntryFile(filePath, rootDirs, entries) ||
       (!options.production && isHarnessFile(filePath, rootDirs)) ||
+      outside.targets.has(filePath) ||
       sources.isFileSuppressed(filePath),
     filePath => sources.importsOf(filePath).flatMap(entry => (entry.target ? [entry.target] : []))
   );
@@ -113,6 +123,7 @@ export function analyzeSyntax(
     });
   }
 
+  uses.push(...outside.uses);
   findings.push(
     ...analyzeDependencies(
       uses,

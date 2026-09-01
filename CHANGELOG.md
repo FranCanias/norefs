@@ -9,6 +9,23 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**The code beside the program is read for what it imports.** A tsconfig
+decides which files a run holds, and projects leave real code out of it all
+the time: an `exclude` that names the tests, a `files` list of one declaration
+file whose implementation is JavaScript, a `scripts` directory nobody
+compiles. Every claim norefs made was stated in absolute terms — *every*
+reference sits in this file, *no* source file imports this package — and each
+was wrong by the width of the exclusion. On superjson `--fix` removed
+thirteen `export` keywords, reported `Verified: tsc reports no new errors`,
+and left `src/is.test.ts` importing six names that were no longer exported.
+The references it missed were one directory listing away. Those files are now
+read as text for three things and nothing else: which project files they
+import, which names they take, and which packages they name. Nothing in them
+is analyzed or reported — a scan can say a package is used and never which
+section it belongs in, and a property read still needs a type checker.
+`node_modules`, the dot-directories and each package's `outDir` stay out of
+the reading.
+
 **A run says when its tsconfig makes the answer meaningless.** Two shapes used
 to end in a cheerful `No unused code found.` that nobody should believe. A
 solution-style config — `"files": []` beside `"references"` — holds no files

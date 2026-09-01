@@ -19,7 +19,6 @@ import { applyFilters, parseKinds } from './filters';
 import { CliError, fail, firstLine, HELP } from './messages';
 import type { Finding } from './types';
 
-// norefs-ignore: the test suite imports it, outside this tsconfig
 export function parseCli(args?: string[]) {
   return parseArgs({
     // parseArgs reads process.argv when no list is passed; tests pass one.
@@ -141,7 +140,6 @@ export function main(): void {
 }
 
 /** Merge the flags with the config file, validate the combination, and load nothing yet. */
-// norefs-ignore: the test suite imports it, outside this tsconfig
 export function createSession(values: CliValues, cwd: string): Session {
   const exporter = values.export === undefined ? undefined : pick(EXPORTS, values.export, '--export');
 

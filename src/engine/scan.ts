@@ -15,6 +15,13 @@ export interface Specifier {
    * time to need the package installed.
    */
   typeOnly: boolean;
+  /**
+   * The names the clause takes out of the module, as the module spells them:
+   * `import { a as b }` takes `a`, a default import takes `default`. `*`
+   * stands for the whole module — a namespace import, an `export *`, a
+   * dynamic `import()` — which takes every name there is.
+   */
+  names: string[];
 }
 
 /** Everything one source file says without a type checker being asked. */
@@ -31,6 +38,9 @@ export interface FileScan {
   /** The packages `/// <reference types="…" />` names. */
   typeReferences: Specifier[];
 }
+
+/** The name standing for every name a module has: `import * as`, `export *`, `import()`. */
+export const WHOLE_MODULE = '*';
 
 /** A triple-slash directive naming a types package, as TypeScript writes it. */
 const TYPE_REFERENCE = /\/\/\/\s*<reference\s+types\s*=\s*["']([^"']+)["']/g;
@@ -279,12 +289,13 @@ const DECLARATION_WORDS = new Set([
   'interface',
 ]);
 
-function pushSpecifier(text: string, literal: Token, typeOnly: boolean, out: Specifier[]): void {
+function pushSpecifier(text: string, literal: Token, typeOnly: boolean, names: string[], out: Specifier[]): void {
   out.push({
     text: text.slice(literal.innerStart, literal.innerEnd),
     start: literal.start,
     end: literal.end,
     typeOnly,
+    names,
   });
 }
 
@@ -308,6 +319,10 @@ function isTypeBinding(words: string[]): boolean {
  * is erased, and so are braces whose every binding is erased; a default or
  * namespace binding, a bare `import 'x'`, and `export *` all keep the module
  * present at run time.
+ *
+ * It reads the names the clause takes as well, spelled as the module spells
+ * them. A namespace binding and an `export *` take the module whole, so they
+ * take every name: `*` says so.
  */
 function scanClause(text: string, tokens: Token[], index: number, out: Specifier[]): number {
   // `import type X from 'x'`, unless `type` is the binding itself, as in
@@ -326,10 +341,15 @@ function scanClause(text: string, tokens: Token[], index: number, out: Specifier
   let valueBinding = false;
   let bindings = 0;
   let binding: string[] = [];
+  const names: string[] = [];
   const endBinding = (): void => {
     if (binding.length === 0) return;
     bindings++;
     if (!isTypeBinding(binding)) valueBinding = true;
+    // `{ a as b }` and `{ type a as b }` both take `a`; `{ type as b }` takes
+    // a value called `type`.
+    const source = isTypeBinding(binding) ? binding[1] : binding[0];
+    if (source) names.push(source);
     binding = [];
   };
 
@@ -343,7 +363,7 @@ function scanClause(text: string, tokens: Token[], index: number, out: Specifier
         endBinding();
         // `import 'x'` runs the module for its side effects: nothing is erased.
         const typeOnly = j > index + 1 && (typeKeyword || (bindings > 0 && !valueBinding));
-        pushSpecifier(text, token, typeOnly, out);
+        pushSpecifier(text, token, typeOnly, names, out);
       }
       return j;
     }
@@ -355,7 +375,12 @@ function scanClause(text: string, tokens: Token[], index: number, out: Specifier
       }
       if (DECLARATION_WORDS.has(name)) return j;
       // `import ns from`, `import * as ns from`: a binding that outlives the compile.
-      if (name !== 'from' && name !== 'as' && !(j === index + 1 && typeKeyword)) valueBinding = true;
+      if (name !== 'from' && name !== 'as' && !(j === index + 1 && typeKeyword)) {
+        valueBinding = true;
+        // The name of a namespace binding is the alias, not a name the module
+        // has; the `*` before it already said the clause takes them all.
+        if (!names.includes(WHOLE_MODULE)) names.push('default');
+      }
       continue;
     }
     if (token.kind !== 'punct') return j;
@@ -373,7 +398,11 @@ function scanClause(text: string, tokens: Token[], index: number, out: Specifier
       endBinding();
       continue;
     }
-    if (token.punct === '*') continue;
+    if (token.punct === '*') {
+      names.length = 0;
+      names.push(WHOLE_MODULE);
+      continue;
+    }
     return j;
   }
   return tokens.length;
@@ -389,7 +418,7 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
     const next = tokens[i + 1];
     const argument = tokens[i + 2];
     if (name === 'import' && next?.kind === 'punct' && next.punct === '(' && argument) {
-      if (argument.kind === 'str') pushSpecifier(text, argument, false, out);
+      if (argument.kind === 'str') pushSpecifier(text, argument, false, [WHOLE_MODULE], out);
       i += 2;
       continue;
     }
@@ -399,7 +428,7 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
     }
     if (name !== 'require') continue;
     if (next?.kind === 'punct' && next.punct === '(' && argument?.kind === 'str') {
-      pushSpecifier(text, argument, false, out);
+      pushSpecifier(text, argument, false, [WHOLE_MODULE], out);
       i += 2;
       continue;
     }
@@ -417,7 +446,7 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
       open.punct === '(' &&
       resolved?.kind === 'str'
     ) {
-      pushSpecifier(text, resolved, false, out);
+      pushSpecifier(text, resolved, false, [WHOLE_MODULE], out);
       i += 4;
     }
   }
@@ -441,7 +470,6 @@ function opensWithComment(line: string): boolean {
 }
 
 /** Scan text already in memory, for a file the caller has read or edited. */
-// norefs-ignore: the test suite imports it, outside this tsconfig
 export function scanText(text: string): FileScan {
   const lineStarts = [0];
   for (let i = 0; i < text.length; i++) {
@@ -490,7 +518,7 @@ function typeReferencesOf(prologue: string): Specifier[] {
     // TYPE_REFERENCE's one group is not optional: every match captures it.
     const name = match[1]!;
     const start = match[0].lastIndexOf(name) + match.index;
-    found.push({ text: name, start, end: start + name.length, typeOnly: true });
+    found.push({ text: name, start, end: start + name.length, typeOnly: true, names: [] });
   }
   return found;
 }

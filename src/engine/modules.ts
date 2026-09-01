@@ -20,6 +20,7 @@ import { analyzeDependencies } from './dependencies';
 import { packageEntryPoints } from './entry-points';
 import { hostFileSystem } from './file-system';
 import { lineAndColumnAt } from './location';
+import { readOutside, takenOutside } from './outside';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
@@ -166,6 +167,14 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       ).map(entry => entry.filePath)
     ),
   ];
+  // What the tsconfig left out still imports the project. Nothing in those
+  // files is analyzed, and what they import is used all the same.
+  const outside = readOutside(new Set(project.getSourceFiles().map(sf => sf.getFilePath())), {
+    rootDirs,
+    packages: options.packages ?? [],
+    fallbackOptions: project.getCompilerOptions(),
+    production: options.production,
+  });
   const reachable = reachableFiles(
     sourceFiles,
     sourceFile => {
@@ -173,6 +182,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       return (
         isEntryFile(filePath, rootDirs, entries) ||
         (!options.production && isHarnessFile(filePath, rootDirs)) ||
+        outside.targets.has(filePath) ||
         isFileSuppressed(sourceFile)
       );
     },
@@ -231,7 +241,8 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       deadDecls,
       publicDecls,
       harnessFiles,
-      options.production ?? false
+      options.production ?? false,
+      outside.names.get(filePath)
     );
     for (const ns of sourceFile.getModules()) {
       if (publicDecls.has(ns)) continue;
@@ -259,14 +270,15 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       deadDecls,
       publicDecls,
       harnessFiles,
-      options.production ?? false
+      options.production ?? false,
+      outside.names.get(filePath)
     );
   }
 
   const fileSystem = project.getFileSystem();
   findings.push(
     ...analyzeDependencies(
-      dependencyUses(project),
+      [...dependencyUses(project), ...outside.uses],
       rootDirs,
       {
         scopeDir: options.scopeDir,
@@ -326,10 +338,15 @@ function collectExportFindings(
   deadDecls: Set<Node>,
   publicDecls: Set<Node>,
   harnessFiles: Set<SourceFile>,
-  production: boolean
+  production: boolean,
+  /** Names a file outside the program takes from this one. */
+  outsideNames: ReadonlySet<string> | undefined
 ): void {
   const seen = new Set<Node>();
-  for (const declarations of sourceFile.getExportedDeclarations().values()) {
+  for (const [exportedAs, declarations] of sourceFile.getExportedDeclarations()) {
+    // A name the program never sees imported may still be imported, by a file
+    // the tsconfig left out. Nothing here can be called private, or dead.
+    if (takenOutside(outsideNames, exportedAs)) continue;
     for (const decl of declarations) {
       if (decl.getSourceFile() !== sourceFile || seen.has(decl)) continue;
       seen.add(decl);
@@ -381,6 +398,7 @@ function collectExportFindings(
     }
   }
 
+  if (takenOutside(outsideNames, 'default')) return;
   collectDefaultExportFinding(sourceFile, namespaceAlias, findings, deadDecls, publicDecls, harnessFiles, production);
 }
 

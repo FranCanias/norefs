@@ -35,12 +35,22 @@ export class SourceIndex {
   private readonly scans = new Map<string, FileScan>();
   private readonly imports = new Map<string, Import[]>();
 
-  constructor(filePaths: string[], packages: PackageConfig[], fallbackOptions: ts.CompilerOptions) {
+  /**
+   * `known` is the set a resolved specifier is matched against — the files
+   * the import graph has nodes for. It defaults to the files being scanned,
+   * and differs only for a scan of files outside the project: what those
+   * import is project code, not each other.
+   */
+  constructor(
+    filePaths: string[],
+    packages: PackageConfig[],
+    fallbackOptions: ts.CompilerOptions,
+    known: ReadonlySet<string> = new Set(filePaths)
+  ) {
     const scans = scanFiles(filePaths);
     // scanFiles returns one scan per path.
     for (const [i, filePath] of filePaths.entries()) this.scans.set(filePath, scans[i]!);
 
-    const known = new Set(filePaths);
     const caches = new Map<ts.CompilerOptions, ts.ModuleResolutionCache>();
     for (const filePath of filePaths) {
       const dir = path.dirname(filePath);
@@ -100,7 +110,7 @@ export class SourceIndex {
     filePath: string,
     options: ts.CompilerOptions,
     cache: ts.ModuleResolutionCache,
-    known: Set<string>
+    known: ReadonlySet<string>
   ): Import[] {
     const scan = this.scans.get(filePath);
     if (!scan) return [];
@@ -124,7 +134,7 @@ export class SourceIndex {
  * declaration file names the JavaScript beside it: that is what the run loads,
  * and what the import graph must keep alive.
  */
-function projectFileFor(resolvedPath: string, known: Set<string>): string | undefined {
+function projectFileFor(resolvedPath: string, known: ReadonlySet<string>): string | undefined {
   if (known.has(resolvedPath)) return resolvedPath;
   const sibling = runtimeSibling(resolvedPath);
   return sibling && known.has(sibling) ? sibling : undefined;

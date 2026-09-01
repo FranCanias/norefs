@@ -26,6 +26,12 @@ export interface DependencyUse {
    * listed name is used, and can never ask for a name to be listed.
    */
   internal: boolean;
+  /**
+   * The file sits beside the program rather than in it — a test the tsconfig
+   * excludes, a script nobody compiles. Nothing in it was analyzed, so it can
+   * say a listed name is used, and can never ask for a name to be listed.
+   */
+  outside?: boolean | undefined;
 }
 
 /** What the checks need to read the manifests and place a finding. */
@@ -53,6 +59,12 @@ interface Manifest {
   /** Names in "peerDependencies": what the consumer installs, not this package. */
   peer: Set<string>;
   used: Set<string>;
+  /**
+   * Names imported by a file beside the program rather than in it. The import
+   * is real, so the package is used; nothing in that file was analyzed, so
+   * when it is needed is a question this run cannot answer.
+   */
+  usedOutside: Set<string>;
   /** Names imported from a file that is not a test, spec, story, bench, or config. */
   usedInProduction: Set<string>;
   /**
@@ -135,13 +147,17 @@ export function analyzeDependencies(
     const name = packageName(specifier);
     if (!name) continue;
     for (const owner of owningManifests(use.filePath, manifests)) {
+      if (use.outside) {
+        owner.usedOutside.add(name);
+        continue;
+      }
       owner.used.add(name);
       if (!shipped) continue;
       owner.usedInProduction.add(name);
       if (!use.typeOnly) owner.neededAtRuntime.add(name);
     }
 
-    if (use.internal) continue;
+    if (use.internal || use.outside) continue;
     if (listedAnywhere.has(name) || listedAnywhere.has(typesPackage(name))) continue;
     if (reportedUnlisted.has(name) || isIgnored(name, ignore)) continue;
     if (scopeDir && !use.filePath.startsWith(scopeDir)) continue;
@@ -173,7 +189,7 @@ export function analyzeDependencies(
         const place = (finding: { kind: 'dependency' | 'misplaced'; verdict?: Verdict; evidence: string }) =>
           findings.push({ ...finding, filePath: manifest.filePath, ...at, name, context: section, anonymous: false });
 
-        const imported = manifest.used.has(name);
+        const imported = manifest.used.has(name) || manifest.usedOutside.has(name);
         // Four things count as using a package, and only one is an import: a
         // script that runs its command, a tool config that names it, or a host
         // this project uses whose peer list says it loads it.
@@ -195,6 +211,11 @@ export function analyzeDependencies(
           });
           continue;
         }
+
+        // A package the program never saw imported, named only by a file
+        // beside it, is used — and which section it belongs in is a claim
+        // about when it is needed, which only a file this run read can settle.
+        if (!manifest.used.has(name) && manifest.usedOutside.has(name)) continue;
 
         // Which section a package sits in is a claim about when it is needed.
         // Getting it wrong one way ships a broken install; the other way ships
@@ -350,6 +371,7 @@ function readManifest(context: DependencyContext, dir: string): Manifest | undef
     listed: listedNames(sections),
     peer: new Set(names('peerDependencies')),
     used: new Set(),
+    usedOutside: new Set(),
     usedInProduction: new Set(),
     neededAtRuntime: new Set(),
     usedByScript: new Set(),

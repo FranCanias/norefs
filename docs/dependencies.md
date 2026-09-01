@@ -8,7 +8,9 @@ An import, first — `require.resolve('pkg')` included, which loads nothing and 
 
 Nothing here guesses which tool owns which command, or which plugin. `tsc` maps to `typescript`, and `bufferutil` to `ws`, because those packages' own manifests say so.
 
-That is also the limit. A package that is not installed has no binaries to read, so norefs will not call a devDependency unused — it cannot see what a script might be running. Install first, or the claim goes unmade.
+The imports come from every source file the project keeps, not only the ones the tsconfig holds. A package whose only importer sits in a file the config excluded — `lib/*.js` beside a `files: ["index.d.ts"]`, a `test/` directory outside `include`, a `scripts/` nobody compiles — used to read as dead, and the import was one directory listing away. Those files are read as text and count for one thing: the package is used. They can never say a name is *missing* from the manifest, or which section it belongs in — nothing in them was analyzed, so a run that read only them holds both claims back and reports neither.
+
+That is also the limit. A package that is not installed has no binaries to read, so norefs will not call a devDependency unused — it cannot see what a script might be running. Install first, or the claim goes unmade. And a file no scanner reads hides its imports whatever the config says: a `.vue` or `.svelte` single-file component, a template, anything but the JavaScript and TypeScript extensions.
 
 **It is in the wrong section.** Where an entry sits is a claim about when it is needed, and getting it wrong breaks something either way:
 
