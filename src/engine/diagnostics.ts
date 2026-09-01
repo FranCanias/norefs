@@ -52,13 +52,21 @@ export function findUnresolvedImports(project: Project): string[] {
  * error at all.
  */
 export function findConfigProblems(tsConfigFilePaths: string[]): string[] {
-  const problems: string[] = [];
-  for (const tsConfigFilePath of tsConfigFilePaths) {
+  const read = tsConfigFilePaths.map(tsConfigFilePath => {
     const { config, error } = ts.readConfigFile(tsConfigFilePath, ts.sys.readFile);
-    if (error || typeof config !== 'object' || config === null) continue;
     const dir = path.dirname(tsConfigFilePath);
+    const usable = !error && typeof config === 'object' && config !== null;
+    const parsed = usable ? ts.parseJsonConfigFileContent(config, ts.sys, dir, undefined, tsConfigFilePath) : undefined;
+    return { tsConfigFilePath, dir, config, parsed };
+  });
+  // What the run as a whole scanned. One config of several holding nothing is
+  // a hole in the answer; the only config holding nothing is the whole answer.
+  const scannedAnything = read.some(entry => (entry.parsed?.fileNames.length ?? 0) > 0);
+
+  const problems: string[] = [];
+  for (const { tsConfigFilePath, dir, config, parsed } of read) {
+    if (!parsed) continue;
     const name = path.basename(tsConfigFilePath);
-    const parsed = ts.parseJsonConfigFileContent(config, ts.sys, dir, undefined, tsConfigFilePath);
 
     const written = (config as { extends?: unknown }).extends;
     const extended = typeof written === 'string' ? [written] : Array.isArray(written) ? written : [];
@@ -77,12 +85,16 @@ export function findConfigProblems(tsConfigFilePaths: string[]): string[] {
     }
 
     if (parsed.fileNames.length > 0) continue;
+    // A run holding other configs still read something, and saying otherwise
+    // beside a report of two hundred findings makes the reader distrust the
+    // findings rather than the config.
+    const scanned = scannedAnything ? 'Nothing in it was scanned' : 'Nothing was scanned';
     const references = (parsed.projectReferences ?? []).map(reference => path.relative(dir, reference.path) || '.');
     problems.push(
       references.length > 0
         ? `${name} lists no files of its own; it references ${references.length} other config(s).\n` +
-            `Nothing was scanned. Point norefs at them: -p ${references.slice(0, 3).join(' -p ')}`
-        : `${name} matches no files.\nNothing was scanned. Check its "include", "files", and "exclude" settings.`
+            `${scanned}.${scannedAnything ? '' : ` Point norefs at them: -p ${references.slice(0, 3).join(' -p ')}`}`
+        : `${name} matches no files.\n${scanned}. Check its "include", "files", and "exclude" settings.`
     );
   }
   return problems;

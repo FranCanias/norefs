@@ -45,6 +45,23 @@ describe('a tsconfig that makes a run meaningless', () => {
     expect(problems[0]).toContain('@someone/tsconfig');
   });
 
+  it('says what the run scanned, not what the config did', () => {
+    // A run holding other configs read plenty. Telling the reader nothing was
+    // scanned, above two hundred findings, teaches them to distrust the
+    // findings instead of the config.
+    const problems = problemsOf(
+      {
+        'tsconfig.json': JSON.stringify({ files: [], references: [{ path: './packages/box' }] }),
+        'packages/box/tsconfig.json': JSON.stringify({ include: ['src'] }),
+        'packages/box/src/main.ts': 'export const main = 1;\n',
+      },
+      ['tsconfig.json', 'packages/box/tsconfig.json']
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('Nothing in it was scanned');
+    expect(problems[0]).not.toContain('-p ');
+  });
+
   it('stays quiet about a config that holds files and resolves', () => {
     const problems = problemsOf({
       'tsconfig.json': JSON.stringify({ include: ['src'] }),

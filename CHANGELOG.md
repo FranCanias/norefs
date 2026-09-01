@@ -34,7 +34,10 @@ reached it, and swr's 65 dead files arrived with no explanation.
 **A run says when its tsconfig makes the answer meaningless.** Two shapes used
 to end in a cheerful `No unused code found.` that nobody should believe. A
 solution-style config — `"files": []` beside `"references"` — holds no files
-at all, and now names the configs to point norefs at instead. A config whose
+at all, and now names the configs to point norefs at instead. It says what
+the run scanned rather than what the config did: on a monorepo whose packages
+hold plenty, `Nothing was scanned` above two hundred findings taught the
+reader to distrust the findings. A config whose
 `extends` target is not installed loses every option it meant to inherit, so
 `outDir` never resolves and every file in the project reads as dead; that says
 so too, before the run.
