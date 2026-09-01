@@ -5,11 +5,10 @@
     }
   ],
   "settings": {
-    // Use the TypeScript version pinned in devDependencies, not the one bundled with VS Code.
-    "js/ts.tsdk.path": "node_modules/typescript/lib",
-    "js/ts.tsdk.promptToUseWorkspaceVersion": true,
+    // The pinned typescript is 7.x: a shim around a native binary, with no
+    // tsserver.js for the editor to load. Builds use it through `pnpm build`;
+    // the editor uses the TypeScript that ships with VS Code.
     "js/ts.preferences.importModuleSpecifier": "shortest",
-    "js/ts.tsserver.experimental.enableProjectDiagnostics": true,
 
     // Biome owns formatting/linting (see biome.json); match its line width.
     "editor.defaultFormatter": "biomejs.biome",
@@ -31,6 +30,11 @@
       "source.fixAll.biome": "explicit",
       "source.organizeImports.biome": "explicit"
     },
+    // Copilot registers a code action provider for every language and declares
+    // no kinds, so the editor cannot filter it out of the two requests above
+    // and every save waits for it. Biome owns the fixes here; Copilot has
+    // nothing to add to them.
+    "github.copilot.editor.enableCodeActions": false,
     "editor.rulers": [120],
     "editor.tabSize": 2,
     "editor.insertSpaces": true,
