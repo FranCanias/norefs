@@ -42,6 +42,26 @@ describe('the scanner reads every form of import', () => {
     expect(erased("const m = require('x');")).toBe(false);
   });
 
+  it('tells a type query from the dynamic import it is spelled like', () => {
+    const erased = (text: string): boolean | undefined => scanText(text).specifiers[0]?.typeOnly;
+
+    // Written where a type goes, `import('x')` is erased with the type it names.
+    expect(erased("type Box = { d?: import('x').Dispatcher };")).toBe(true);
+    expect(erased("type P = InstanceType<typeof import('x').Thing>;")).toBe(true);
+    expect(erased("type U = string | import('x').B;")).toBe(true);
+    // `=` says nothing on its own, so the word the statement opens with does.
+    expect(erased("export type Handler = import('x').Handler;")).toBe(true);
+    expect(erased("type Handler =\n  import('x').Handler;")).toBe(true);
+    expect(erased("const a = 1\ntype Box = import('x').B")).toBe(true);
+
+    // The same words as an expression load the module.
+    expect(erased("const p = import('x');")).toBe(false);
+    expect(erased("export const p = import('x');")).toBe(false);
+    expect(erased("export const load = () => import('x');")).toBe(false);
+    expect(erased("register(import('x'));")).toBe(false);
+    expect(erased("import('x').then(m => m);")).toBe(false);
+  });
+
   it('does not mistake a binding called `type` for the keyword', () => {
     const erased = (text: string): boolean | undefined => scanText(text).specifiers[0]?.typeOnly;
 

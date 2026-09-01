@@ -422,6 +422,34 @@ describe('a dependency in the wrong section', () => {
     expect(findings[0]?.evidence).toContain('production code imports it');
   });
 
+  it('says nothing about a devDependency read through a type query', () => {
+    // `import('pkg').Handler` written where a type goes is a dynamic import's
+    // words and `import type`'s meaning. Nothing is emitted, so an install
+    // without dev dependencies is missing nothing — and moving the package to
+    // `dependencies` would ship weight for a type that is already gone.
+    const findings = installed(
+      { devDependencies: { oven: '1.0.0', pan: '1.0.0', sift: '1.0.0' } },
+      {
+        '/main.ts':
+          "export type Box = { d?: import('oven').Dispatcher };\n" +
+          "export type Thing = InstanceType<typeof import('pan').Thing>;\n" +
+          "export type Handler = import('sift').Handler;\n",
+      },
+      { oven: { name: 'oven' }, pan: { name: 'pan' }, sift: { name: 'sift' } }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('still names a devDependency a dynamic import loads', () => {
+    // The same words in an expression load the module, and the section is wrong.
+    const findings = installed(
+      { devDependencies: { lazy: '1.0.0' } },
+      { '/main.ts': "export const load = () => import('lazy');\n" },
+      { lazy: { name: 'lazy' } }
+    );
+    expect(findings.map(f => [f.kind, f.name, f.context])).toEqual([['misplaced', 'lazy', 'devDependencies']]);
+  });
+
   it('says nothing about a devDependency the build inlines', () => {
     // A bundled CLI carries its dependencies inside the output file. `external`
     // is the list of what it does not carry, and everything else is compiled
@@ -772,4 +800,5 @@ describe('what counts as the shipping path', () => {
     // to keep a file alive, too weak to say the package ships it.
     expect(box("export default { test: { coverage: { exclude: ['src/vitest'] } } };\n")).toEqual([]);
   });
+
 });

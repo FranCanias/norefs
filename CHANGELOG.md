@@ -9,6 +9,14 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A type query is erased, so it does not decide a manifest section.**
+`import('undici').Dispatcher`, written where a type goes, is a dynamic
+import's words and `import type`'s meaning: nothing is emitted, and an
+install without dev dependencies is missing nothing. It was read as a runtime
+import, so ofetch was told to ship `undici` in `dependencies` — weight for a
+type that is gone before anything runs. Written where a value goes, the same
+words still load the module, and that one is still needed at run time.
+
 **Public API is closed over the types it names.** The exemption stopped at
 the declarations an entry file exports, and a consumer does not stop there.
 ts-pattern's entry exports `match()`, whose return type is a `Match`

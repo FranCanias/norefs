@@ -418,7 +418,7 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
     const next = tokens[i + 1];
     const argument = tokens[i + 2];
     if (name === 'import' && next?.kind === 'punct' && next.punct === '(' && argument) {
-      if (argument.kind === 'str') pushSpecifier(text, argument, false, [WHOLE_MODULE], out);
+      if (argument.kind === 'str') pushSpecifier(text, argument, inTypePosition(text, tokens, i), [WHOLE_MODULE], out);
       i += 2;
       continue;
     }
@@ -451,6 +451,74 @@ function specifiersOf(text: string, tokens: Token[]): Specifier[] {
     }
   }
   return out;
+}
+
+/** Words a type can follow: `typeof import('x')`, `T extends import('x').U`. */
+const TYPE_WORDS = new Set(['typeof', 'keyof', 'extends', 'infer', 'is', 'as', 'satisfies', 'readonly']);
+
+/** Punctuation a type can follow: an annotation, a union arm, a type argument. */
+const TYPE_PUNCT = new Set([':', '|', '&', '<', '?']);
+
+/** Punctuation that closes whatever came before it, so a statement starts after. */
+const STATEMENT_EDGE = new Set([';', '{', '}', '(', '[', ',']);
+
+/**
+ * Whether the `import(` at `index` is written where a type goes.
+ *
+ * The two forms share every character. `import('pkg')` as an expression loads
+ * the module and needs it installed; the same words in a type position are a
+ * type query, erased before anything runs — and calling one the other puts a
+ * package in the wrong section of the manifest. Without a checker, position is
+ * the only thing left to read, so this reads the token before it.
+ *
+ * `=` is the one marker that says nothing on its own: `type Box = import('x')`
+ * and `const load = import('x')` write it alike. There the word the statement
+ * opens with decides, found by walking back to the start of the line.
+ */
+function inTypePosition(text: string, tokens: Token[], index: number): boolean {
+  const previous = tokens[index - 1];
+  if (!previous) return false;
+  if (previous.kind === 'ident') return TYPE_WORDS.has(word(text, previous));
+  if (previous.kind !== 'punct') return false;
+  if (TYPE_PUNCT.has(previous.punct)) return true;
+  return previous.punct === '=' && opensTypeAlias(text, tokens, index);
+}
+
+/**
+ * True when the statement holding the token at `index` opens with `type`.
+ *
+ * The walk goes back to the first token of the line, and stops early at
+ * punctuation that ends whatever stood before it — so a call argument or an
+ * object member is read as its own thing rather than as the statement around
+ * it. An `export` or a `declare` in front is skipped: both leave the next word
+ * saying what the statement is.
+ */
+function opensTypeAlias(text: string, tokens: Token[], index: number): boolean {
+  let start = index;
+  for (let j = index - 1; j >= 0; j--) {
+    const token = tokens[j];
+    if (!token) break;
+    if (token.kind === 'punct' && STATEMENT_EDGE.has(token.punct)) break;
+    start = j;
+    if (opensLine(text, tokens, j)) break;
+  }
+  for (let j = start; j < index; j++) {
+    const token = tokens[j];
+    if (token?.kind !== 'ident') return false;
+    const name = word(text, token);
+    if (name === 'export' || name === 'declare') continue;
+    return name === 'type';
+  }
+  return false;
+}
+
+/** True when nothing but the line break and whitespace stands before this token. */
+function opensLine(text: string, tokens: Token[], index: number): boolean {
+  const token = tokens[index];
+  if (!token) return false;
+  const previous = tokens[index - 1];
+  if (!previous) return true;
+  return text.slice(previous.end, token.start).includes('\n');
 }
 
 /**

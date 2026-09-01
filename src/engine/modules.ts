@@ -811,7 +811,7 @@ function dependencyUses(project: Project): DependencyUse[] {
         filePath,
         text: literal.getLiteralText(),
         start: literal.getStart(),
-        typeOnly: clause !== undefined && isTypeOnlyClause(clause),
+        typeOnly: isTypeQuery(literal) || (clause !== undefined && isTypeOnlyClause(clause)),
         internal: target !== undefined && !target.isInNodeModules(),
       });
     }
@@ -859,6 +859,18 @@ function resolveCallLiterals(sourceFile: SourceFile): StringLiteral[] {
     if (argument?.isKind(SyntaxKind.StringLiteral)) found.push(argument);
   }
   return found;
+}
+
+/**
+ * True when this specifier belongs to a type query — `import('pkg').Handler`,
+ * written where a type goes. The words are a dynamic import's and the meaning
+ * is `import type`'s: the compiler erases it, so nothing is left at run time to
+ * need the package installed. Position is what tells the two apart, so the
+ * parent is what this reads.
+ */
+function isTypeQuery(literal: StringLiteral): boolean {
+  const parent = literal.getParent();
+  return parent?.isKind(SyntaxKind.LiteralType) === true && parent.getParent()?.isKind(SyntaxKind.ImportType) === true;
 }
 
 /**
