@@ -50,17 +50,40 @@ describe('reachability-based unused files', () => {
 });
 
 describe('harness directories', () => {
-  it('reads a name that carries its word on either side of the separator', () => {
-    // `test-d` is tsd's own directory, and a suffix is as much a separator as
-    // a prefix. `latest` and `testing` have no separator at all, so they stay
-    // ordinary source.
+  it('reads a name that carries its word before the separator, or the underscores around it', () => {
+    // `test-d` is tsd's own directory and `bench` is where a benchmark lives.
+    // `latest` has no separator at all, and `test-utils` carries a word on the
+    // side that names what products ship, so both stay ordinary source.
     const findings = analyzeFiles({
       '/main.ts': 'export const keep = 1;\n',
       '/test-d/card.ts': 'export const checked = 1;\n',
       '/type-tests/card.ts': 'export const typed = 1;\n',
+      '/__performance_tests__/card.ts': 'export const timed = 1;\n',
+      '/bench/card.ts': 'export const measured = 1;\n',
       '/latest/card.ts': 'export const newest = 1;\n',
+      '/test-utils/card.ts': 'export const helper = 1;\n',
     });
-    expect(findings.filter(f => f.kind === 'file').map(f => f.name)).toEqual(['card.ts']);
-    expect(findings.find(f => f.kind === 'file')?.filePath).toBe('/latest/card.ts');
+    expect(findings.filter(f => f.kind === 'file').map(f => f.filePath)).toEqual([
+      '/latest/card.ts',
+      '/test-utils/card.ts',
+    ]);
+  });
+});
+
+describe('harness file names', () => {
+  it('reads the word with the suffix a tool gives it, and as the whole name', () => {
+    // `pick.test-d.ts` is tsd's, `groupBy.test-prop.ts` is fast-check's, and a
+    // benchmark script beside the sources is called what it is. `manifest.ts`
+    // and `latest.ts` end in the same four letters and open no word, so they
+    // are the source they look like.
+    const findings = analyzeFiles({
+      '/main.ts': 'export const keep = 1;\n',
+      '/pick.test-d.ts': "import { keep } from './main';\nexport const checked = keep;\n",
+      '/groupBy.test-prop.ts': "import { keep } from './main';\nexport const generated = keep;\n",
+      '/benchmark.js': "import { keep } from './main';\nexport const timed = keep;\n",
+      '/manifest.ts': 'export const listed = 1;\n',
+      '/latest.ts': 'export const newest = 1;\n',
+    });
+    expect(findings.filter(f => f.kind === 'file').map(f => f.filePath)).toEqual(['/latest.ts', '/manifest.ts']);
   });
 });

@@ -21,10 +21,16 @@ so too, before the run.
 binary by its path (`node ./node_modules/.bin/tsd`) names the package that
 owns it, and so does the config a tsconfig `extends`.
 
-**A harness directory can carry its word on either side.** `test-d` is tsd's
-own directory and read as source, which made 221 of type-fest's files read as
-dead. A separator is a separator whichever end it sits on — `type-tests` and
-`test-d` both count, while `latest` and `testing` still do not.
+**A harness is read by the name its tool writes.** `pick.test-d.ts` is tsd's,
+`groupBy.test-prop.ts` is fast-check's, and `benchmark.js` is the whole name
+rather than a suffix on one: all three used to count as shipped source, which
+put 383 of valibot's and remeda's files in the report and called `vitest` a
+misplaced dependency in both. A directory is read the same way — `bench`
+joins `benchmarks`, and the double underscores of `__performance_tests__` are
+read for what they are. A word *before* the separator still counts
+(`type-tests`), and a word after it no longer does: the shape that admitted
+`test-d` admitted `test-utils` and `tests-e2e` too, which are names products
+give to code they ship, so `test-d` is now named on its own.
 
 **A subpath pattern publishes what it matches.** `"exports": { "./*":
 "./dist/*.js" }` says every module in the package is reachable from outside

@@ -3,16 +3,29 @@ import { isToolConfig } from './tool-configs';
 
 /** Default entry files, following the convention knip uses: index/main/cli in the root or src/. */
 const ENTRY_NAME = /^(index|main|cli)\.[cm]?[jt]sx?$/;
-/** Files a harness runs directly; they import code but nothing imports them. */
-const HARNESS_NAME = /\.(test|spec|stories|bench)\.[cm]?[jt]sx?$/;
+/**
+ * Files a harness runs directly; they import code but nothing imports them.
+ *
+ * The word can carry a suffix — `pick.test-d.ts` is tsd's, `groupBy.test-prop.ts`
+ * is fast-check's — and it can be the whole name, which is how a benchmark
+ * script beside the sources is written. A word only counts where a dot or the
+ * start of the name opens it, so `manifest.ts` and `latest.ts` stay source.
+ */
+const HARNESS_NAME = /(?:^|\.)(?:test|spec|stories|bench(?:es|marks?)?)(?:-[\w.]+)?\.[cm]?[jt]sx?$/;
 /**
  * A directory a harness keeps its files in. Projects name them more than one
- * way — `tests`, `__tests__`, `type-tests`, `test-d` — so the shape is read
- * rather than a list of words: `test` or `tests`, alone or beside a word and a
- * separator, on either side. The separator is what keeps `latest` and
- * `testing` out.
+ * way — `tests`, `__tests__`, `type-tests`, `bench`, `__performance_tests__` —
+ * so the shape is read rather than a list of words: `test` or `tests`, alone
+ * or beside a word and a separator before it, and wrapped in the double
+ * underscores that mark a directory a tool owns. The separator is what keeps
+ * `latest` and `testing` out.
+ *
+ * A word *after* the separator is a different matter. `test-d` is tsd's own
+ * directory, and the shape that admits it admits `test-utils`, `test-helpers`
+ * and `tests-e2e` — names products give to code they ship. So the suffix side
+ * is the one name it was ever needed for.
  */
-const HARNESS_DIR = /^(?:__tests__|__mocks__|benchmarks?|(?:[\w.]+[-_])?tests?(?:[-_][\w.]+)?)$/;
+const HARNESS_DIR = /^(?:__mocks__|(?:__)?(?:(?:[\w.]+[-_])?tests?|tests?[-_]d|bench(?:es|marks?)?)(?:__)?)$/;
 
 export function isEntryFile(filePath: string, rootDirs: string[], entries: string[]): boolean {
   if (entries.some(entry => filePath === entry || filePath.startsWith(`${entry}/`))) return true;

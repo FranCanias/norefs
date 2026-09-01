@@ -124,7 +124,7 @@ A bare word is left alone either way. `environment: 'jsdom'` names a package, no
 
 What a config *imports* is not an entry point, as long as the program holds the config itself: the import is already an edge in the graph, the config is already a root of it, and naming the target an entry point on top of that would publish that file's exports as API on the strength of one config line. A config the program never holds — `eslint.config.js`, or one the tsconfig does not include — is no root of anything, so what it imports is read as an entry point after all.
 
-Test, spec, stories, bench, and config files are reachability roots too, on their own rule, and so is anything under `test`, `tests`, `__tests__`, `__mocks__`, or a name that puts a word and a separator on either side of those — `type-tests`, `test-d`. They are not entry points: nothing outside imports them, so their exports stay open to report.
+Test, spec, stories, bench, and config files are reachability roots too, on their own rule, and so is anything under `test`, `tests`, `__tests__`, `__mocks__`, `bench`, `benchmarks`, `test-d`, or a name that puts a word and a separator before those — `type-tests`, `__performance_tests__`. They are not entry points: nothing outside imports them, so their exports stay open to report.
 
 To see what a run decided, and why:
 
