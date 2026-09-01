@@ -7,6 +7,22 @@ versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 A user-visible change lands with its entry here, under **Unreleased**. A release
 renames the section and dates it — the writing is already done.
 
+## Unreleased
+
+**A property whose shape empties is one finding, and `--fix` leaves it.** A
+shape written inline on a property — `{ labels: { deadColor, deadFont } }`,
+as a value or as a type — has no declaration to answer for it. Losing every
+member used to report every member, and `--fix` obliged: it deleted them and
+left `labels: {}` sitting there, dead and now invisible to the next run. The
+member findings now fold into one on the property that holds them, worded like
+the fold an emptied interface already gets: ``property `labels` becomes empty:
+all 2 members are dead``. It reports and stops. norefs only ever looked inside
+that shape because something reads the property, so the fold always leaves a
+read behind that now reaches nothing — removing the property means removing
+that read, and only you know what it was for. A shape keeping one live member
+is untouched, and so is one holding a spread, which carries members no fold can
+account for.
+
 ## [0.11.0](https://github.com/FranCanias/norefs/releases/tag/v0.11.0) — 2026-08-21
 
 Two runs against a 3,700-file monorepo (drizzle-orm), each followed by a hand

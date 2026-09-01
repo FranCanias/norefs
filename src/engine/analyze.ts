@@ -1,7 +1,16 @@
-import type { InterfaceDeclaration, Node, ObjectLiteralExpression, Project, TypeAliasDeclaration } from 'ts-morph';
+import type {
+  InterfaceDeclaration,
+  Node,
+  ObjectLiteralExpression,
+  Project,
+  PropertyAssignment,
+  PropertyDeclaration,
+  PropertySignature,
+  TypeAliasDeclaration,
+} from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { collectCandidates } from '../collectors';
-import { writtenProperty } from '../collectors/object-literals';
+import { selfShapedLiteral, writtenProperty } from '../collectors/object-literals';
 import type { FunctionLike } from '../collectors/returned-objects';
 import { producerOf, returnedObjectLiterals } from '../collectors/returned-objects';
 import { describeFunctionName } from '../describe';
@@ -48,7 +57,9 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
 
   const modules = analyzeModules(project, options);
   const findings = [...modules.findings];
-  const reportedMembers = new Set<Node>();
+  // Keyed by node, valued by the finding: a fold inherits how its members were
+  // named as well as which ones they were.
+  const reportedMembers = new Map<Node, MemberFinding>();
 
   for (const { member, context, anonymous } of members ? collectCandidates(project, options) : []) {
     // An unused file or a declaration with zero references is already reported
@@ -69,10 +80,7 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
     if (usage === 'used') continue;
     const sourceFile = member.getSourceFile();
     const { line, column } = lineAndColumnAt(sourceFile, nameNode.getStart());
-    // Only truly unused members feed the empty-type fold: a test-only member
-    // needs its tests deleted with it, which is not an emptied type's story.
-    if (usage === 'unused') reportedMembers.add(member);
-    findings.push({
+    const finding: MemberFinding = {
       kind: 'member',
       filePath: sourceFile.getFilePath(),
       line,
@@ -86,10 +94,18 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
       // do — it reads them, words them, and hands them to the fix.
       ...(usage === 'write-only' ? { writeSites: memberWriteSites(member) } : {}),
       ...(usage === 'test-only' ? { verdict: 'test-only' as const, evidence: 'only test files reference it' } : {}),
-    });
+    };
+    findings.push(finding);
+    // Only truly unused members feed the empty-type fold: a test-only member
+    // needs its tests deleted with it, which is not an emptied type's story.
+    if (usage === 'unused') reportedMembers.set(member, finding);
   }
 
-  const folds = [...emptyOwnerFindings(reportedMembers), ...emptyReturnedObjectFindings(reportedMembers)];
+  const folds = [
+    ...emptyOwnerFindings(reportedMembers),
+    ...emptyReturnedObjectFindings(reportedMembers),
+    ...emptyPropertyFindings(reportedMembers),
+  ];
   findings.push(...folds);
   const deadFilePaths = new Set<string>([...modules.deadFiles].map(sf => sf.getFilePath()));
   assignVerdicts(project, findings, cwd, filePath => deadFilePaths.has(filePath));
@@ -132,9 +148,9 @@ export function analyze(project: Project, options: AnalyzeOptions = {}): Finding
  * branch keeping a property its callers read means the call still produces
  * something, and the whole slice is not dead.
  */
-function emptyReturnedObjectFindings(reportedMembers: Set<Node>): EmptyTypeFinding[] {
+function emptyReturnedObjectFindings(reportedMembers: ReadonlyMap<Node, MemberFinding>): EmptyTypeFinding[] {
   const producers = new Map<FunctionLike, ObjectLiteralExpression[]>();
-  for (const member of reportedMembers) {
+  for (const member of reportedMembers.keys()) {
     const literal = member.getParent();
     if (!literal?.isKind(SyntaxKind.ObjectLiteralExpression)) continue;
     const fn = producerOf(literal);
@@ -180,9 +196,9 @@ function emptyReturnedObjectFindings(reportedMembers: Set<Node>): EmptyTypeFindi
  * consumers should go too. The member findings it swallows are returned so
  * the caller can fold them away.
  */
-function emptyOwnerFindings(reportedMembers: Set<Node>): EmptyTypeFinding[] {
+function emptyOwnerFindings(reportedMembers: ReadonlyMap<Node, MemberFinding>): EmptyTypeFinding[] {
   const owners = new Set<InterfaceDeclaration | TypeAliasDeclaration>();
-  for (const member of reportedMembers) {
+  for (const member of reportedMembers.keys()) {
     const owner = namedOwner(member);
     if (owner) owners.add(owner);
   }
@@ -226,5 +242,108 @@ function namedOwner(member: Node): InterfaceDeclaration | TypeAliasDeclaration |
 function ownerMembers(owner: InterfaceDeclaration | TypeAliasDeclaration): Node[] {
   if (owner.isKind(SyntaxKind.InterfaceDeclaration)) return owner.getMembers();
   const typeNode = owner.getTypeNode();
+  return typeNode?.isKind(SyntaxKind.TypeLiteral) ? typeNode.getMembers() : [];
+}
+
+/** A property carrying a shape of its own: `outer: { … }`, written as a value or as a type. */
+type ShapeHolder = PropertyAssignment | PropertySignature | PropertyDeclaration;
+
+/**
+ * A property that holds a shape and loses every member of it. The shape has no
+ * declaration to answer for it — it is written inline, on the property — so
+ * the property is what a reader would delete, and the property is the finding.
+ *
+ * The property itself stays read: that is the only reason the analysis ever
+ * looked inside it. A nested shape is read member by member exactly where
+ * every read of the holding property keeps the value local, so a fold here
+ * always leaves a read behind that reaches nothing. Removing the property
+ * means removing that read too, and only a human knows what it was for —
+ * which is why `--fix` leaves this finding alone, as it does an emptied
+ * interface. Without the fold, `--fix` would empty the brackets and leave
+ * `outer: {}` sitting there, dead and now invisible to the next run.
+ */
+function emptyPropertyFindings(reportedMembers: ReadonlyMap<Node, MemberFinding>): EmptyTypeFinding[] {
+  const holders = new Set<ShapeHolder>();
+  for (const member of reportedMembers.keys()) {
+    const holder = holdingProperty(member);
+    // A holder reported dead in its own right already owns every death under it.
+    if (holder && !reportedMembers.has(holder)) holders.add(holder);
+  }
+
+  const folds: EmptyTypeFinding[] = [];
+  for (const holder of holders) {
+    const members = heldShapeMembers(holder);
+    const first = members[0];
+    if (!first || !members.every(member => reportedMembers.has(member))) continue;
+    const nameNode = holder.getNameNode();
+    if (isNodeSuppressed(nameNode)) continue;
+    const sourceFile = holder.getSourceFile();
+    const { line, column } = lineAndColumnAt(sourceFile, nameNode.getStart());
+    folds.push({
+      kind: 'empty-type',
+      filePath: sourceFile.getFilePath(),
+      line,
+      column,
+      name: holder.getName(),
+      context: 'property',
+      // An inline shape is as nameless as the members inside it, so `--anon`
+      // must hide the fold wherever it hid them.
+      anonymous: reportedMembers.get(first)?.anonymous ?? false,
+      swallowed: members.length,
+      members,
+    });
+  }
+  return folds;
+}
+
+/**
+ * The property that holds the shape this member belongs to. A member of a
+ * shape some declaration owns has none — that declaration answers for it.
+ *
+ * Only a shape the property holds outright counts. `outer: A | B` puts two
+ * shapes behind one property, and emptying one says nothing about the other.
+ */
+function holdingProperty(member: Node): ShapeHolder | undefined {
+  const shape = member.getParent();
+  if (shape?.isKind(SyntaxKind.ObjectLiteralExpression)) {
+    const property = enclosingProperty(shape);
+    // The same literal the collector descended into, `as const` and
+    // parentheses aside. A cast to a named type hands the shape to that type.
+    return property && selfShapedLiteral(property.getInitializer()) === shape ? property : undefined;
+  }
+  if (shape?.isKind(SyntaxKind.TypeLiteral)) {
+    const parent = shape.getParent();
+    const held =
+      (parent?.isKind(SyntaxKind.PropertySignature) || parent?.isKind(SyntaxKind.PropertyDeclaration)) &&
+      parent.getTypeNode() === shape;
+    return held ? parent : undefined;
+  }
+  return undefined;
+}
+
+/** The property assignment this literal is the value of, past the wrappers a value may wear. */
+function enclosingProperty(literal: ObjectLiteralExpression): PropertyAssignment | undefined {
+  let current: Node = literal;
+  while (true) {
+    const parent = current.getParent();
+    if (parent?.isKind(SyntaxKind.PropertyAssignment)) return parent;
+    if (parent?.isKind(SyntaxKind.ParenthesizedExpression) || parent?.isKind(SyntaxKind.AsExpression)) {
+      current = parent;
+      continue;
+    }
+    return undefined;
+  }
+}
+
+/**
+ * Everything the held shape declares, spreads and index signatures included.
+ * Neither is ever a reported member, so a shape holding one never folds — and
+ * never loses the members it carries along.
+ */
+function heldShapeMembers(holder: ShapeHolder): Node[] {
+  if (holder.isKind(SyntaxKind.PropertyAssignment)) {
+    return selfShapedLiteral(holder.getInitializer())?.getProperties() ?? [];
+  }
+  const typeNode = holder.getTypeNode();
   return typeNode?.isKind(SyntaxKind.TypeLiteral) ? typeNode.getMembers() : [];
 }

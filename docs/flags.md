@@ -106,7 +106,7 @@ A fix finishes the finding it acts on, or refuses it:
   the indentation, and everything the edit does not name survive. An entry that
   does not sit on a line of its own is refused and named, because these edits
   move whole lines.
-- **Files, namespace findings, and emptied types** are never fixed. Nor are
+- **Files, namespace findings, and emptied types** — an emptied property included — are never fixed. Nor are
   `test-only` findings: the fix is deleting the tests too, and only you do that.
 
 ## Combinations worth knowing

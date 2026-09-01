@@ -95,11 +95,14 @@ export interface MemberFinding extends FindingBase {
   strands?: string | undefined;
 }
 
-/** A still-referenced type that becomes empty once its unused members go. */
+/** A still-referenced shape that becomes empty once its unused members go. */
 export interface EmptyTypeFinding extends FindingBase {
   kind: 'empty-type';
-  /** What kind of owner empties: a declaration, or a function's returned object. */
-  context: 'interface' | 'type' | 'returned object';
+  /**
+   * What kind of owner empties: a declaration, a function's returned object,
+   * or the property that holds a shape nested inside another.
+   */
+  context: 'interface' | 'type' | 'returned object' | 'property';
   /** How many member findings folded into this one. */
   swallowed: number;
   /** The member nodes whose findings folded in, for verdict and strand inheritance. */
