@@ -177,6 +177,19 @@ describe('assignability constraints (zero-reference members stay when required)'
     expect(reportedIn('predicate-narrow.ts')).toEqual(['deadRadius']);
   });
 
+  it('a shape named in a conditional pattern keeps the members the match reads', () => {
+    // `raw` and `cooked` sit one alias inside the `extends` clause, which is
+    // where a library keeps them. Delete either and the inference stops
+    // working with nothing to show for it.
+    expect(reportedIn('inference-carrier.ts')).toEqual(['deadZest']);
+  });
+
+  it('keeps a `never` member, which is the whole of a nominal brand', () => {
+    // Nothing can be given to a `never`, so nothing passes as this type by
+    // accident — and an emptied brand is a `{}` every object matches.
+    expect(reportedIn('nominal-brand.ts')).toEqual(['deadCrust']);
+  });
+
   it('one arm of a union keeps the placeholder that excludes the arm beside it', () => {
     // A guard narrows to one arm and the read lands there, so the `undefined`
     // twin in the other arm collects nothing — and dropping it would let a

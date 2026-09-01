@@ -74,6 +74,7 @@ function constrainOverride(member: Node, name: string, heritage: Type[], index: 
 
 /** Every node kind the merged walk below dispatches on: one pass finds them all. */
 const WALKED_KINDS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.NeverKeyword,
   SyntaxKind.TypePredicate,
   SyntaxKind.UnionType,
   SyntaxKind.ConditionalType,
@@ -104,6 +105,10 @@ const WALKED_KINDS: ReadonlySet<SyntaxKind> = new Set([
  */
 function collectWalkConstraints(sourceFile: SourceFile, index: ConstraintIndex): void {
   forEachDescendantOfKinds(sourceFile, WALKED_KINDS, node => {
+    if (node.isKind(SyntaxKind.NeverKeyword)) {
+      creditBrand(node, index);
+      return;
+    }
     if (node.isKind(SyntaxKind.TypePredicate)) {
       const asserted = node.getTypeNode();
       const narrowed = predicateParameterType(node);
@@ -119,6 +124,7 @@ function collectWalkConstraints(sourceFile: SourceFile, index: ConstraintIndex):
     }
     if (node.isKind(SyntaxKind.ConditionalType)) {
       matchStructurally(node.getCheckType(), node.getExtendsType(), index);
+      creditPattern(node.getExtendsType(), index);
       return;
     }
     if (node.isKind(SyntaxKind.TypeReference)) {
@@ -191,6 +197,58 @@ function creditUnionOverlap(typeNodes: Node[], index: ConstraintIndex): void {
       for (const owner of arm.owners) record(owner, name, index);
     }
   }
+}
+
+/**
+ * A member declared `never`: the mark that makes a type nominal.
+ *
+ * ```ts
+ * interface NonExhaustiveError<i> { __nonExhaustive: never; }
+ * ```
+ *
+ * No value can be given to a `never`, so no plain object can be one of these,
+ * and that is the whole reason the line is written. Nothing reads it — a read
+ * yields `never` — and deleting it leaves `{}`, which every object matches. So
+ * the member is the mechanism: it holds up a relation the way an `extends`
+ * clause does, and no reference will ever show it.
+ */
+function creditBrand(keyword: Node, index: ConstraintIndex): void {
+  const member = keyword.getParent();
+  if (!member?.isKind(SyntaxKind.PropertySignature) && !member?.isKind(SyntaxKind.PropertyDeclaration)) return;
+  // The keyword has to be the member's own type, not a piece of one: a
+  // `never[]` or a `T extends never ? …` says something else entirely.
+  if (member.getTypeNode() !== keyword) return;
+  const name = memberName(member) ?? member.getName();
+  const owner = member.getParent();
+  if (
+    owner?.isKind(SyntaxKind.InterfaceDeclaration) ||
+    owner?.isKind(SyntaxKind.TypeLiteral) ||
+    owner?.isKind(SyntaxKind.ClassDeclaration)
+  ) {
+    record(owner, name, index);
+  }
+}
+
+/**
+ * A shape written in a conditional's `extends` clause is a pattern, and every
+ * name in it is what the pattern matches on.
+ *
+ * ```ts
+ * type Portions<Raw, Cooked> = { raw: Raw; cooked: Cooked };
+ * type CookedOf<Box> = Box extends { portions: Portions<unknown, infer C> } ? C : never;
+ * ```
+ *
+ * `raw` and `cooked` are read on every compile — they are how the match finds
+ * `C` — and no reference search will ever show it. The rule above credits a
+ * name *written* in the clause; here the names sit one alias in, which is
+ * where a library keeps them. So every named shape inside the pattern has its
+ * own members credited, on its own declaration.
+ */
+function creditPattern(pattern: Node, index: ConstraintIndex): void {
+  for (const reference of pattern.getDescendantsOfKind(SyntaxKind.TypeReference)) {
+    creditEveryMember(reference.getType(), index);
+  }
+  if (pattern.isKind(SyntaxKind.TypeReference)) creditEveryMember(pattern.getType(), index);
 }
 
 /** A union arm written as a shape: a literal, a name that may stand for one, or either wrapped. */
