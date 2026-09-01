@@ -1,7 +1,9 @@
 import type {
   CallExpression,
+  ForOfStatement,
   Identifier,
   Node,
+  PropertyAccessExpression,
   PropertyAssignment,
   PropertyDeclaration,
   PropertySignature,
@@ -109,6 +111,130 @@ export function castValueStaysLocal(cast: Node): boolean {
 }
 
 /**
+ * The rules a value answers to once a read reaches it.
+ *
+ * An object is read one property at a time, so a read that goes deeper stays
+ * local. An array hands out elements, and each element is a shape of its own —
+ * so `rows.map(send)` reads nothing of the array and everything of the shape
+ * inside it. The two need different answers to the same question, and the read
+ * check takes whichever set fits the value it is following.
+ */
+interface ValueRules {
+  /** True when the value this expression yields keeps its shape local. */
+  accessStaysLocal(access: Node): boolean;
+  /** True when the value this binding holds keeps its shape local. */
+  bindingStaysLocal(name: Identifier): boolean;
+}
+
+const OBJECT_RULES: ValueRules = {
+  accessStaysLocal: accessValueStaysLocal,
+  bindingStaysLocal: valueUsesStayLocal,
+};
+
+/** The same question asked of an array: what happens to the elements. */
+export const ARRAY_RULES: ValueRules = {
+  accessStaysLocal: arrayAccessStaysLocal,
+  bindingStaysLocal: arrayUsesStayLocal,
+};
+
+/**
+ * Array methods that hand each element to a callback and keep none of them in
+ * what they return. The callback's first parameter is the element, and a
+ * parameter that stays local cannot carry one out — so `rows.map(r => r.id)`
+ * yields numbers, never rows.
+ */
+const ELEMENT_CALLBACK_METHODS = new Set(['forEach', 'map', 'flatMap', 'some', 'every', 'findIndex', 'findLastIndex']);
+
+/** Methods that hand back an array of the same elements: the result faces the question the array did. */
+const ELEMENT_ARRAY_METHODS = new Set(['filter']);
+
+/** Methods that hand back one element: the result is read as the object it is. */
+const ELEMENT_VALUE_METHODS = new Set(['find', 'findLast']);
+
+/**
+ * True when this array expression keeps its elements local: every element it
+ * hands out is read one property at a time, and none of them leaves.
+ *
+ * Reading `.length` touches no element. Iterating binds one at a time, and
+ * indexing names one without naming a member of it. Everything else —
+ * `save(rows)`, `[...rows]`, `rows.sort()`, `rows.map(send)` — carries an
+ * element somewhere a reference search cannot follow, and a member of that
+ * shape could then be read with nothing to show for it.
+ */
+function arrayAccessStaysLocal(value: Node): boolean {
+  const use = climbWrappers(value);
+  const parent = use.getParent();
+  if (!parent) return true;
+  if (parent.isKind(SyntaxKind.ExpressionStatement)) return true;
+  if (parent.isKind(SyntaxKind.ForOfStatement) && parent.getExpression() === use) {
+    return forOfBindingStaysLocal(parent);
+  }
+  // `rows[0]` names an element. What happens to it is the object question.
+  if (parent.isKind(SyntaxKind.ElementAccessExpression) && parent.getExpression() === use) {
+    return accessValueStaysLocal(parent);
+  }
+  if (parent.isKind(SyntaxKind.PropertyAccessExpression) && parent.getExpression() === use) {
+    return arrayMemberStaysLocal(parent);
+  }
+  if (parent.isKind(SyntaxKind.VariableDeclaration)) {
+    const name = parent.getNameNode();
+    // `const [first] = rows` binds an element through a pattern this check
+    // does not follow, so the array is left untracked rather than guessed at.
+    return name.isKind(SyntaxKind.Identifier) && arrayUsesStayLocal(name);
+  }
+  return false;
+}
+
+/** True when every use of this array binding keeps the elements local. */
+function arrayUsesStayLocal(name: Identifier): boolean {
+  for (const ref of findReferencesAsNodes(name)) {
+    const parent = ref.getParent();
+    if (!parent) continue;
+    if (isAliasDeclarationParent(parent)) continue;
+    if (!arrayAccessStaysLocal(ref)) return false;
+  }
+  return true;
+}
+
+/** True when reaching this member of an array keeps the elements local. */
+function arrayMemberStaysLocal(access: PropertyAccessExpression): boolean {
+  const name = access.getName();
+  if (name === 'length') return true;
+  const call = access.getParentIfKind(SyntaxKind.CallExpression);
+  if (!call || call.getExpression() !== access) return false;
+  const yieldsArray = ELEMENT_ARRAY_METHODS.has(name);
+  const yieldsElement = ELEMENT_VALUE_METHODS.has(name);
+  if (!ELEMENT_CALLBACK_METHODS.has(name) && !yieldsArray && !yieldsElement) return false;
+
+  // A callback written elsewhere takes the element into a body this check
+  // would have to follow. Only one written here answers for what it is given.
+  const callback = call.getArguments()[0];
+  if (!callback?.isKind(SyntaxKind.ArrowFunction) && !callback?.isKind(SyntaxKind.FunctionExpression)) return false;
+  const element = callback.getParameters()[0];
+  const elementName = element?.getNameNode();
+  // A destructured parameter reads the element property by property, which is
+  // the reference the search is looking for. A callback that ignores the
+  // element reads nothing of it at all.
+  if (elementName?.isKind(SyntaxKind.Identifier) && !valueUsesStayLocal(elementName)) return false;
+
+  if (yieldsArray) return arrayAccessStaysLocal(call);
+  if (yieldsElement) return accessValueStaysLocal(call);
+  // A callback method keeps no element in its result: the parameter that
+  // stayed local could not carry one out.
+  return true;
+}
+
+/** True when the binding a `for…of` fills keeps each element local. */
+function forOfBindingStaysLocal(statement: ForOfStatement): boolean {
+  const initializer = statement.getInitializer();
+  if (!initializer.isKind(SyntaxKind.VariableDeclarationList)) return false;
+  return initializer.getDeclarations().every(declaration => {
+    const name = declaration.getNameNode();
+    return !name.isKind(SyntaxKind.Identifier) || valueUsesStayLocal(name);
+  });
+}
+
+/**
  * True when something reads this property and every read keeps the value
  * local. A read that flows onward as a whole — assigned into a
  * differently-typed object, passed along as an argument — carries the
@@ -124,7 +250,10 @@ export function castValueStaysLocal(cast: Node): boolean {
  * finding — and reporting the members under it would say one death twice and
  * hand `--fix` two edits for one deletion.
  */
-export function propertyReadsStayLocal(member: PropertySignature | PropertyDeclaration | PropertyAssignment): boolean {
+export function propertyReadsStayLocal(
+  member: PropertySignature | PropertyDeclaration | PropertyAssignment,
+  rules: ValueRules = OBJECT_RULES
+): boolean {
   let read = false;
   for (const ref of findReferencesAsNodes(member.getNameNode())) {
     const parent = ref.getParent();
@@ -139,14 +268,14 @@ export function propertyReadsStayLocal(member: PropertySignature | PropertyDecla
       continue;
     }
     if (parent.isKind(SyntaxKind.PropertyAccessExpression) && parent.getNameNode() === ref) {
-      if (!accessValueStaysLocal(parent)) return false;
+      if (!rules.accessStaysLocal(parent)) return false;
       read = true;
       continue;
     }
     // `v['outer']` names the property as plainly as `v.outer` does, and the
     // index resolves the string literal to it.
     if (parent.isKind(SyntaxKind.ElementAccessExpression) && parent.getArgumentExpression() === ref) {
-      if (!accessValueStaysLocal(parent)) return false;
+      if (!rules.accessStaysLocal(parent)) return false;
       read = true;
       continue;
     }
@@ -155,7 +284,7 @@ export function propertyReadsStayLocal(member: PropertySignature | PropertyDecla
     // further never lets the value out at all.
     if (parent.isKind(SyntaxKind.BindingElement)) {
       const name = parent.getNameNode();
-      if (name.isKind(SyntaxKind.Identifier) && !valueUsesStayLocal(name)) return false;
+      if (name.isKind(SyntaxKind.Identifier) && !rules.bindingStaysLocal(name)) return false;
       read = true;
       continue;
     }

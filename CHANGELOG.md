@@ -9,6 +9,20 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**Nesting goes through an array of literals.** `{ cards: [{ title, deadNote },
+{ title, deadNote }] }` reported nothing before: nesting followed a single
+literal only, so every member of every element was invisible. A property now
+holds one shape per element, and the elements answer together — the checker
+keeps one declaration per name across identical shapes, so a name any element
+holds a read on is alive on all of them, and a name none of them holds is dead
+on each. Reads count through a callback written on the spot (`map`, `forEach`,
+`filter`, `find` and their kin), a `for…of` binding, an index, or `.length`. An
+element that leaves — `cards.map(send)`, `save(cards)`, `[...cards]`,
+`cards.sort()` — takes the whole array's answer with it, because an element is
+the shape in question and no reference search follows it out. Sibling elements
+writing the same key are no longer read as writes of each other, which was
+softening a proven `dead` verdict into a hedged name match.
+
 **A property whose shape empties is one finding, and `--fix` leaves it.** A
 shape written inline on a property — `{ labels: { deadColor, deadFont } }`,
 as a value or as a type — has no declaration to answer for it. Losing every

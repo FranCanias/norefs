@@ -10,7 +10,7 @@ import type {
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { collectCandidates } from '../collectors';
-import { selfShapedLiteral, writtenProperty } from '../collectors/object-literals';
+import { shapesHeldBy, writtenProperty } from '../collectors/object-literals';
 import type { FunctionLike } from '../collectors/returned-objects';
 import { producerOf, returnedObjectLiterals } from '../collectors/returned-objects';
 import { describeFunctionName } from '../describe';
@@ -289,7 +289,9 @@ function emptyPropertyFindings(reportedMembers: ReadonlyMap<Node, MemberFinding>
       // An inline shape is as nameless as the members inside it, so `--anon`
       // must hide the fold wherever it hid them.
       anonymous: reportedMembers.get(first)?.anonymous ?? false,
-      swallowed: members.length,
+      // What the shape offers, not how many lines write it. Sibling elements
+      // of an array writing one key offer one member between them.
+      swallowed: new Set(members.map(member => reportedMembers.get(member)?.name)).size,
       members,
     });
   }
@@ -307,9 +309,10 @@ function holdingProperty(member: Node): ShapeHolder | undefined {
   const shape = member.getParent();
   if (shape?.isKind(SyntaxKind.ObjectLiteralExpression)) {
     const property = enclosingProperty(shape);
-    // The same literal the collector descended into, `as const` and
-    // parentheses aside. A cast to a named type hands the shape to that type.
-    return property && selfShapedLiteral(property.getInitializer()) === shape ? property : undefined;
+    // One of the same shapes the collector descended into — `as const`,
+    // parentheses and the array brackets aside. A cast to a named type hands
+    // the shape to that type, and the type collectors report it there.
+    return property && shapesHeldBy(property)?.literals.includes(shape) ? property : undefined;
   }
   if (shape?.isKind(SyntaxKind.TypeLiteral)) {
     const parent = shape.getParent();
@@ -321,13 +324,21 @@ function holdingProperty(member: Node): ShapeHolder | undefined {
   return undefined;
 }
 
-/** The property assignment this literal is the value of, past the wrappers a value may wear. */
+/**
+ * The property assignment this literal is the value of, past the wrappers a
+ * value may wear — and past the array brackets, where the property holds one
+ * shape per element and they empty together or not at all.
+ */
 function enclosingProperty(literal: ObjectLiteralExpression): PropertyAssignment | undefined {
   let current: Node = literal;
   while (true) {
     const parent = current.getParent();
     if (parent?.isKind(SyntaxKind.PropertyAssignment)) return parent;
-    if (parent?.isKind(SyntaxKind.ParenthesizedExpression) || parent?.isKind(SyntaxKind.AsExpression)) {
+    if (
+      parent?.isKind(SyntaxKind.ParenthesizedExpression) ||
+      parent?.isKind(SyntaxKind.AsExpression) ||
+      parent?.isKind(SyntaxKind.ArrayLiteralExpression)
+    ) {
       current = parent;
       continue;
     }
@@ -342,7 +353,7 @@ function enclosingProperty(literal: ObjectLiteralExpression): PropertyAssignment
  */
 function heldShapeMembers(holder: ShapeHolder): Node[] {
   if (holder.isKind(SyntaxKind.PropertyAssignment)) {
-    return selfShapedLiteral(holder.getInitializer())?.getProperties() ?? [];
+    return shapesHeldBy(holder)?.literals.flatMap(literal => literal.getProperties()) ?? [];
   }
   const typeNode = holder.getTypeNode();
   return typeNode?.isKind(SyntaxKind.TypeLiteral) ? typeNode.getMembers() : [];

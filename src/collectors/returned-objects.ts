@@ -8,10 +8,9 @@ import type {
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { describeFunctionName } from '../describe';
-import { findReferencesAsNodes } from '../lookup/references';
 import type { Candidate, CollectContext } from './candidate';
 import { callableEscapes, getCallableNameNode } from './escape';
-import { collectLiteralMembers, writtenProperty } from './object-literals';
+import { collectLiteralMembers, namesReadElsewhere } from './object-literals';
 
 export type FunctionLike = FunctionDeclaration | ArrowFunction | FunctionExpression;
 
@@ -36,37 +35,6 @@ export function collectReturnedObjectCandidates(sourceFile: SourceFile, ctx: Col
     }
   }
   return candidates;
-}
-
-/**
- * Names another returned literal already answers for.
- *
- * Two branches returning the same shape are one type by the time the checker
- * is done with them, so every read of a shared name lands on the single
- * declaration it kept. The others hold zero references and are alive all the
- * same. A name more than one literal writes is therefore reported only when
- * every one of those declarations is unread, and this is the set where that
- * does not hold.
- */
-function namesReadElsewhere(literals: ObjectLiteralExpression[]): Set<string> | undefined {
-  if (literals.length < 2) return undefined;
-  const declared = new Map<string, Node[]>();
-  for (const literal of literals) {
-    for (const property of literal.getProperties()) {
-      const written = writtenProperty(property);
-      if (!written) continue;
-      const nodes = declared.get(written.key);
-      if (nodes) nodes.push(written.nameNode);
-      else declared.set(written.key, [written.nameNode]);
-    }
-  }
-
-  const read = new Set<string>();
-  for (const [name, nameNodes] of declared) {
-    if (nameNodes.length < 2) continue;
-    if (nameNodes.some(nameNode => findReferencesAsNodes(nameNode).length > 0)) read.add(name);
-  }
-  return read.size > 0 ? read : undefined;
 }
 
 /** The function whose body writes this literal, ignoring the callables nested in between. */

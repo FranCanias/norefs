@@ -1,6 +1,14 @@
-import type { InterfaceDeclaration, Node, Project, SourceFile, TypeAliasDeclaration, TypeNode } from 'ts-morph';
+import type {
+  InterfaceDeclaration,
+  Node,
+  ObjectLiteralExpression,
+  Project,
+  SourceFile,
+  TypeAliasDeclaration,
+  TypeNode,
+} from 'ts-morph';
 import { SyntaxKind, ts } from 'ts-morph';
-import { writtenProperty } from '../collectors/object-literals';
+import { arraySiblingShapes, writtenProperty } from '../collectors/object-literals';
 import { producerOf, returnedObjectLiterals } from '../collectors/returned-objects';
 import { descendantsOfKind } from '../lookup/descendants';
 import { isWriteReference, referenceIndex } from '../lookup/reference-index';
@@ -85,9 +93,9 @@ export function assignVerdicts(
     }
     const nameNode = (finding.node as Node & { getNameNode(): Node }).getNameNode();
     const found = index.unattributedWriteSites(finding.name, nameNode);
-    // A branch writing the same key is this member, not a name that matches
-    // it, so it is dropped before it can become anyone's evidence.
-    const siblings = siblingBranchWrites(finding.node, finding.name);
+    // A shape beside this one writing the same key is this member, not a
+    // name that matches it, so it is dropped before it can become evidence.
+    const siblings = siblingShapeWrites(finding.node, finding.name);
     const attributable = (site: Node): boolean => alive(site) && !siblings.has(site.compilerNode);
     const sites = {
       typed: found.typed.filter(attributable),
@@ -119,29 +127,38 @@ export function assignVerdicts(
 const NO_SIBLINGS: ReadonlySet<ts.Node> = new Set();
 
 /**
- * The other branches of one `return` that write this same key.
+ * The shapes beside this member's own that write the same key.
  *
  * A function with several `return` statements hands back one shape per branch,
- * so a key written in more than one of them is a single property written more
- * than once. Reading a sibling as an unverified name match would soften a
- * verdict on the strength of the member itself.
+ * and an array literal holds one per element. A key written in more than one
+ * of them is a single property written more than once. Reading a sibling as an
+ * unverified name match would soften a verdict on the strength of the member
+ * itself.
  */
-function siblingBranchWrites(member: Node, name: string): ReadonlySet<ts.Node> {
+function siblingShapeWrites(member: Node, name: string): ReadonlySet<ts.Node> {
   const literal = member.getParent();
   if (!literal?.isKind(SyntaxKind.ObjectLiteralExpression)) return NO_SIBLINGS;
-  const producer = producerOf(literal);
-  const branches = producer ? returnedObjectLiterals(producer) : [];
-  if (branches.length < 2 || !branches.includes(literal)) return NO_SIBLINGS;
+  const shapes = siblingShapes(literal);
+  if (shapes.length < 2) return NO_SIBLINGS;
 
   const siblings = new Set<ts.Node>();
-  for (const branch of branches) {
-    if (branch === literal) continue;
-    for (const property of branch.getProperties()) {
+  for (const shape of shapes) {
+    if (shape === literal) continue;
+    for (const property of shape.getProperties()) {
       const written = writtenProperty(property);
       if (written?.key === name) siblings.add(written.nameNode.compilerNode);
     }
   }
   return siblings;
+}
+
+/** The shapes this literal answers alongside: the elements of one array, or the branches of one return. */
+function siblingShapes(literal: ObjectLiteralExpression): ObjectLiteralExpression[] {
+  const elements = arraySiblingShapes(literal);
+  if (elements.length > 0) return elements;
+  const producer = producerOf(literal);
+  const branches = producer ? returnedObjectLiterals(producer) : [];
+  return branches.includes(literal) ? branches : [];
 }
 
 /**

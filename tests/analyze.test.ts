@@ -136,6 +136,17 @@ describe('dynamic-consumption guards (stay silent rather than guess)', () => {
     expect(reportedIn('local-property.ts')).toEqual(['deadOption']);
   });
 
+  it('an array of literals is one shape per element, and they answer together', () => {
+    // `deadNote` is unread on both cards, so both declarations are reported.
+    // `title` and `servings` are read on one declaration each — the one the
+    // checker kept — and that read keeps them alive on every element.
+    expect(reportedIn('array-nested.ts')).toEqual(['deadNote', 'deadNote']);
+  });
+
+  it('an array whose elements escape reports nothing', () => {
+    expect(reportedIn('array-nested-escapes.ts')).toEqual([]);
+  });
+
   it('suppression cascades into literals nested in a keyof-targeted alias', () => {
     expect(reportedIn('nested-command-map.ts')).toEqual([]);
   });
