@@ -176,7 +176,12 @@ function emptyReturnedObjectFindings(reportedMembers: ReadonlyMap<Node, MemberFi
     const anchor = literals[0];
     if (!anchor) continue;
     const properties = literals.flatMap(literal => literal.getProperties());
-    if (properties.length === 0 || !properties.every(property => reportedMembers.has(property))) continue;
+    // A key is reported once however many branches write it, so the fold asks
+    // about keys: every property of every branch has to answer to one.
+    const dead = new Set(
+      properties.filter(property => reportedMembers.has(property)).map(property => writtenProperty(property)?.key)
+    );
+    if (properties.length === 0 || !properties.every(property => dead.has(writtenProperty(property)?.key))) continue;
     const described = describeFunctionName(fn);
     if (described.anonymous) continue;
     const sourceFile = anchor.getSourceFile();

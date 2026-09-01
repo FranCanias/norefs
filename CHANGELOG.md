@@ -58,6 +58,13 @@ callers to read is a whole idiom shaped like that, and every member of it came
 back `write-only` — three of neverthrow's four member findings were this one
 shape. `throw` now joins the sinks a value can disappear into.
 
+**One dead key of a two-branch return is one finding.** `if (ok) return {
+plate, crumbs }; return { plate, crumbs }` reported `crumbs` twice, once per
+line that writes it. That is two edits and a single fact, and the count is
+what a reader sees first. It is reported on the branch that writes it first,
+and `--fix` comes back for the other copy on its own pass — one command still
+clears both.
+
 **Public API is closed over the types it names.** The exemption stopped at
 the declarations an entry file exports, and a consumer does not stop there.
 ts-pattern's entry exports `match()`, whose return type is a `Match`

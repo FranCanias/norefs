@@ -18,7 +18,7 @@ The test suite verifies that the reference check resolves all of these — none 
 - reads through a spread copy of a class instance resolve back to the class members
 - a read one level in — `cfg.outer.inner`, `cfg['outer'].inner`, or `const { outer } = cfg` followed by `outer.inner` — counts on the nested literal, not on the object around it
 - a read of an array element — `cfg.rows[0].id`, `cfg.rows.map(r => r.id)`, `for (const r of cfg.rows)`, `cfg.rows.filter(…).map(…)` — counts on the element literals, and a name any one of them holds a read on is alive on all of them. An array bound at the top level (`const rows = [ … ]`) is read the same way
-- a key written by more than one `return` of the same function counts on all of them: two branches of one shape collapse to a single set of declarations, and the branch the checker dropped is alive on the reads the other one holds
+- a key written by more than one `return` of the same function counts on all of them: two branches of one shape collapse to a single set of declarations, and the branch the checker dropped is alive on the reads the other one holds. When no branch reads it, the death is told once, on the branch that writes it first — the copies are two edits and one fact, and `--fix` comes back for the next copy on its own
 
 ## When norefs stays silent
 

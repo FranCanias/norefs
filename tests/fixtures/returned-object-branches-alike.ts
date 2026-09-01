@@ -2,7 +2,8 @@
  * Two branches, one shape. TypeScript keeps a single set of declarations for
  * it, so every read of `mesh` lands on the first branch and the second holds
  * no references at all. Both are alive, and only the key neither branch reads
- * is reported — once for each line that writes it.
+ * is reported — once, on the branch that writes it first. Removing that copy
+ * leaves the second one to report itself on the next pass.
  */
 function pickSieve(fine: boolean) {
   if (fine) {

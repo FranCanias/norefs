@@ -30,8 +30,18 @@ export function collectReturnedObjectCandidates(sourceFile: SourceFile, ctx: Col
         ? `the return value of ${described.label}`
         : `the \`${path.join('.')}\` object returned by ${described.label}`;
     const answered = namesReadElsewhere(literals);
+    // One death, told once. Two branches writing the same key are two edits
+    // and a single fact, and a reader counts findings before reading them.
+    // The fix loop re-analyzes after each pass, so the second copy is offered
+    // as soon as the first one goes.
+    const told = new Set<string>();
     for (const literal of literals) {
-      candidates.push(...collectLiteralMembers(literal, ctx, described.anonymous, label, answered));
+      for (const candidate of collectLiteralMembers(literal, ctx, described.anonymous, label, answered)) {
+        const key = `${candidate.context}\u0000${candidate.member.getName()}`;
+        if (told.has(key)) continue;
+        told.add(key);
+        candidates.push(candidate);
+      }
     }
   }
   return candidates;

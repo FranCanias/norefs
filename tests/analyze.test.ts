@@ -422,7 +422,11 @@ describe('objects returned from several branches', () => {
     // Two branches of one shape collapse to a single set of declarations, so
     // every read of `mesh` lands on the first branch and the second holds no
     // references at all. Reporting it would be a false positive.
-    expect(reportedIn('returned-object-branches-alike.ts')).toEqual(['deadGauge', 'deadGauge']);
+    //
+    // `deadGauge` is one death on two lines, and it is told once — on the
+    // branch that writes it first, which is the line a reader edits before
+    // the other.
+    expect(reportedIn('returned-object-branches-alike.ts')).toEqual(['deadGauge']);
   });
 
   it('calls the sibling write the member, not a name that matches it', () => {
