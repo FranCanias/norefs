@@ -428,9 +428,16 @@ describe('members reached by a key the source computes', () => {
   it('credits the keys the type pins down, and no more', () => {
     // `'jams' | 'pickles'` reaches exactly two members. They are used; the rest
     // of the shelf still answers for itself.
-    expect(reportedIn('computed-key.ts')).toEqual(['deadChutneys']);
+    expect(reportedIn('computed-key.ts')).toEqual(['deadChutneys', 'lids', 'straps']);
     // And the type does not fold: two of its three members are alive.
     expect(findings.some(f => f.kind === 'empty-type' && f.name === 'ShelfIndex')).toBe(false);
+  });
+
+  it('calls a key that fills the member in a write', () => {
+    // `counts[slot] = 1` names `lids` and `straps` as surely as writing them
+    // out would, and nothing reads either back.
+    expect(verdictIn('computed-key.ts', 'lids')).toBe('write-only');
+    expect(verdictIn('computed-key.ts', 'straps')).toBe('write-only');
   });
 });
 

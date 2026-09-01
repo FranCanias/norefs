@@ -823,3 +823,71 @@ describe('a destructuring assignment', () => {
     expect(isFixable(member as Finding, true)).toBe(false);
   });
 });
+
+describe('a member a computed key only writes', () => {
+  /** A shelf whose slots are filled by name, and read only one of them back. */
+  function shelf(...lines: string[]): Finding[] {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      [
+        'interface Shelf {',
+        '  jars: number;',
+        '  tins?: number;',
+        '}',
+        "type Slot = 'jars' | 'tins';",
+        ...lines,
+        '',
+      ].join('\n')
+    );
+    return analyze(project);
+  }
+
+  it('reports it, and names the write', () => {
+    const findings = shelf('export function fill(s: Shelf, slot: Slot, n: number): void {', '  s[slot] = n;', '}');
+
+    for (const name of ['jars', 'tins']) {
+      const member = verdictOf(findings, name);
+      expect(member?.verdict, name).toBe('write-only');
+      expect(member?.evidence, name).toContain('names this member, and nothing reads it');
+      // The key can stand for either member, so no single edit retires it.
+      expect(isFixable(member as Finding, true), name).toBe(false);
+    }
+  });
+
+  it('leaves the member a read reaches through some other name', () => {
+    const findings = shelf(
+      'export function fill(s: Shelf, slot: Slot): number {',
+      '  s[slot] = 1;',
+      '  return s.jars;',
+      '}'
+    );
+    expect(verdictOf(findings, 'jars')).toBeUndefined();
+    expect(verdictOf(findings, 'tins')?.verdict).toBe('write-only');
+  });
+
+  it('says nothing at all when the key reads', () => {
+    const findings = shelf('export function count(s: Shelf, slot: Slot): number {', '  return s[slot] ?? 0;', '}');
+    expect(findings).toEqual([]);
+  });
+
+  it('counts an update whose value goes nowhere as a write', () => {
+    const findings = shelf(
+      'export function bump(s: Shelf, slot: Slot): void {',
+      '  s[slot] = (s[slot] ?? 0) + 1;',
+      '}'
+    );
+    // The right-hand side reads the member back, so this one is used.
+    expect(findings).toEqual([]);
+  });
+
+  it('calls a `delete` through a computed key what it is', () => {
+    const findings = shelf(
+      "export function strip(s: Shelf, slot: 'tins'): number {",
+      '  delete s[slot];',
+      '  return s.jars;',
+      '}'
+    );
+    expect(verdictOf(findings, 'tins')?.evidence).toContain('the `delete` at');
+  });
+});

@@ -1,4 +1,4 @@
-import type { Node } from 'ts-morph';
+import type { Node, Type } from 'ts-morph';
 import { referenceIndex } from './reference-index';
 
 /**
@@ -23,4 +23,17 @@ export function findReferencesAsNodes(target: Node): Node[] {
  */
 export function findDefaultExportReferences(declaration: Node): Node[] {
   return referenceIndex(declaration.getProject()).findDefaultExport(declaration);
+}
+
+/**
+ * Credit a computed key with the members its key type names, so later queries
+ * find the site the way they find any other reference.
+ *
+ * The index cannot work this out on its own: the site spells a variable, and
+ * only the checker knows which members that variable stands for. The dynamic
+ * pass types those keys already, and this is where it says so — before any
+ * member query, while that pass is still walking.
+ */
+export function fileComputedKey(site: Node, target: Type, names: string[]): void {
+  referenceIndex(site.getProject()).fileComputedKey(site, target, names);
 }

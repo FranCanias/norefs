@@ -9,6 +9,16 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A key the source computes can write, not only read.** `shelf[slot] = 4`
+used to mark every member `slot` can name as used, exactly as `shelf[slot]`
+does — so a member the code only ever assigns through a computed key was
+invisible. The key's type already says which members it reaches, and now the
+site is filed as a reference to each of them, which leaves the ordinary
+read-or-write rules to sort it out: a member nothing reads back earns
+`write-only`, one that a read reaches under any name stays where it was, and
+`delete shelf[slot]` is called a `delete`. `--fix` reports and stops — the key
+stands for more than one member, so no single edit retires the write.
+
 **A default export with no name is checked like any other.** `export default
 { … }`, `export default class { … }`, an arrow, a bare value — none of them
 were ever reported, because the export check searches for an identifier and

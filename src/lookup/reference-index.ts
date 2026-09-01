@@ -1,4 +1,4 @@
-import type { Node, Project, SourceFile } from 'ts-morph';
+import type { Node, Project, SourceFile, Type } from 'ts-morph';
 import { ts } from 'ts-morph';
 
 /**
@@ -158,6 +158,25 @@ class ReferenceIndex {
     const compilerNode = declaration.compilerNode as ts.Node & { symbol?: ts.Symbol };
     const symbol = compilerNode.symbol;
     return symbol ? this.referencesTo(symbol, symbol.name, compilerNode) : [];
+  }
+
+  /**
+   * File a computed key under the members its key type names.
+   *
+   * `shelf[slot]` names a member without writing it down, and only the
+   * checker can say which: the key's type has to be read, and the site's own
+   * text — `slot` — says nothing. The lazy walk cannot reach that, so the
+   * pass that types those keys hands the answer here instead.
+   *
+   * Filed like any other occurrence, so the site reads or writes by the same
+   * rules everything else does: `shelf[slot]` reads the member it names, and
+   * `shelf[slot] = 4` fills it in. Called while that pass walks the project,
+   * which is before the first member query.
+   */
+  fileComputedKey(site: Node, target: Type, names: string[]): void {
+    for (const name of names) {
+      for (const symbol of this.propertiesOf(target.compilerType, name)) this.fileUnder(symbol, site.compilerNode);
+    }
   }
 
   private referencesTo(symbol: ts.Symbol, text: string, itself: ts.Node): Node[] {
@@ -1254,6 +1273,16 @@ export function isWriteReference(reference: Node): boolean {
 /** True when this reference consumes the member: a property access, an index, a destructuring. */
 export function isReadReference(reference: Node): boolean {
   return isReadOccurrence(reference.compilerNode);
+}
+
+/**
+ * True when an access fills its member in rather than reading it back:
+ * `shelf[slot] = 4`, `delete shelf[slot]`, `shelf[slot] += 1`. The question
+ * `isInPlaceWrite` asks of a name, asked of an access whose key is computed.
+ */
+export function isWriteAccess(access: Node): boolean {
+  const argument = (access.compilerNode as ts.ElementAccessExpression).argumentExpression;
+  return argument !== undefined && isInPlaceWrite(argument);
 }
 
 /**

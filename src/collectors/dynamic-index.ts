@@ -12,7 +12,8 @@ import type {
 } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
 import { forEachDescendantOfKinds } from '../lookup/descendants';
-import { findReferencesAsNodes } from '../lookup/references';
+import { isWriteAccess } from '../lookup/reference-index';
+import { fileComputedKey, findReferencesAsNodes } from '../lookup/references';
 import { callTo, getCallableNameNode } from './escape';
 
 /**
@@ -113,8 +114,16 @@ function indexedByKey(
     consumed(access.getExpression(), suppressed, relaying);
     return;
   }
-  const readType = access.getExpression().getType();
-  for (const name of names) addProbe(readType, name, probed);
+  const target = access.getExpression().getType();
+  // A key that fills the member in is a write, and reading it as a read would
+  // hide a member the code only ever assigns. The site names its members as
+  // surely as a written-out key does, so it is filed as one of them and the
+  // ordinary read-or-write rules take it from there.
+  if (isWriteAccess(access)) {
+    fileComputedKey(argument, target, names);
+    return;
+  }
+  for (const name of names) addProbe(target, name, probed);
 }
 
 /**
