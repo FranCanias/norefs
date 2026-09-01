@@ -9,6 +9,14 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A run says when its tsconfig makes the answer meaningless.** Two shapes used
+to end in a cheerful `No unused code found.` that nobody should believe. A
+solution-style config — `"files": []` beside `"references"` — holds no files
+at all, and now names the configs to point norefs at instead. A config whose
+`extends` target is not installed loses every option it meant to inherit, so
+`outDir` never resolves and every file in the project reads as dead; that says
+so too, before the run.
+
 **Two more ways a package is named without an import.** A script that runs a
 binary by its path (`node ./node_modules/.bin/tsd`) names the package that
 owns it, and so does the config a tsconfig `extends`.

@@ -7,7 +7,7 @@ import type { Project } from 'ts-morph';
 import { applyBaseline, writeBaseline } from './baseline';
 import { CONFIG_FILE, initConfig, loadConfig } from './config';
 import { analyze, needsMembers } from './engine/analyze';
-import { findUnresolvedImports } from './engine/diagnostics';
+import { findConfigProblems, findUnresolvedImports } from './engine/diagnostics';
 import { runFixCampaign } from './engine/fix-campaign';
 import { loadPackages, loadProject, optionsForDir } from './engine/project';
 import { formatGitHub, formatJson, formatMarkdown, formatSarif, formatText } from './engine/report';
@@ -225,6 +225,11 @@ export function createSession(values: CliValues, cwd: string): Session {
         ? '\nPass one with --project, or run norefs from a directory that has a tsconfig.json.'
         : '';
     throw new CliError(`no tsconfig at ${named}${hint}`);
+  }
+  // A config that holds no files, or one whose `extends` target is missing,
+  // makes every answer below meaningless — and both report as a clean run.
+  for (const problem of findConfigProblems(tsConfigPaths)) {
+    process.stderr.write(`warning: ${problem}\n\n`);
   }
   const packages = loadPackages(tsConfigPaths);
 
