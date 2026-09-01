@@ -140,17 +140,47 @@ function collectWalkConstraints(sourceFile: SourceFile, index: ConstraintIndex):
 function creditConstraints(args: Node[], target: Node, index: ConstraintIndex): void {
   if (args.length === 0) return;
   const parameters = typeParametersOf(target);
+  const parameterNames = new Set(parameters.map(parameter => parameter.getName()));
   for (const [i, parameter] of parameters.entries()) {
     const arg = args[i];
     if (!arg) break;
     const constraint = parameter.getConstraint();
-    if (constraint) creditLiterals(constraint, arg.getType(), index);
+    if (!constraint) continue;
+    creditLiterals(constraint, arg.getType(), index);
+    if (mentionsTypeParameter(constraint, parameterNames)) creditEveryMember(arg.getType(), index);
   }
 }
 
-/** The one thing this file needs from a type parameter, across every kind of declaration that has them. */
+/**
+ * A constraint written in terms of another type parameter —
+ * `Defaults extends Omit<Required<Options>, RequiredKeysOf<Options>>` — is a
+ * shape only instantiation settles. It plainly requires members, and which
+ * ones is not written anywhere this can read, so every member of the argument
+ * counts as required.
+ *
+ * Guessing the other way would report a name the compiler checks on every
+ * build. This is the bargain the whole file strikes: over-marking costs a
+ * finding, and calling load-bearing code dead costs a build.
+ */
+function creditEveryMember(against: Type, index: ConstraintIndex): void {
+  const owners = new Set<Node>();
+  collectOwners(against, owners, 0);
+  if (owners.size === 0) return;
+  for (const symbol of against.getProperties()) {
+    for (const owner of owners) record(owner, symbol.getName(), index);
+  }
+}
+
+/** True when a constraint names one of the type parameters declared beside it. */
+function mentionsTypeParameter(constraint: Node, parameterNames: Set<string>): boolean {
+  const names = [constraint, ...constraint.getDescendantsOfKind(SyntaxKind.TypeReference)];
+  return names.some(node => node.isKind(SyntaxKind.TypeReference) && parameterNames.has(node.getTypeName().getText()));
+}
+
+/** The two things this file needs from a type parameter, across every kind of declaration that has them. */
 interface ConstrainedParameter {
   getConstraint(): Node | undefined;
+  getName(): string;
 }
 
 function typeParametersOf(target: Node): ConstrainedParameter[] {

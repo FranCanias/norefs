@@ -174,3 +174,29 @@ describe('an implementation a declaration file describes', () => {
     expect(named(findings)).toEqual([]);
   });
 });
+
+describe('a type argument under a constraint nothing here can read', () => {
+  it('keeps every member of the argument', () => {
+    // `Defaults extends Required<Spec>` is a shape only instantiation settles.
+    // It requires members, and which ones is written nowhere this can read —
+    // so reporting any of them would name what the compiler checks on every
+    // build.
+    const findings = analyzeFiles({
+      '/main.ts': [
+        'type Merge<Spec extends object, Defaults extends Required<Spec>, Given extends Spec> = {',
+        '  [K in keyof Spec]-?: K extends keyof Given ? Given[K] : Defaults[K];',
+        '};',
+        'type ShelfOptions = {',
+        '  strict?: boolean;',
+        '};',
+        'type DefaultShelfOptions = {',
+        '  strict: true;',
+        '};',
+        'export type Shelf = Merge<ShelfOptions, DefaultShelfOptions, ShelfOptions>;',
+        'export const strictly = (s: Shelf): boolean => s.strict;',
+        '',
+      ].join('\n'),
+    });
+    expect(named(findings)).toEqual([]);
+  });
+});

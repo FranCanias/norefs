@@ -20,6 +20,11 @@ instead of for itself. Every import resolves to the declaration, so the names
 in the file beside it could never collect a reference, and `--fix` was willing
 to delete a library's whole public API on the strength of it.
 
+**A type argument keeps its members under a constraint nothing can read.**
+`ApplyDefaultOptions<Options, Defaults, Given>`, where `Defaults extends
+Omit<Required<Options>, …>`, requires members the constraint never writes
+down. Reporting them named what the compiler checks on every build.
+
 **The project's own declaration files are source.** A `.d.ts` used to be
 skipped whole, so an exported type in `src/api.d.ts` that nothing imports was
 invisible, and so were its members. They are scanned now, on the same terms as
