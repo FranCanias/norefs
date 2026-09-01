@@ -12,7 +12,7 @@ import type {
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
 import { valueUsesStayLocal } from '../collectors/escape';
 import { descendantsOfKind } from '../lookup/descendants';
-import { findReferencesAsNodes } from '../lookup/references';
+import { findDefaultExportReferences, findReferencesAsNodes } from '../lookup/references';
 import type { Boundary, ExportFinding, Finding, TypeKeyword } from '../types';
 import type { DependencyUse } from './dependencies';
 import { analyzeDependencies } from './dependencies';
@@ -246,7 +246,14 @@ function publicApiDeclarations(sourceFiles: SourceFile[], rootDirs: string[], en
   for (const sourceFile of sourceFiles) {
     if (!isEntryFile(sourceFile.getFilePath(), rootDirs, entries)) continue;
     for (const declarations of sourceFile.getExportedDeclarations().values()) {
-      for (const decl of declarations) publicDecls.add(decl);
+      for (const decl of declarations) {
+        publicDecls.add(decl);
+        // `export default { … }` resolves to the value. The statement that
+        // exports it is what the default-export check holds, so it is public
+        // API on the same terms.
+        const holder = decl.getParent();
+        if (holder?.isKind(SyntaxKind.ExportAssignment)) publicDecls.add(holder);
+      }
     }
   }
   return publicDecls;
@@ -302,7 +309,7 @@ function collectExportFindings(
         // shipping code the tests alone keep alive.
         if (harnessFiles.has(sourceFile)) continue;
         findings.push({
-          ...makeFinding(kind, nameNode, namespaceAlias ?? '', false, typeKind),
+          ...makeFinding(kind, namedExport(nameNode), namespaceAlias ?? '', false, typeKind),
           verdict: 'test-only',
           evidence: 'only test files reference it',
         });
@@ -310,9 +317,56 @@ function collectExportFindings(
       }
 
       if (!locallyUsed) deadDecls.add(decl);
-      findings.push(makeFinding(kind, nameNode, namespaceAlias ?? '', !locallyUsed, typeKind));
+      findings.push(makeFinding(kind, namedExport(nameNode), namespaceAlias ?? '', !locallyUsed, typeKind));
     }
   }
+
+  collectDefaultExportFinding(sourceFile, namespaceAlias, findings, deadDecls, publicDecls, harnessFiles, production);
+}
+
+/**
+ * The one export the walk above cannot reach: a default export with no name.
+ *
+ * Nothing local can use it — there is no name to use — so it is dead or it is
+ * imported, with no third answer and no `over-exported` to report.
+ */
+function collectDefaultExportFinding(
+  sourceFile: SourceFile,
+  namespaceAlias: string | undefined,
+  findings: Finding[],
+  deadDecls: Set<Node>,
+  publicDecls: Set<Node>,
+  harnessFiles: Set<SourceFile>,
+  production: boolean
+): void {
+  // A harness file is loaded by a tool rather than imported, and the default
+  // export is how a tool takes its input: a vitest config, a storybook story,
+  // a playwright project. Nothing inside the project will ever name it, which
+  // is the same reason an entry file's exports are left alone.
+  if (harnessFiles.has(sourceFile)) return;
+
+  const declaration = unnamedDefaultExport(sourceFile);
+  if (!declaration || publicDecls.has(declaration) || isAmbient(declaration)) return;
+  if (isNodeSuppressed(declaration)) return;
+
+  let harnessUsed = false;
+  for (const ref of findDefaultExportReferences(declaration)) {
+    if (isModuleBinding(ref)) continue;
+    if (harnessFiles.has(ref.getSourceFile())) harnessUsed = true;
+    else return;
+  }
+  const anchor = defaultExport(declaration);
+  const kind = namespaceAlias ? 'ns-export' : 'export';
+  if (harnessUsed && !production) {
+    findings.push({
+      ...makeFinding(kind, anchor, namespaceAlias ?? '', false),
+      verdict: 'test-only',
+      evidence: 'only test files reference it',
+    });
+    return;
+  }
+  deadDecls.add(declaration);
+  findings.push(makeFinding(kind, anchor, namespaceAlias ?? '', true));
 }
 
 /**
@@ -349,35 +403,83 @@ function collectNamespaceFindings(ns: ModuleDeclaration, findings: Finding[], de
       if (refs.length === 0) deadDecls.add(decl);
       const typeKind = typeKeyword(decl);
       findings.push(
-        makeFinding(typeKind ? 'ns-type' : 'ns-export', declName, ns.getName(), refs.length === 0, typeKind)
+        makeFinding(
+          typeKind ? 'ns-type' : 'ns-export',
+          namedExport(declName),
+          ns.getName(),
+          refs.length === 0,
+          typeKind
+        )
       );
     }
   }
 }
 
+/** Where an export finding points, what it is called, and the node a fix acts on. */
+interface ExportAnchor {
+  at: Node;
+  name: string;
+  node: Node;
+}
+
+/** A named export answers all three with its identifier. */
+function namedExport(nameNode: Node): ExportAnchor {
+  return { at: nameNode, name: nameNode.getText(), node: nameNode.getParent() ?? nameNode };
+}
+
+/**
+ * An export with no name of its own: `export default class { … }`. `default`
+ * is the module system's word for it rather than the author's, and the
+ * statement that exports it is both where the finding points and what a fix
+ * takes away.
+ */
+function defaultExport(declaration: Node): ExportAnchor {
+  return { at: declaration, name: 'default', node: declaration };
+}
+
 function makeFinding(
   kind: ExportFinding['kind'],
-  nameNode: Node,
+  anchor: ExportAnchor,
   context: string,
   dead: boolean,
   typeKind?: TypeKeyword
 ): ExportFinding {
-  const sourceFile = nameNode.getSourceFile();
-  const { line, column } = lineAndColumnAt(sourceFile, nameNode.getStart());
+  const sourceFile = anchor.at.getSourceFile();
+  const { line, column } = lineAndColumnAt(sourceFile, anchor.at.getStart());
   return {
     kind,
     filePath: sourceFile.getFilePath(),
     line,
     column,
-    name: nameNode.getText(),
+    name: anchor.name,
     context,
     anonymous: false,
     dead,
     typeKind,
     verdict: dead ? 'dead' : 'over-exported',
     evidence: dead ? 'zero references anywhere' : 'every reference sits inside its own file',
-    node: nameNode.getParent() ?? nameNode,
+    node: anchor.node,
   };
+}
+
+/**
+ * The default export of this file, when nothing names it.
+ *
+ * `export default class Greeter { … }` and `export default box` both hand the
+ * question to a declaration with a name, and the main walk answers there.
+ * What is left is the export that answers to nothing else: an anonymous
+ * class or function, an object literal, an arrow, a bare value.
+ */
+function unnamedDefaultExport(sourceFile: SourceFile): Node | undefined {
+  const declaration = sourceFile.getDefaultExportSymbol()?.getDeclarations()[0];
+  if (!declaration || declarationNameNode(declaration)) return undefined;
+  if (declaration.isKind(SyntaxKind.ExportAssignment)) {
+    if (declaration.isExportEquals()) return undefined;
+    // `export default box` forwards a declaration that has a name of its own,
+    // and that name is where the finding belongs.
+    if (declaration.getExpression().isKind(SyntaxKind.Identifier)) return undefined;
+  }
+  return declaration;
 }
 
 function classifyReferences(

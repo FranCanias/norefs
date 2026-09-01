@@ -2,6 +2,7 @@ import type {
   ArrayLiteralExpression,
   ExportSpecifier,
   Identifier,
+  ImportClause,
   ImportDeclaration,
   ImportSpecifier,
   Node,
@@ -9,7 +10,7 @@ import type {
   VariableDeclaration,
 } from 'ts-morph';
 import { Node as NodeGuards, SyntaxKind, ts } from 'ts-morph';
-import { findReferencesAsNodes } from '../lookup/references';
+import { findDefaultExportReferences, findReferencesAsNodes } from '../lookup/references';
 import { firstLine } from '../messages';
 import type { ExportFinding, Finding, MemberFinding } from '../types';
 import { endLine, lineAndColumnAt, startLine } from './location';
@@ -159,11 +160,15 @@ export function applyFixes(findings: Finding[], options: { save?: boolean; unsaf
   // index still matches the project. The specifiers it hands back stay valid
   // across the edits — ts-morph remaps wrapped nodes a manipulation did not
   // remove — and the ones an earlier fix did remove are skipped as forgotten.
-  const specifiers = new Map<Finding, Array<ImportSpecifier | ExportSpecifier>>();
+  const specifiers = new Map<Finding, ForwardingBinding[]>();
   for (const finding of sorted) {
     if (finding.kind === 'member') continue;
+    // A declaration with no name of its own is a default export, and the
+    // index answers for it the other way round: from the symbol the binder
+    // left on the declaration.
     const nameNode = declarationNameNode(finding.node);
-    if (nameNode) specifiers.set(finding, danglingSpecifiers(nameNode));
+    const references = nameNode ? findReferencesAsNodes(nameNode) : findDefaultExportReferences(finding.node);
+    specifiers.set(finding, danglingSpecifiers(references));
   }
 
   const touched = new Set<SourceFile>(stripped);
@@ -515,12 +520,7 @@ function removeLeadingComments(node: Node, kept: Set<Node>): void {
   }
 }
 
-function fixExport(
-  finding: ExportFinding,
-  decl: Node,
-  specifiers: Array<ImportSpecifier | ExportSpecifier>,
-  kept: Set<Node>
-): SourceFile[] {
+function fixExport(finding: ExportFinding, decl: Node, specifiers: ForwardingBinding[], kept: Set<Node>): SourceFile[] {
   const changed = new Set<SourceFile>();
 
   // First drop every import/export specifier that forwards the name — a barrel
@@ -550,12 +550,21 @@ function fixExport(
   return [...changed];
 }
 
-/** Import/export specifiers anywhere in the project that forward the declaration's name. */
-function danglingSpecifiers(nameNode: Identifier): Array<ImportSpecifier | ExportSpecifier> {
-  const specifiers = new Set<ImportSpecifier | ExportSpecifier>();
-  for (const ref of findReferencesAsNodes(nameNode)) {
+/**
+ * A binding that carries the declaration's name onward and would dangle once
+ * the declaration is gone: a specifier in a barrel or an import list, or the
+ * clause of a default import, which spells the name its own way.
+ */
+type ForwardingBinding = ImportSpecifier | ExportSpecifier | ImportClause;
+
+/** The forwarding bindings anywhere in the project that these references sit in. */
+function danglingSpecifiers(references: Node[]): ForwardingBinding[] {
+  const specifiers = new Set<ForwardingBinding>();
+  for (const ref of references) {
     const parent = ref.getParent();
     if (parent?.isKind(SyntaxKind.ImportSpecifier) || parent?.isKind(SyntaxKind.ExportSpecifier)) {
+      specifiers.add(parent);
+    } else if (parent?.isKind(SyntaxKind.ImportClause) && parent.getDefaultImport() === ref) {
       specifiers.add(parent);
     }
   }
@@ -567,7 +576,18 @@ function danglingSpecifiers(nameNode: Identifier): Array<ImportSpecifier | Expor
  * described what just left it — prose no heuristic can rewrite — so the
  * statement is recorded for the fix summary when a comment leads it.
  */
-function removeSpecifier(specifier: ImportSpecifier | ExportSpecifier, kept: Set<Node>): void {
+function removeSpecifier(specifier: ForwardingBinding, kept: Set<Node>): void {
+  if (specifier.isKind(SyntaxKind.ImportClause)) {
+    // `import Box, { alive } from './thing'` keeps everything but the default.
+    const importDecl = specifier.getParentOrThrow() as ImportDeclaration;
+    if (importDecl.getNamedImports().length === 0 && !importDecl.getNamespaceImport()) {
+      importDecl.remove();
+    } else {
+      if (importDecl.getLeadingCommentRanges().length > 0) kept.add(importDecl);
+      importDecl.removeDefaultImport();
+    }
+    return;
+  }
   if (specifier.isKind(SyntaxKind.ExportSpecifier)) {
     const exportDecl = specifier.getExportDeclaration();
     if (exportDecl.getNamedExports().length === 1) {

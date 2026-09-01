@@ -7,6 +7,13 @@ function describeFinding(finding: Finding): string {
     case 'file':
       return 'dead file';
     case 'export':
+      // `default` is the module system's name for an export the author left
+      // unnamed, so the sentence says what it is instead of quoting it.
+      if (finding.name === 'default') {
+        return finding.verdict === 'test-only'
+          ? 'test-only default export: production code never uses it'
+          : `dead default export${strandNote(finding)}`;
+      }
       if (finding.verdict === 'test-only') return `test-only export \`${finding.name}\`: production code never uses it`;
       return finding.dead
         ? `dead export \`${finding.name}\`${strandNote(finding)}`

@@ -9,6 +9,17 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A default export with no name is checked like any other.** `export default
+{ … }`, `export default class { … }`, an arrow, a bare value — none of them
+were ever reported, because the export check searches for an identifier and
+these have none. They are found now, through the symbol the binder leaves on
+the declaration and the one name the module system gives it, so a default
+import and a barrel's `export { default as … }` both count as usage. The
+report says ``dead default export`` rather than quoting a name nobody wrote,
+and `--fix` removes the statement together with the default imports left
+pointing at it. A harness file is exempt: a vitest config or a storybook story
+takes its input through the default export, and no import will ever name it.
+
 **A relay answers to every name it is given.** A function that hands its
 parameter to `Object.keys` makes that type untrackable at every call site, and
 norefs goes quiet about it. `const scan = dump` used to end the trail: the

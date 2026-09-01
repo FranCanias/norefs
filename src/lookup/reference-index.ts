@@ -140,12 +140,31 @@ class ReferenceIndex {
   find(target: Node): Node[] {
     const compilerNode = target.compilerNode;
     const symbol = this.checker.getSymbolAtLocation(compilerNode);
-    if (!symbol) return [];
+    return symbol ? this.referencesTo(symbol, propertyName(compilerNode), compilerNode) : [];
+  }
 
+  /**
+   * Every reference to a module's default export, which has no name to ask
+   * about: `export default class { … }`, `export default { … }`, and the rest
+   * of the shapes a module calls `default`.
+   *
+   * `getSymbolAtLocation` answers for names, and there is none here. The
+   * binder left the symbol on the declaration itself, and every importer that
+   * names it — a default import's binding, an `export { default as … }`
+   * specifier — is filed under that symbol like any other reference, through
+   * the rename the collect walk recorded between the two texts.
+   */
+  findDefaultExport(declaration: Node): Node[] {
+    const compilerNode = declaration.compilerNode as ts.Node & { symbol?: ts.Symbol };
+    const symbol = compilerNode.symbol;
+    return symbol ? this.referencesTo(symbol, symbol.name, compilerNode) : [];
+  }
+
+  private referencesTo(symbol: ts.Symbol, text: string, itself: ts.Node): Node[] {
     const found = new Set<ts.Node>();
-    for (const related of this.relatedFiled(symbol, propertyName(compilerNode))) {
+    for (const related of this.relatedFiled(symbol, text)) {
       for (const node of this.buckets.get(related) ?? []) {
-        if (node !== compilerNode) found.add(node);
+        if (node !== itself) found.add(node);
       }
     }
     return [...found]

@@ -11,6 +11,7 @@ The test suite verifies that the reference check resolves all of these — none 
 - spreads, into both same-typed and fresh object types
 - mapped types (`Partial<T>`, `Pick<T, 'k'>`) and interface inheritance
 - usage from other files, quoted property names, implementing class members
+- a default export with no name of its own — `export default { … }`, `export default class { … }`, an arrow, a bare value. There is no identifier to search for, so the search runs from the symbol the binder left on the declaration, under the one name the module system gives it. A default import, an `import { default as … }`, and a barrel's `export { default as … }` all count as usage, through as many re-exports as they take
 - property writes, told apart from reads: a member every reference only fills in — an annotated literal, a JSX attribute, `shelf.count = 1`, `shelf.count++` on a line of its own — earns the `write-only` verdict instead of counting as used, unless a read reaches it through some other declaration. A `delete shelf.count` reads nothing either, and counts the same way, and so does the far side of a destructuring assignment: `({ count: shelf.count } = source)` puts a value there, it does not take one
 - a literal probe like `'name' in v` counts as usage of exactly that property
 - class members reached through a declared `implements` or `extends` — TypeScript merges those reference groups
@@ -48,7 +49,6 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 - Anonymous default-export classes (`export default class { … }`) are skipped: without a name there are no class references to run the escape checks on.
 - Declaration files (`.d.ts`) are not scanned.
 - A workspace package that imports a sibling's *built* output rather than its source reads a second copy of every type. `drizzle-kit/node_modules/drizzle-orm` is a symlink to `drizzle-orm/dist`, so the reads land on declarations the run never holds, and the source members they belong to look unread. Point the run at the source — or expect those members to be reported.
-- Anonymous default exports (`export default { … }`) have no name to search references for, so the export check skips them.
 - A file consumed only through a bare `import './x'` for its side effects counts as used when its importer is reachable, even if nothing else touches it. That is the safe reading.
 - An entry point nothing declares in writing — a file loaded by a name the code computes at runtime — is a false positive until you pass it with `--entry`. Run `norefs entries` to see what was found before reaching for the flag.
 - A dependency consumed without an import, without a script, without a config naming it, and without a host that lists it as a peer — a binary called from a Makefile, say — shows up as unused until you add it to `ignoreDependencies`. A binary named in a `package.json` script is read; anywhere else is not.
