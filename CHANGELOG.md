@@ -9,6 +9,10 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**Two more ways a package is named without an import.** A script that runs a
+binary by its path (`node ./node_modules/.bin/tsd`) names the package that
+owns it, and so does the config a tsconfig `extends`.
+
 **A harness directory can carry its word on either side.** `test-d` is tsd's
 own directory and read as source, which made 221 of type-fest's files read as
 dead. A separator is a separator whichever end it sits on — `type-tests` and

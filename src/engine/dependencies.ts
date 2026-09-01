@@ -1,6 +1,7 @@
 import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
+import { ts } from 'ts-morph';
 import type { Finding, Verdict } from '../types';
 import { isHarnessFile } from './reachability';
 import { commandTokens, scriptsOf } from './scripts';
@@ -371,10 +372,33 @@ function readManifest(context: DependencyContext, dir: string): Manifest | undef
  * package is dropped, which is every other string in the file.
  */
 function collectConfigUse(manifest: Manifest, context: DependencyContext): void {
-  for (const written of context.configStrings(manifest.dir)) {
+  for (const written of [...context.configStrings(manifest.dir), ...tsconfigExtends(manifest.dir, context)]) {
     const name = packageName(stripQuerySuffix(written));
     if (name && manifest.listed.has(name)) manifest.usedByConfig.add(name);
   }
+}
+
+/**
+ * The configs this package's own tsconfig extends.
+ *
+ * `extends: "@sindresorhus/tsconfig"` is a package the build needs, and no
+ * import will ever name it. It is read here rather than through the
+ * tool-config reader because a tsconfig is not a tool config: its `include`
+ * globs are patterns, not paths to anything an entry-point walk should
+ * publish.
+ */
+function tsconfigExtends(dir: string, context: DependencyContext): string[] {
+  const filePath = path.join(dir, 'tsconfig.json');
+  if (!context.fileExists(filePath)) return [];
+  const text = context.readFile(filePath);
+  if (text === undefined) return [];
+  // A tsconfig carries comments and trailing commas, so the compiler's own
+  // reader does the parsing.
+  const { config, error } = ts.parseConfigFileTextToJson(filePath, text);
+  if (error || typeof config !== 'object' || config === null) return [];
+  const written = (config as { extends?: unknown }).extends;
+  if (typeof written === 'string') return [written];
+  return Array.isArray(written) ? written.filter(entry => typeof entry === 'string') : [];
 }
 
 /**
@@ -427,10 +451,19 @@ function collectScriptUse(manifest: Manifest, data: Record<string, unknown>, con
 
   for (const { command } of scripts) {
     for (const token of commandTokens(command)) {
-      const name = owner.get(token);
+      const name = owner.get(token) ?? owner.get(binaryPathName(token));
       if (name) manifest.usedByScript.add(name);
     }
   }
+}
+
+/**
+ * The command a token written as a path into `node_modules/.bin` runs.
+ * `node ./node_modules/.bin/tsd` is `tsd`, spelled the long way because the
+ * script needs to hand node a flag the shim would swallow.
+ */
+function binaryPathName(token: string): string {
+  return /(?:^|[\\/])node_modules[\\/]\.bin[\\/]([^\\/]+)$/.exec(token)?.[1] ?? '';
 }
 
 /**

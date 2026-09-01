@@ -624,3 +624,41 @@ describe('a dependency in the wrong section', () => {
     expect(text[(findings[0]?.line ?? 0) - 1]).toContain('"nothing": "1.0.0"');
   });
 });
+
+describe('two ways a package is named without an import', () => {
+  /** Every manifest finding, `misplaced` included, with the files a build reads written as themselves. */
+  function manifestFindings(manifest: object, plainFiles: Record<string, string>): Finding[] {
+    const project = new Project({ useInMemoryFileSystem: true });
+    const fileSystem = project.getFileSystem();
+    fileSystem.writeFileSync('/package.json', JSON.stringify(manifest, null, 2));
+    for (const [filePath, text] of Object.entries(plainFiles)) fileSystem.writeFileSync(filePath, text);
+    project.createSourceFile('/main.ts', 'export const keep = 1;\n');
+    return analyze(project, { rootDirs: ['/'] }).filter(
+      f => f.kind === 'dependency' || f.kind === 'unlisted' || f.kind === 'misplaced'
+    );
+  }
+
+  it('reads a binary a script runs by its path', () => {
+    // `node ./node_modules/.bin/tsd` is how a script hands node a flag the
+    // shim would swallow. The package that owns the binary is still in use.
+    const findings = manifestFindings(
+      { devDependencies: { tsd: '1.0.0' }, scripts: { 'test:tsd': 'node ./node_modules/.bin/tsd' } },
+      { '/node_modules/tsd/package.json': JSON.stringify({ name: 'tsd', bin: { tsd: './cli.js' } }) }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('reads the config its own tsconfig extends', () => {
+    // `extends: "@sindresorhus/tsconfig"` is a package the build needs, and no
+    // import will ever name it. Comments and all: the compiler's own reader
+    // does the parsing.
+    const findings = manifestFindings(
+      { devDependencies: { '@sindresorhus/tsconfig': '1.0.0' } },
+      {
+        '/tsconfig.json': '{\n\t// the shared base\n\t"extends": "@sindresorhus/tsconfig",\n}\n',
+        '/node_modules/@sindresorhus/tsconfig/package.json': JSON.stringify({ name: '@sindresorhus/tsconfig' }),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+});
