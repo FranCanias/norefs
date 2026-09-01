@@ -1,5 +1,5 @@
 import type { Node, Project, SourceFile } from 'ts-morph';
-import { isOwnDeclarationFile } from '../lookup/files';
+import { hasDeclarationSibling, isOwnDeclarationFile } from '../lookup/files';
 import type { Candidate, CollectContext } from './candidate';
 import { collectClassCandidates } from './classes';
 import { collectConstObjectCandidates } from './const-objects';
@@ -48,6 +48,9 @@ export function collectCandidates(project: Project, options: CollectOptions = {}
     // project's own describes the project, and its members answer for
     // themselves like any others.
     if (sourceFile.isDeclarationFile() && !isOwnDeclarationFile(sourceFile)) continue;
+    // The declaration beside it is where its shapes are declared, and where
+    // every reference lands.
+    if (hasDeclarationSibling(sourceFile)) continue;
     if (options.scopeDir && !sourceFile.getFilePath().startsWith(options.scopeDir)) continue;
     for (const collector of collectors) {
       candidates.push(...collector(sourceFile, ctx));

@@ -10,7 +10,7 @@ import { diskFileSystem } from './file-system';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
-import { projectFilePaths, SourceIndex } from './sources';
+import { projectFiles, SourceIndex } from './sources';
 import { configReader } from './tool-configs';
 
 /** The findings the syntax alone decides — no type checker is involved. */
@@ -46,13 +46,15 @@ export function analyzeSyntax(
   fallbackOptions: ts.CompilerOptions,
   options: SyntaxOptions = {}
 ): Finding[] {
-  const filePaths = projectFilePaths(tsConfigFilePaths);
+  const { sources: filePaths, declarations } = projectFiles(tsConfigFilePaths);
   const packages = options.packages ?? [];
   const sources = new SourceIndex(filePaths, packages, fallbackOptions);
 
   const fallbackRoot = commonDirectory(filePaths);
   const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
-  const known = new Set(filePaths);
+  // A manifest can publish a declaration file — `types: './index.d.ts'` — so
+  // an entry the config names is looked for among those too.
+  const known = new Set([...filePaths, ...declarations]);
   const reader = configReader(diskFileSystem);
   const entries = [
     ...(options.entries ?? []),
@@ -144,11 +146,11 @@ export function listEntryPoints(
   fallbackOptions: ts.CompilerOptions,
   options: SyntaxOptions = {}
 ): EntryPoint[] {
-  const filePaths = projectFilePaths(tsConfigFilePaths);
+  const { sources: filePaths, declarations } = projectFiles(tsConfigFilePaths);
   const packages = options.packages ?? [];
   const fallbackRoot = commonDirectory(filePaths);
   const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
-  const known = new Set(filePaths);
+  const known = new Set([...filePaths, ...declarations]);
   const reader = configReader(diskFileSystem);
 
   const discovered = new Map<string, string>();
@@ -166,7 +168,7 @@ export function listEntryPoints(
 
   const asked = options.entries ?? [];
   const entries: EntryPoint[] = [];
-  for (const filePath of filePaths) {
+  for (const filePath of [...filePaths, ...declarations]) {
     const source = asked.some(entry => filePath === entry || filePath.startsWith(`${entry}/`))
       ? 'asked for with --entry'
       : (discovered.get(filePath) ??

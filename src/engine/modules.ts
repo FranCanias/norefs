@@ -12,7 +12,7 @@ import type {
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
 import { valueUsesStayLocal } from '../collectors/escape';
 import { descendantsOfKind } from '../lookup/descendants';
-import { isOwnDeclarationFile } from '../lookup/files';
+import { hasDeclarationSibling, isOwnDeclarationFile } from '../lookup/files';
 import { findDefaultExportReferences, findReferencesAsNodes } from '../lookup/references';
 import type { Boundary, ExportFinding, Finding, TypeKeyword } from '../types';
 import type { DependencyUse } from './dependencies';
@@ -143,10 +143,15 @@ function reachedThrough(declaration: SourceFile, targets: SourceFile[], seen: Se
 
 export function analyzeModules(project: Project, options: ModuleOptions = {}): ModuleAnalysis {
   const sourceFiles = project.getSourceFiles().filter(sf => !sf.isDeclarationFile());
+  // A package can publish a declaration file — `types: './index.d.ts'` — and
+  // a re-export can name one. They are not nodes in the import graph, but a
+  // config naming one names a real file, and an entry file's exports are
+  // public API whichever kind of file holds them.
+  const ownDeclarations = project.getSourceFiles().filter(isOwnDeclarationFile);
   const fallbackRoot = commonDirectory(sourceFiles.map(sf => sf.getFilePath()));
   const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
   const byPath = new Map(sourceFiles.map(sf => [sf.getFilePath(), sf]));
-  const known = new Set(byPath.keys());
+  const known = new Set([...byPath.keys(), ...ownDeclarations.map(sf => sf.getFilePath())]);
   const reader = configReader(hostFileSystem(project.getFileSystem()));
   const entries = [
     ...(options.entries ?? []),
@@ -177,7 +182,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   const findings: Finding[] = [];
   const deadFiles = new Set<SourceFile>();
   const deadDecls = new Set<Node>();
-  const publicDecls = publicApiDeclarations(sourceFiles, rootDirs, entries);
+  const publicDecls = publicApiDeclarations([...sourceFiles, ...ownDeclarations], rootDirs, entries);
   // A module handed to a runtime consumer as one object — `import * as schema`
   // then `orm(db, { schema })` — is read key by key by code no reference search
   // can see. Its exports stand on the same footing as public API.
@@ -213,6 +218,10 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
     // A file an entry re-exports whole (`export * as ns from`) is public API
     // down to its last member.
     if (publicDecls.has(sourceFile)) continue;
+    // An implementation a declaration file describes answers through it, not
+    // for itself. Every import lands on the declaration, so the names here
+    // cannot collect a reference whatever the module's users do.
+    if (hasDeclarationSibling(sourceFile)) continue;
 
     collectExportFindings(
       sourceFile,
@@ -235,8 +244,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   // dead-file question is not one it can be asked. Its exports are another
   // matter: they are imported by name like any module's, and answer the same
   // way. Only the ones an import reached are here at all.
-  for (const sourceFile of project.getSourceFiles()) {
-    if (!isOwnDeclarationFile(sourceFile)) continue;
+  for (const sourceFile of ownDeclarations) {
     const filePath = sourceFile.getFilePath();
     if (options.scopeDir && !filePath.startsWith(options.scopeDir)) continue;
     if (isEntryFile(filePath, rootDirs, entries)) continue;
@@ -645,7 +653,8 @@ function dependencyUses(project: Project): DependencyUse[] {
   // import sites however the tsconfigs happened to glob.
   const sourceFiles = [...project.getSourceFiles()].sort((a, b) => a.getFilePath().localeCompare(b.getFilePath()));
   for (const sourceFile of sourceFiles) {
-    if (sourceFile.isDeclarationFile()) continue;
+    // A package imported only from a project's own `.d.ts` is imported.
+    if (sourceFile.isDeclarationFile() && !isOwnDeclarationFile(sourceFile)) continue;
     const filePath = sourceFile.getFilePath();
     const found: DependencyUse[] = [];
     for (const literal of sourceFile.getImportStringLiterals()) {

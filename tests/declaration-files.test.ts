@@ -5,6 +5,13 @@ import { applyFixes, isFixable } from '../src/engine/fix';
 import type { Finding } from '../src/types';
 import { analyzeFiles } from './helpers';
 
+function findingsWithManifest(manifest: object, files: Record<string, string>): Finding[] {
+  const project = new Project({ useInMemoryFileSystem: true });
+  project.getFileSystem().writeFileSync('/package.json', JSON.stringify(manifest));
+  for (const [filePath, text] of Object.entries(files)) project.createSourceFile(filePath, text);
+  return analyze(project, { rootDirs: ['/'] });
+}
+
 function named(findings: Finding[]): string[] {
   return findings.map(f => `${f.kind} ${f.name}`).sort();
 }
@@ -118,5 +125,52 @@ describe("a project's own declaration file", () => {
 
     const color = findings.find(f => f.kind === 'member' && f.name === 'color' && f.filePath.endsWith('/shared.d.ts'));
     expect(color?.verdict).toBe('shadowed');
+  });
+});
+
+describe('a declaration file a package publishes', () => {
+  it('is an entry point, so what it exports is public API', () => {
+    // `types: './index.d.ts'` is how a types-only package names its entry. The
+    // file is no node in the import graph, but the manifest names a real file,
+    // and its exports reach consumers this run never holds.
+    const findings = findingsWithManifest(
+      { name: 'recipe-types', types: './index.d.ts', exports: { '.': { types: './index.d.ts' } } },
+      {
+        '/index.d.ts': "export type { Card } from './source/card';\n",
+        '/source/card.d.ts': 'export type Card = {\n  title: string;\n};\n',
+        '/source/crate.d.ts': 'export type Crate = {\n  slats: number;\n};\n',
+      }
+    );
+    // `Card` rides out through the entry; `Crate` is named by nobody.
+    expect(named(findings)).toEqual(['type Crate']);
+  });
+
+  it('keeps a dependency only it imports', () => {
+    const findings = findingsWithManifest(
+      { name: 'recipe-box', main: './main.ts', dependencies: { minimatch: '^9.0.0' } },
+      {
+        '/node_modules/minimatch/index.d.ts': 'export type MinimatchOptions = {\n  dot: boolean;\n};\n',
+        '/shelf.d.ts': "import type { MinimatchOptions } from 'minimatch';\n\nexport type Shelf = MinimatchOptions;\n",
+        '/main.ts': "import type { Shelf } from './shelf';\nexport const shelf = (s: Shelf): boolean => s.dot;\n",
+      }
+    );
+    expect(findings.some(f => f.kind === 'dependency')).toBe(false);
+  });
+});
+
+describe('an implementation a declaration file describes', () => {
+  it('answers through the declaration, not for itself', () => {
+    // `atom/index.js` beside `atom/index.d.ts` is one module written twice.
+    // Every import resolves to the declaration, so the implementation's own
+    // exports can never collect a reference — reporting them would name
+    // something nothing is able to reach.
+    const project = new Project({ useInMemoryFileSystem: true, compilerOptions: { allowJs: true } });
+    project.getFileSystem().writeFileSync('/package.json', JSON.stringify({ name: 'box', main: './index.js' }));
+    project.createSourceFile('/atom/index.d.ts', 'export declare function atom(): number;\n');
+    project.createSourceFile('/atom/index.js', 'export function atom() {\n  return 1;\n}\n');
+    project.createSourceFile('/index.js', "export { atom } from './atom/index.js';\n");
+    const findings = analyze(project, { rootDirs: ['/'] });
+
+    expect(named(findings)).toEqual([]);
   });
 });

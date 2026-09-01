@@ -144,19 +144,29 @@ function includes(values: number[], value: number): boolean {
   return false;
 }
 
-/** The source files of these tsconfigs, declaration files left out. */
-export function projectFilePaths(tsConfigFilePaths: string[]): string[] {
-  const filePaths = new Set<string>();
+/**
+ * The files these tsconfigs list, split by kind.
+ *
+ * `sources` is the import graph: a declaration file is no node in it, so it
+ * is kept apart. `declarations` is the rest — the project's own `.d.ts`,
+ * which a manifest can still name as its published entry, and which a config
+ * naming one names for real.
+ *
+ * Both are sorted, so an unlisted package is always reported at the same one
+ * of its import sites however the tsconfigs happened to glob.
+ */
+export function projectFiles(tsConfigFilePaths: string[]): { sources: string[]; declarations: string[] } {
+  const sources = new Set<string>();
+  const declarations = new Set<string>();
   for (const tsConfigFilePath of tsConfigFilePaths) {
     const { config, error } = ts.readConfigFile(tsConfigFilePath, ts.sys.readFile);
     if (error) throw new Error(ts.flattenDiagnosticMessageText(error.messageText, '\n'));
     const dir = path.dirname(tsConfigFilePath);
     const parsed = ts.parseJsonConfigFileContent(config, ts.sys, dir, undefined, tsConfigFilePath);
     for (const fileName of parsed.fileNames) {
-      if (!fileName.endsWith('.d.ts')) filePaths.add(fileName);
+      (fileName.endsWith('.d.ts') ? declarations : sources).add(fileName);
     }
   }
-  // Sorted, so an unlisted package is always reported at the same one of its
-  // import sites however the tsconfigs happened to glob.
-  return [...filePaths].sort((a, b) => a.localeCompare(b));
+  const sorted = (paths: Set<string>): string[] => [...paths].sort((a, b) => a.localeCompare(b));
+  return { sources: sorted(sources), declarations: sorted(declarations) };
 }

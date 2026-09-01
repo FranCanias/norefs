@@ -9,6 +9,17 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A declaration file is source the whole way through.** The release that made
+a project's own `.d.ts` answer for its exports stopped short of the rest: a
+package whose published entry is `types: './index.d.ts'` had no entry point at
+all, so its whole public API read as dead, and a package imported only from a
+declaration file was called an unused dependency. Both are fixed. So is the
+other side of the same coin — an implementation a declaration file describes,
+`atom/index.js` beside `atom/index.d.ts`, now answers through that declaration
+instead of for itself. Every import resolves to the declaration, so the names
+in the file beside it could never collect a reference, and `--fix` was willing
+to delete a library's whole public API on the strength of it.
+
 **The project's own declaration files are source.** A `.d.ts` used to be
 skipped whole, so an exported type in `src/api.d.ts` that nothing imports was
 invisible, and so were its members. They are scanned now, on the same terms as
