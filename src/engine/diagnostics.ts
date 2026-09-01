@@ -82,7 +82,7 @@ export function findConfigProblems(tsConfigFilePaths: string[]): string[] {
       references.length > 0
         ? `${name} lists no files of its own; it references ${references.length} other config(s).\n` +
             `Nothing was scanned. Point norefs at them: -p ${references.slice(0, 3).join(' -p ')}`
-        : `${name} matches no files.\n` + `Nothing was scanned. Check its "include", "files", and "exclude" settings.`
+        : `${name} matches no files.\nNothing was scanned. Check its "include", "files", and "exclude" settings.`
     );
   }
   return problems;
