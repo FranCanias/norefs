@@ -83,28 +83,31 @@ export function isToolConfig(filePath: string, packageDirs: readonly string[]): 
 }
 
 /**
- * The packages behind the plugin names an ESLint config writes.
+ * The packages behind the short names an ESLint config writes.
  *
  * ESLint lets a config say `plugins: [import]`, `plugin:unicorn/recommended`
  * and `import/no-cycle`, and all three load `eslint-plugin-import` or
- * `eslint-plugin-unicorn`. Nothing in the file spells the package out, so
- * matching the strings as written finds none of them and the report calls
- * every plugin a dead dependency.
+ * `eslint-plugin-unicorn`. `extends: "prettier"` is the same shorthand for a
+ * shareable config, `eslint-config-prettier`. Nothing in the file spells
+ * either package out, so matching the strings as written finds none of them
+ * and the report calls every one a dead dependency.
  *
- * A short name can expand more than one way — `@a/b` is either `@a`'s plugin
- * under a config called `b` or `@a`'s `b` plugin — so this offers both. The
- * dependency check keeps only what the manifest lists, and drops the rest.
+ * A short name can expand more than one way — `prettier` is a plugin, a
+ * config, or the formatter itself — so this offers all of them. The dependency
+ * check keeps only what the manifest lists, and drops the rest.
  */
 function eslintPluginPackages(strings: string[]): string[] {
   const found: string[] = [];
   for (const written of strings) {
     const [first = '', second] = written.replace(/^plugin:/, '').split('/');
     if (!first.startsWith('@')) {
-      if (/^[\w-]+$/.test(first)) found.push(`eslint-plugin-${first}`);
+      if (/^[\w-]+$/.test(first)) found.push(`eslint-plugin-${first}`, `eslint-config-${first}`);
       continue;
     }
-    found.push(`${first}/eslint-plugin`);
-    if (second && /^[\w-]+$/.test(second)) found.push(`${first}/eslint-plugin-${second}`);
+    found.push(`${first}/eslint-plugin`, `${first}/eslint-config`);
+    if (second && /^[\w-]+$/.test(second)) {
+      found.push(`${first}/eslint-plugin-${second}`, `${first}/eslint-config-${second}`);
+    }
   }
   return found;
 }
