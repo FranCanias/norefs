@@ -10,7 +10,7 @@ The test suite verifies that the reference check resolves all of these — none 
 - spreads, into both same-typed and fresh object types
 - mapped types (`Partial<T>`, `Pick<T, 'k'>`) and interface inheritance
 - usage from other files, quoted property names, implementing class members
-- property writes, told apart from reads: a member every reference only fills in — an annotated literal, a JSX attribute, `shelf.count = 1`, `shelf.count++` on a line of its own — earns the `write-only` verdict instead of counting as used, unless a read reaches it through some other declaration
+- property writes, told apart from reads: a member every reference only fills in — an annotated literal, a JSX attribute, `shelf.count = 1`, `shelf.count++` on a line of its own — earns the `write-only` verdict instead of counting as used, unless a read reaches it through some other declaration. A `delete shelf.count` reads nothing either, and counts the same way
 - a literal probe like `'name' in v` counts as usage of exactly that property
 - class members reached through a declared `implements` or `extends` — TypeScript merges those reference groups
 - reads through a spread copy of a class instance resolve back to the class members
@@ -42,7 +42,8 @@ Some consumption is invisible to static reference search. Rather than guess, nor
 ## Remaining blind spots
 
 - A relay renamed through a binding that declares no type (`const relay = dump`) loses the position that would have said what it will be given, and so does one handed to a parameter typed only `Function`. Annotating the binding restores it.
-- Two more ways of touching a property still read as reads, so the member stays used: a destructuring assignment (`({ count: t.count } = src)`), and a `delete`. A write through a computed key credits the member the key names, the same as a read would.
+- A destructuring assignment (`({ count: t.count } = src)`) reads as a read, so the member stays used. It is a write, but calling it one would lose a read: the key beside it — `count` — names a member of the source, and the reference search never lands on it, because an assignment target has no contextual type to resolve the key against. Where source and target share a declaration, that invisible read is the only one there is. Counting the target as a write would report a member the code plainly reads.
+- A write through a computed key credits the member the key names, the same as a read would.
 - Anonymous default-export classes (`export default class { … }`) are skipped: without a name there are no class references to run the escape checks on.
 - Declaration files (`.d.ts`) are not scanned.
 - A workspace package that imports a sibling's *built* output rather than its source reads a second copy of every type. `drizzle-kit/node_modules/drizzle-orm` is a symlink to `drizzle-orm/dist`, so the reads land on declarations the run never holds, and the source members they belong to look unread. Point the run at the source — or expect those members to be reported.

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Project } from 'ts-morph';
 import { SyntaxKind } from 'ts-morph';
+import { isDeleteSite } from '../lookup/reference-index';
 import type { Finding } from '../types';
 import { isFixable, unremovableWrites } from './fix';
 import { editManifest, manifestEdits } from './fix-manifest';
@@ -63,9 +64,10 @@ export function runFixCampaign(options: CampaignOptions): CampaignResult {
         const where = stuck
           .map(site => {
             const at = formatLocation(site.getSourceFile().getFilePath(), startLine(site), cwd);
-            return site.isKind(SyntaxKind.SpreadAssignment)
-              ? `the spread at ${at}, which carries members beyond this one,`
-              : `the write at ${at}`;
+            if (site.isKind(SyntaxKind.SpreadAssignment)) {
+              return `the spread at ${at}, which carries members beyond this one,`;
+            }
+            return isDeleteSite(site) ? `the \`delete\` at ${at}` : `the write at ${at}`;
           })
           .join(' and ');
         const at = formatLocation(finding.filePath, finding.line, cwd);

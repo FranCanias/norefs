@@ -9,6 +9,15 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A `delete` is not a read.** `delete card.draft` used to keep `draft` alive:
+the reference search found the member and stopped there. A `delete` fills
+nothing in and asks for nothing back, so it now counts the way a write does,
+and a member nothing else touches earns the `write-only` verdict — worded for
+what it is: ``the `delete` at src/card.ts:7 is all that reaches this member``.
+`--fix` reports it and stops. Removing the member alone would leave the
+`delete` naming nothing, and no single edit retires a statement, so the finding
+says which `delete` is holding it back and leaves both to you.
+
 **A top-level array binding is read for its elements.** `const cards = [{ title,
 deadNote }]` reported nothing: nesting reached an array through the property
 holding it, and this array had no holding property. A binding now holds one

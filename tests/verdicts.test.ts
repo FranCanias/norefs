@@ -623,3 +623,96 @@ describe('verdicts', () => {
     expect(findings.find(f => f.name === 'gone')?.verdict).toBe('dead');
   });
 });
+
+describe('a member the code only deletes', () => {
+  /** A recipe card whose `draft` flag is never read — only stripped off. */
+  function box(...lines: string[]): Finding[] {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile(
+      '/main.ts',
+      ['interface Card {', '  title: string;', '  draft?: boolean;', '}', ...lines, ''].join('\n')
+    );
+    return analyze(project);
+  }
+
+  it('reports it, and calls the `delete` what it is', () => {
+    const findings = box(
+      'export function publish(card: Card): string {',
+      '  delete card.draft;',
+      '  return card.title;',
+      '}'
+    );
+
+    const member = verdictOf(findings, 'draft');
+    expect(member?.verdict).toBe('write-only');
+    // A `delete` fills nothing in, so calling it a write would be wrong twice.
+    expect(member?.evidence).toContain('the `delete` at');
+    expect(member?.evidence).toContain('is all that reaches this member');
+    // Removing the member alone would leave the `delete` naming nothing, and
+    // no single edit retires a statement — so this waits for a human.
+    expect(isFixable(member as Finding, true)).toBe(false);
+  });
+
+  it('reads an index the same way', () => {
+    const findings = box(
+      'export function publish(card: Card): string {',
+      "  delete card['draft'];",
+      '  return card.title;',
+      '}'
+    );
+    expect(verdictOf(findings, 'draft')?.evidence).toContain('the `delete` at');
+  });
+
+  it('keeps a member that is read before it is deleted', () => {
+    const findings = box(
+      'export function publish(card: Card): boolean | undefined {',
+      '  const was = card.draft;',
+      '  delete card.draft;',
+      '  return was;',
+      '}'
+    );
+    expect(verdictOf(findings, 'draft')).toBeUndefined();
+  });
+
+  it('falls back to the write wording when a real write sits beside the delete', () => {
+    const findings = box(
+      'export function publish(card: Card): string {',
+      '  card.draft = true;',
+      '  delete card.draft;',
+      '  return card.title;',
+      '}'
+    );
+    const member = verdictOf(findings, 'draft');
+    expect(member?.verdict).toBe('write-only');
+    expect(member?.evidence).toContain('name this member, and nothing reads it');
+  });
+
+  it('counts a delete in a test file as test-only, not as a write', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    project.createSourceFile('/main.ts', "import { title } from './card';\nvoid title;\n");
+    project.createSourceFile(
+      '/card.ts',
+      [
+        'export interface Card {',
+        '  title: string;',
+        '  draft?: boolean;',
+        '}',
+        'export const title = (c: Card): string => c.title;',
+        '',
+      ].join('\n')
+    );
+    project.createSourceFile(
+      '/card.test.ts',
+      [
+        "import type { Card } from './card';",
+        'export function strip(c: Card): void {',
+        '  delete c.draft;',
+        '}',
+        '',
+      ].join('\n')
+    );
+    // The harness touching a member says who reaches it, not that it is
+    // written — and deleting it means deleting that test too.
+    expect(verdictOf(analyze(project), 'draft')?.verdict).toBe('test-only');
+  });
+});

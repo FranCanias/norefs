@@ -11,7 +11,7 @@ import { SyntaxKind, ts } from 'ts-morph';
 import { arraySiblingShapes, writtenProperty } from '../collectors/object-literals';
 import { producerOf, returnedObjectLiterals } from '../collectors/returned-objects';
 import { descendantsOfKind } from '../lookup/descendants';
-import { isWriteReference, referenceIndex } from '../lookup/reference-index';
+import { isDeleteSite, isWriteReference, referenceIndex } from '../lookup/reference-index';
 import { findReferencesAsNodes } from '../lookup/references';
 import type { Finding, MemberFinding, Verdict } from '../types';
 import { location } from './location';
@@ -85,9 +85,8 @@ export function assignVerdicts(
     // are read first, and nothing below them is asked.
     const proven = (finding.writeSites ?? []).filter(alive);
     if (proven.length > 0) {
-      const one = proven.length === 1;
       finding.verdict = 'write-only';
-      finding.evidence = `the write${one ? '' : 's'} at ${siteList(proven, cwd)} name${one ? 's' : ''} this member, and nothing reads it`;
+      finding.evidence = provenWriteEvidence(proven, cwd);
       finding.writeSites = proven;
       continue;
     }
@@ -206,6 +205,20 @@ function writeNote(name: string, sites: { accounted: Node[]; unverified: Node[] 
   }
   if (sites.accounted.length === 0) return 'no untracked write of the name';
   return `every write of the name feeds another type (${siteList(sites.accounted, cwd)})`;
+}
+
+/**
+ * What the proven sites are, said in their own words. A `delete` names the
+ * member in order to remove it, so calling it a write would be wrong twice
+ * over: it fills nothing in, and nothing was ever there to read.
+ */
+function provenWriteEvidence(proven: Node[], cwd: string): string {
+  const one = proven.length === 1;
+  const where = siteList(proven, cwd);
+  if (proven.every(isDeleteSite)) {
+    return `the \`delete\`${one ? '' : 's'} at ${where} ${one ? 'is' : 'are'} all that reaches this member`;
+  }
+  return `the write${one ? '' : 's'} at ${where} name${one ? 's' : ''} this member, and nothing reads it`;
 }
 
 function siteList(nodes: Node[], cwd: string): string {

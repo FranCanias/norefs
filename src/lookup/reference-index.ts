@@ -1212,6 +1212,16 @@ export function isReadReference(reference: Node): boolean {
   return isReadOccurrence(reference.compilerNode);
 }
 
+/**
+ * True when this site takes the member away rather than filling it in:
+ * `delete card.flag`. It counts as a write — nothing reads it, and it has to
+ * go when the member goes — but it is not one, and the reports say so.
+ */
+export function isDeleteSite(site: Node): boolean {
+  const access = site.compilerNode.parent;
+  return access !== undefined && access.parent !== undefined && ts.isDeleteExpression(access.parent);
+}
+
 /** True when this occurrence consumes the property rather than declaring or writing it. */
 function isReadOccurrence(node: ts.Node): boolean {
   // A property access is how the code reads a member and also how it writes
@@ -1364,14 +1374,18 @@ function isMemberDeclarationName(node: ts.Node): boolean {
 }
 
 /**
- * True when this occurrence writes the member in place: `shelf.count = 1`, or
- * an update whose old value goes nowhere but straight back in — `shelf.count
- * += 1`, `shelf.count++` standing as a statement of its own.
+ * True when this occurrence writes the member in place, or takes it away:
+ * `shelf.count = 1`, `delete shelf.count`, or an update whose old value goes
+ * nowhere but straight back in — `shelf.count += 1`, `shelf.count++` standing
+ * as a statement of its own.
  *
  * The old value of an update is read, and that is the point: it is read to
  * write it again, and no one else ever sees it. Where someone does —
  * `const n = shelf.count++` hands the value on — this is a read like any
  * other.
+ *
+ * A `delete` reads nothing either. It names the member to remove it, and it
+ * has to go when the member goes — which is what a write site is for.
  */
 function isInPlaceWrite(node: ts.Node): boolean {
   const access = node.parent;
@@ -1384,6 +1398,7 @@ function isInPlaceWrite(node: ts.Node): boolean {
   }
 
   const around = access.parent;
+  if (ts.isDeleteExpression(around)) return true;
   if (ts.isBinaryExpression(around) && around.left === access) {
     const operator = around.operatorToken.kind;
     return operator >= ts.SyntaxKind.FirstAssignment && operator <= ts.SyntaxKind.LastAssignment;
