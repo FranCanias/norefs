@@ -1,6 +1,7 @@
 import type { Node, Project, SourceFile, Type, TypeLiteralNode } from 'ts-morph';
 import { SymbolFlags, SyntaxKind } from 'ts-morph';
 import { forEachDescendantOfKinds } from '../lookup/descendants';
+import { isOwnDeclarationFile } from '../lookup/files';
 
 /**
  * A member can have zero references and still be load-bearing: when its owner
@@ -24,7 +25,9 @@ const MAX_DEPTH = 4;
 export function buildConstraintIndex(project: Project): ConstraintIndex {
   const index: ConstraintIndex = new Map();
   for (const sourceFile of project.getSourceFiles()) {
-    if (sourceFile.isDeclarationFile()) continue;
+    // `interface Bridge extends Channel` keeps Channel's members load-bearing
+    // wherever it is written, and a project's own `.d.ts` is one of the places.
+    if (sourceFile.isDeclarationFile() && !isOwnDeclarationFile(sourceFile)) continue;
     collectHeritageConstraints(sourceFile, index);
     collectWalkConstraints(sourceFile, index);
   }

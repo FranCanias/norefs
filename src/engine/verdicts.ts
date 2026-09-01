@@ -11,6 +11,7 @@ import { SyntaxKind, ts } from 'ts-morph';
 import { arraySiblingShapes, writtenProperty } from '../collectors/object-literals';
 import { producerOf, returnedObjectLiterals } from '../collectors/returned-objects';
 import { descendantsOfKind } from '../lookup/descendants';
+import { isOwnDeclarationFile } from '../lookup/files';
 import { isDeleteSite, isWriteReference, referenceIndex } from '../lookup/reference-index';
 import { findReferencesAsNodes } from '../lookup/references';
 import type { Finding, MemberFinding, Verdict } from '../types';
@@ -516,7 +517,7 @@ class TwinIndex {
 
   constructor(project: Project) {
     for (const sourceFile of project.getSourceFiles()) {
-      if (sourceFile.isDeclarationFile()) continue;
+      if (sourceFile.isDeclarationFile() && !isOwnDeclarationFile(sourceFile)) continue;
       for (const decl of [...sourceFile.getInterfaces(), ...sourceFile.getTypeAliases()]) {
         const names = memberNames(decl);
         const title = decl.getName();

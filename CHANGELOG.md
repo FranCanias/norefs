@@ -9,6 +9,17 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**The project's own declaration files are source.** A `.d.ts` used to be
+skipped whole, so an exported type in `src/api.d.ts` that nothing imports was
+invisible, and so were its members. They are scanned now, on the same terms as
+any module — a package's own `.d.ts` still is not, and neither is one nothing
+imports, which is how a global shim like `vite-env.d.ts` stays out of it. Two
+claims are held back: a declaration is never called over-exported, and no fix
+edits one, because the `export` keywords there are what make the file a module
+rather than a script of globals and the compiler does not object when the last
+one goes. A module only a `.d.ts` imports is no longer called dead either: the
+files a declaration names are reached through it.
+
 **A key the source computes can write, not only read.** `shelf[slot] = 4`
 used to mark every member `slot` can name as used, exactly as `shelf[slot]`
 does — so a member the code only ever assigns through a computed key was

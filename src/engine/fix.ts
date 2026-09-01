@@ -70,6 +70,12 @@ export function isFixable(finding: Finding, unsafe: boolean): boolean {
   // A test-only finding is never fixable: the fix is deleting the code
   // together with its tests, and only a human deletes tests.
   if (finding.verdict === 'test-only') return false;
+  // Nor is anything in a declaration file. The `export` keywords there are
+  // what make the file a module instead of a script of globals, so removing
+  // the last of them turns every declaration beside it into a global — and
+  // the file still compiles, so no type check says so. These are reported and
+  // left, like the emptied types they sit beside.
+  if (finding.filePath.endsWith('.d.ts')) return false;
   // A fix must finish the finding it acts on. A proven write-only member goes
   // with the writes that prove it — and when one of those writes cannot be
   // removed on its own, the whole finding waits for a human.

@@ -12,6 +12,7 @@ import type {
 import { ModuleDeclarationKind, SyntaxKind, ts } from 'ts-morph';
 import { valueUsesStayLocal } from '../collectors/escape';
 import { descendantsOfKind } from '../lookup/descendants';
+import { isOwnDeclarationFile } from '../lookup/files';
 import { findDefaultExportReferences, findReferencesAsNodes } from '../lookup/references';
 import type { Boundary, ExportFinding, Finding, TypeKeyword } from '../types';
 import type { DependencyUse } from './dependencies';
@@ -95,11 +96,13 @@ function importedFiles(
 ): SourceFile[] {
   const referenced = sourceFile.getReferencedSourceFiles();
   const targets = referenced.filter(target => !target.isDeclarationFile());
+  const seen = new Set<SourceFile>();
   for (const target of referenced) {
     if (!target.isDeclarationFile()) continue;
     const sibling = runtimeSibling(target.getFilePath());
     const implementation = sibling && byPath.get(sibling);
     if (implementation) targets.push(implementation);
+    else if (isOwnDeclarationFile(target)) reachedThrough(target, targets, seen);
   }
   // The options of the package owning the importing file, exactly as the
   // project used when it loaded: a run spanning several tsconfigs resolves
@@ -118,6 +121,24 @@ function importedFiles(
     if (target) targets.push(target);
   }
   return targets;
+}
+
+/**
+ * The files a project's own declaration file names.
+ *
+ * A `.d.ts` is not a node in this graph — nothing imports one for its runtime,
+ * and the file list a run starts from leaves them all out. Where the project
+ * wrote one itself it is a pane of glass instead: importing it reaches
+ * whatever it names, however many declaration files deep that goes. Without
+ * that, a module only a `.d.ts` imports has no importer at all.
+ */
+function reachedThrough(declaration: SourceFile, targets: SourceFile[], seen: Set<SourceFile>): void {
+  if (seen.has(declaration)) return;
+  seen.add(declaration);
+  for (const onward of declaration.getReferencedSourceFiles()) {
+    if (!onward.isDeclarationFile()) targets.push(onward);
+    else if (isOwnDeclarationFile(onward)) reachedThrough(onward, targets, seen);
+  }
 }
 
 export function analyzeModules(project: Project, options: ModuleOptions = {}): ModuleAnalysis {
@@ -206,6 +227,31 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       if (publicDecls.has(ns)) continue;
       collectNamespaceFindings(ns, findings, deadDecls);
     }
+  }
+
+  // The project's own declaration files, which the walk above cannot hold.
+  // A `.d.ts` is not a node in the import graph — nothing imports one for its
+  // runtime, and the file list a run starts from leaves them all out — so the
+  // dead-file question is not one it can be asked. Its exports are another
+  // matter: they are imported by name like any module's, and answer the same
+  // way. Only the ones an import reached are here at all.
+  for (const sourceFile of project.getSourceFiles()) {
+    if (!isOwnDeclarationFile(sourceFile)) continue;
+    const filePath = sourceFile.getFilePath();
+    if (options.scopeDir && !filePath.startsWith(options.scopeDir)) continue;
+    if (isEntryFile(filePath, rootDirs, entries)) continue;
+    if (options.production && harnessFiles.has(sourceFile)) continue;
+    if (isFileSuppressed(sourceFile)) continue;
+    if (publicDecls.has(sourceFile)) continue;
+    collectExportFindings(
+      sourceFile,
+      namespaceConsumers.get(sourceFile)?.alias,
+      findings,
+      deadDecls,
+      publicDecls,
+      harnessFiles,
+      options.production ?? false
+    );
   }
 
   const fileSystem = project.getFileSystem();
@@ -316,6 +362,11 @@ function collectExportFindings(
         continue;
       }
 
+      // In a declaration file the `export` keyword is what makes the file a
+      // module rather than a script of globals, so it is never the dead part
+      // on its own: dropping it would change the meaning of every declaration
+      // beside it. Such a file answers the dead question and no other.
+      if (locallyUsed && sourceFile.isDeclarationFile()) continue;
       if (!locallyUsed) deadDecls.add(decl);
       findings.push(makeFinding(kind, namedExport(nameNode), namespaceAlias ?? '', !locallyUsed, typeKind));
     }

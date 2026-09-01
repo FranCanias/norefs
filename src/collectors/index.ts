@@ -1,4 +1,5 @@
 import type { Node, Project, SourceFile } from 'ts-morph';
+import { isOwnDeclarationFile } from '../lookup/files';
 import type { Candidate, CollectContext } from './candidate';
 import { collectClassCandidates } from './classes';
 import { collectConstObjectCandidates } from './const-objects';
@@ -43,7 +44,10 @@ export function collectCandidates(project: Project, options: CollectOptions = {}
   };
   const candidates: Candidate[] = [];
   for (const sourceFile of project.getSourceFiles()) {
-    if (sourceFile.isDeclarationFile()) continue;
+    // A package's own `.d.ts` describes code this project did not write. The
+    // project's own describes the project, and its members answer for
+    // themselves like any others.
+    if (sourceFile.isDeclarationFile() && !isOwnDeclarationFile(sourceFile)) continue;
     if (options.scopeDir && !sourceFile.getFilePath().startsWith(options.scopeDir)) continue;
     for (const collector of collectors) {
       candidates.push(...collector(sourceFile, ctx));

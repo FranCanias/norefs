@@ -211,8 +211,8 @@ export function runFixCampaign(options: CampaignOptions): CampaignResult {
 
   if (skipped > 0) {
     const untouched = unsafe
-      ? 'files, namespaces, emptied types, test-only findings, proven writes no single edit can retire'
-      : 'write-only, contract, shadowed, and package.json findings need --fix-unsafe; files, namespaces, emptied types, and test-only findings are never touched';
+      ? 'files, namespaces, emptied types, declaration files, test-only findings, proven writes no single edit can retire'
+      : 'write-only, contract, shadowed, and package.json findings need --fix-unsafe; files, namespaces, emptied types, declaration files, and test-only findings are never touched';
     notes.push(`Skipped ${skipped} finding(s) --fix does not touch (${untouched})`);
   }
   return { notes, patches };
