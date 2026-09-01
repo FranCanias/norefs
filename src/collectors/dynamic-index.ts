@@ -22,6 +22,12 @@ import { callTo, getCallableNameNode } from './escape';
  * JSON.stringify — its properties are read without per-property references, so
  * reference counts for that type can't be trusted.
  *
+ * `throw` is the same fact told the shortest way. The value leaves the call
+ * stack for whoever catches it, `catch (error)` types that value `unknown`,
+ * and every property the catcher reads is a read no reference search will ever
+ * find. An error object a library builds for its callers to read is a whole
+ * idiom shaped like that.
+ *
  * A sink reached through a helper counts the same. `dump(recipe)` is as
  * dynamic as `Object.keys(recipe)` when `dump` is the function that calls it,
  * so the index follows a relaying parameter back to its call sites.
@@ -44,6 +50,7 @@ const CONSUMING_KINDS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ForInStatement,
   SyntaxKind.BinaryExpression,
   SyntaxKind.ElementAccessExpression,
+  SyntaxKind.ThrowStatement,
 ]);
 
 /** How far into a union, intersection, or array the walk unwraps a type. */
@@ -65,7 +72,7 @@ export function buildDynamicConsumptionIndex(project: Project): DynamicConsumpti
         }
         return;
       }
-      if (node.isKind(SyntaxKind.ForInStatement)) {
+      if (node.isKind(SyntaxKind.ForInStatement) || node.isKind(SyntaxKind.ThrowStatement)) {
         consumed(node.getExpression(), suppressed, relaying);
         return;
       }

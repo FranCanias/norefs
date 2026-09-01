@@ -51,6 +51,13 @@ paths, and so is a file in a tool's directory. `ignore`, `exclude`, `scope`
 and `mutate` are paths that are the opposite of an entry point, and a workflow
 that runs a file does not publish that file's exports.
 
+**A value that leaves through `throw` takes its shape with it.** `catch
+(error)` types the caught value `unknown`, so every property the catcher reads
+is a read no reference search finds. An error object a library builds for its
+callers to read is a whole idiom shaped like that, and every member of it came
+back `write-only` — three of neverthrow's four member findings were this one
+shape. `throw` now joins the sinks a value can disappear into.
+
 **Public API is closed over the types it names.** The exemption stopped at
 the declarations an entry file exports, and a consumer does not stop there.
 ts-pattern's entry exports `match()`, whose return type is a `Match`

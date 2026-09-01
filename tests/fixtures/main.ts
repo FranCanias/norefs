@@ -83,6 +83,7 @@ import './returned-object-probe';
 import './serialized';
 import './spread';
 import './string-index';
+import './thrown-value';
 import './type-literal-alias';
 import './union-exclusive';
 import './write-only-escapes';

@@ -96,6 +96,13 @@ describe('dynamic-consumption guards (stay silent rather than guess)', () => {
     expect(reportedIn('for-in.ts')).toEqual([]);
   });
 
+  it('a value that leaves through throw takes its shape with it', () => {
+    // `catch (error)` types the value `unknown`, so every member the catcher
+    // reads is a read no reference search finds. The control in the same file
+    // is the same shape handed around instead of thrown.
+    expect(reportedIn('thrown-value.ts')).toEqual(['deadWhisk']);
+  });
+
   it('a literal "name" in v probe marks exactly that property used', () => {
     expect(reportedIn('in-operator-literal.ts')).toEqual(['deadProp']);
   });
