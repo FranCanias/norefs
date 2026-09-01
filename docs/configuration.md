@@ -122,6 +122,8 @@ A path in a config is read the way an import is written: with its extension, wit
 
 A bare word is left alone either way. `environment: 'jsdom'` names a package, not a file, and guessing an extension for it would silence every finding in a file that happened to share the name.
 
+An entry point a config names is worth less than one the manifest names, and the difference shows in one place. Nothing evaluates a config, so a path in one is read at face value — and vitest's `coverage.exclude` is a list of paths that are exactly the *opposite* of an entry point. That reading is strong enough to keep a file alive, which costs a finding when it is wrong, and too weak to say the file is what the package ships. So the dependency check leaves a config's entry points out of the shipping path it works from: `src/vitest/` named in a coverage list is not evidence that a test framework belongs in `dependencies`.
+
 What a config *imports* is not an entry point, as long as the program holds the config itself: the import is already an edge in the graph, the config is already a root of it, and naming the target an entry point on top of that would publish that file's exports as API on the strength of one config line. A config the program never holds — `eslint.config.js`, or one the tsconfig does not include — is no root of anything, so what it imports is read as an entry point after all.
 
 Test, spec, stories, bench, and config files are reachability roots too, on their own rule, and so is anything under `test`, `tests`, `__tests__`, `__mocks__`, `bench`, `benchmarks`, `test-d`, or a name that puts a word and a separator before those — `type-tests`, `__performance_tests__`. They are not entry points: nothing outside imports them, so their exports stay open to report.

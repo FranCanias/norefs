@@ -9,6 +9,96 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**Public API is closed over the types it names.** The exemption stopped at
+the declarations an entry file exports, and a consumer does not stop there.
+ts-pattern's entry exports `match()`, whose return type is a `Match`
+interface three files away; nothing imports that interface by name, and every
+method on it is the API the package exists to provide. norefs reported all
+six as dead, `--fix` deleted 119 lines of `src/types/Match.ts`, printed
+`Verified: tsc reports no new errors after the fixes`, and left 439 errors in
+a test suite the tsconfig excluded. An exported union is the same story one
+step shorter: the alias is public, its arms are local interfaces, and a
+consumer holds one of the arms. So the public surface now follows the types
+written on it, and the types those name, until nothing new turns up. Only the
+surface counts — a type named inside a function body is one no caller can
+hold. Across nineteen public repositories this silences 79 member and emptied-type
+findings, hono's aws-lambda event shapes and remeda's `debounce` result
+among them.
+
+**`--fix` stops deleting a member whose readers this run cannot hold.** An
+import clause carries names, never members, so the scan of the code beside
+the program proves nothing about a member either way — and the type check
+that vouches for a fix never held those files. The finding still stands and
+the fix now waits for `--fix-unsafe`, because `Verified` over a deletion no
+probe could witness is the one green line this tool must not print.
+
+**A member that carries a type rather than a value stays.** Two shapes, both
+load-bearing and both invisible to a reference search. A shape named inside a
+conditional type's `extends` clause is a pattern, and every name in it is
+what the match reads: `Box extends { portions: Portions<unknown, infer C> }`
+finds `C` through `Portions`' own members, one alias in from where the old
+rule looked. And a member declared `never` is the whole of a nominal brand —
+no value can be given to a `never`, so no plain object passes as the type by
+accident, and an emptied brand is a `{}` that everything matches.
+
+**A config that holds no files still reads the code beside it.** The outside
+scan began with a guard: if no path the program holds exists on disk, there
+is nothing beside it. A solution-style tsconfig — `files: []` and a list of
+references — holds no paths at all, so the check was switched off in exactly
+the case it was built for, and every package the sources import read as dead.
+The walk now uses the run's own filesystem, which answers the question the
+guard was asking, correctly and by construction: a project built in memory
+finds only the files it holds.
+
+**Six more ways a package is named without an import.** A tool configured by
+its own key in `package.json` — `"lint-staged": { … }`, `"ava": { … }` — is
+that tool in use, and the strings inside the block are read the way a config
+file's are, command-line arguments split like a script's. The tsconfig
+answers for three more: `types: [ … ]` names packages the compiler loads, and
+`importHelpers` puts a `require('tslib')` in the emitted output. A
+devDependency the peer list names too is not dead — typeorm lists twelve
+packages in both sections, nine of them database drivers, and each was
+reported. And ESLint's
+short names now expand to shareable configs as well as plugins, so
+`extends: "prettier"` finds `eslint-config-prettier`.
+
+**`test-only` survives a test the tsconfig excluded.** The outside scan read
+an excluded test's import as plain usage, so whether the reader heard about
+an export depended on a config setting rather than on the code. A harness
+file beside the program is a harness file, and the same run now says what it
+says of a test inside it.
+
+**A run pointed at one package reads the rest of the workspace.** A tsconfig
+names one package and the repository is the project, so where a tsconfig sits
+is a layout decision rather than a boundary of the code. trpc's
+`packages/tests` imports helpers out of `packages/server/src/__tests__/`, and
+`--fix` deleted every one of them. A sibling is read for what it takes from the
+package under analysis and never for what it names: its own imports say
+nothing about this package's manifest.
+
+**A build directory the manifest names is left out of the walk.** `outDir`
+covers a `tsc` build; tsup, rollup and vite say where the output goes in
+`main`, `module`, `browser` and `exports`, and nowhere the compiler reads.
+Yesterday's bundle was keeping today's dead dependencies alive. A directory
+holding a file the program holds is source by demonstration, whatever the
+manifest calls it.
+
+**The shipping path is read from reachability, not only from a name.** A name
+tells you `card.test.ts`; reachability tells you the helper directory beside
+it. valibot's `src/vitest/` wraps the test framework, is imported by tests
+alone, and the report advised shipping vitest in `dependencies` on the
+strength of it. Two things fed that: no chain of imports from an entry point
+reaches the directory, and `vitest.config.ts` named it — in a
+`coverage.exclude` list, which is paths that are the opposite of an entry
+point. A path in a config is strong enough to keep a file alive and too weak
+to say the package ships it, so the dependency check now leaves a config's
+entry points out of the shipping path it works from.
+
+**A build's own configuration is no longer offered as a place to look.** An
+unverified name match is a lead, and `{ type: "feat" }` in a semantic-release
+config shares a word with the type and nothing else. The evidence sent
+readers to a file with no bearing on the finding.
+
 **The code beside the program is read for what it imports.** A tsconfig
 decides which files a run holds, and projects leave real code out of it all
 the time: an `exclude` that names the tests, a `files` list of one declaration
