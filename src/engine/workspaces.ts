@@ -7,6 +7,8 @@ import { diskFileSystem } from './file-system';
 interface Workspace {
   /** The tsconfig of each declared package that has one. These are the projects. */
   tsConfigPaths: string[];
+  /** Every declared package's directory, whether or not it holds a tsconfig. */
+  packageDirs: string[];
   /** What named the packages: `pnpm-workspace.yaml` or `package.json workspaces`. */
   source: string;
   /** Declared packages holding no tsconfig.json. Nothing analyzes them. */
@@ -37,16 +39,23 @@ export function findWorkspace(rootDir: string, fileSystem: ReadOnlyFileSystem = 
 
   const tsConfigPaths: string[] = [];
   const withoutTsConfig: string[] = [];
+  const packageDirs: string[] = [];
   for (const dir of packageDirectories(rootDir, fileSystem)) {
     const relative = path.relative(rootDir, dir).split(path.sep).join('/');
     if (!include.some(pattern => minimatch(relative, pattern))) continue;
     if (exclude.some(pattern => minimatch(relative, pattern))) continue;
+    packageDirs.push(dir);
     const tsConfig = path.join(dir, 'tsconfig.json');
     if (fileSystem.readFile(tsConfig) === undefined) withoutTsConfig.push(relative);
     else tsConfigPaths.push(tsConfig);
   }
   if (tsConfigPaths.length === 0 && withoutTsConfig.length === 0) return undefined;
-  return { tsConfigPaths: tsConfigPaths.sort(), source: declaration.source, withoutTsConfig: withoutTsConfig.sort() };
+  return {
+    tsConfigPaths: tsConfigPaths.sort(),
+    packageDirs: packageDirs.sort(),
+    source: declaration.source,
+    withoutTsConfig: withoutTsConfig.sort(),
+  };
 }
 
 /** The globs a workspace declaration holds. pnpm's file wins where both exist. */
@@ -75,6 +84,38 @@ function declaredPatterns(
   if (!Array.isArray(list)) return undefined;
   const patterns = list.filter((item): item is string => typeof item === 'string');
   return patterns.length > 0 ? { patterns, source: 'package.json workspaces' } : undefined;
+}
+
+/**
+ * The other packages of the workspace a run was pointed inside.
+ *
+ * A tsconfig names one package; the repository is the project. A sibling
+ * package importing this one is code beside the program in exactly the sense
+ * the outside scan means — the only reason it went unread is that the walk
+ * started where the tsconfig sits, and where a tsconfig sits is a layout
+ * decision rather than a boundary of the code.
+ *
+ * Nothing comes back when no ancestor declares a workspace, or when the run
+ * already holds every package it declares. The climb stops at the first
+ * declaration it meets, because a workspace inside a workspace is the inner
+ * one's business.
+ */
+export function workspaceSiblings(rootDirs: string[], fileSystem: ReadOnlyFileSystem = diskFileSystem): string[] {
+  const found = new Set<string>();
+  const climbed = new Set<string>();
+  for (const rootDir of rootDirs) {
+    for (let dir = path.dirname(rootDir); dir !== path.dirname(dir); dir = path.dirname(dir)) {
+      if (climbed.has(dir)) break;
+      climbed.add(dir);
+      const workspace = findWorkspace(dir, fileSystem);
+      if (!workspace) continue;
+      for (const packageDir of workspace.packageDirs) found.add(packageDir);
+      break;
+    }
+  }
+  return [...found]
+    .filter(dir => !rootDirs.some(root => dir === root || dir.startsWith(`${root}/`) || root.startsWith(`${dir}/`)))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 const MAX_PACKAGE_DEPTH = 5;

@@ -8,7 +8,7 @@ import path from 'node:path';
  */
 export interface ReadOnlyFileSystem {
   readFile(filePath: string): string | undefined;
-  readDir(dirPath: string): Array<{ path: string; isDirectory: boolean }>;
+  readDir(dirPath: string): Array<{ path: string; isDirectory: boolean; isSymlink: boolean }>;
 }
 
 /** Real files on disk, for the syntax-only run that never builds a program. */
@@ -22,9 +22,11 @@ export const diskFileSystem: ReadOnlyFileSystem = {
   },
   readDir(dirPath) {
     try {
-      return fs
-        .readdirSync(dirPath, { withFileTypes: true })
-        .map(entry => ({ path: path.join(dirPath, entry.name), isDirectory: entry.isDirectory() }));
+      return fs.readdirSync(dirPath, { withFileTypes: true }).map(entry => ({
+        path: path.join(dirPath, entry.name),
+        isDirectory: entry.isDirectory(),
+        isSymlink: entry.isSymbolicLink(),
+      }));
     } catch {
       return [];
     }
@@ -37,7 +39,7 @@ export const diskFileSystem: ReadOnlyFileSystem = {
  */
 export function hostFileSystem(host: {
   readFileSync(filePath: string): string;
-  readDirSync(dirPath: string): Array<{ name: string; isDirectory: boolean }>;
+  readDirSync(dirPath: string): Array<{ name: string; isDirectory: boolean; isSymlink: boolean }>;
 }): ReadOnlyFileSystem {
   return {
     readFile(filePath) {
@@ -49,7 +51,9 @@ export function hostFileSystem(host: {
     },
     readDir(dirPath) {
       try {
-        return host.readDirSync(dirPath).map(entry => ({ path: entry.name, isDirectory: entry.isDirectory }));
+        return host
+          .readDirSync(dirPath)
+          .map(entry => ({ path: entry.name, isDirectory: entry.isDirectory, isSymlink: entry.isSymlink }));
       } catch {
         return [];
       }

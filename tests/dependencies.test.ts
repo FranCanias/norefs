@@ -738,3 +738,38 @@ describe('the ways a package is named without an import', () => {
     expect(findings).toEqual([]);
   });
 });
+
+describe('what counts as the shipping path', () => {
+  /** A library whose test helpers live in a directory named after the tool they wrap. */
+  function box(configText: string): Finding[] {
+    const project = new Project({ useInMemoryFileSystem: true });
+    const fileSystem = project.getFileSystem();
+    fileSystem.writeFileSync(
+      '/package.json',
+      JSON.stringify({ name: 'box', main: 'src/index.ts', devDependencies: { vitest: '1.0.0' } }, null, 2)
+    );
+    fileSystem.writeFileSync('/node_modules/vitest/package.json', JSON.stringify({ name: 'vitest' }));
+    fileSystem.writeFileSync('/vitest.config.ts', configText);
+    project.createSourceFile('/src/index.ts', 'export const box = 1;\n');
+    project.createSourceFile(
+      '/src/vitest/index.ts',
+      "import { expect } from 'vitest';\nexport const expectBox = (n: number): void => expect(n);\n"
+    );
+    project.createSourceFile('/src/box.test.ts', "import { expectBox } from './vitest/index';\nexpectBox(1);\n");
+    return analyze(project, { rootDirs: ['/'] }).filter(f => f.kind === 'misplaced' || f.kind === 'dependency');
+  }
+
+  it('leaves out a helper directory only the tests reach', () => {
+    // valibot's shape. `src/vitest/` wraps the test framework and no chain of
+    // imports from the entry reaches it, so the advice used to be: ship a test
+    // framework in `dependencies`.
+    expect(box("export default { test: { environment: 'jsdom' } };\n")).toEqual([]);
+  });
+
+  it('leaves it out when a config names it, too', () => {
+    // Nothing evaluates a config, so `coverage.exclude` reads as a list of
+    // entry points — paths that are exactly the opposite of one. Strong enough
+    // to keep a file alive, too weak to say the package ships it.
+    expect(box("export default { test: { coverage: { exclude: ['src/vitest'] } } };\n")).toEqual([]);
+  });
+});

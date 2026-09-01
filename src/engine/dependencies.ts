@@ -111,10 +111,24 @@ export function analyzeDependencies(
      * test, are outside the question this run is asking.
      */
     production?: boolean | undefined;
+    /**
+     * Files no chain of imports from an entry point reaches.
+     *
+     * Which section a package belongs in is a claim about when it is needed,
+     * and a file the shipped product cannot reach never needs anything. A
+     * name tells you a test — `*.test.ts` — and reachability tells you the
+     * helper directory beside it: valibot's `src/vitest/` is named after the
+     * tool it wraps, imported by tests alone, and the report used to advise
+     * shipping a test framework in `dependencies` on the strength of it.
+     *
+     * Empty when the run resolved no entry point, because then nothing is
+     * reachable and the answer would be that nothing ships.
+     */
+    offShippingPath?: ReadonlySet<string> | undefined;
   },
   context: DependencyContext
 ): Finding[] {
-  const { scopeDir, ignore, aliasPatterns, production } = options;
+  const { scopeDir, ignore, aliasPatterns, production, offShippingPath } = options;
   const manifests: Manifest[] = [];
   for (const dir of rootDirs) {
     const manifest = readManifest(context, dir);
@@ -140,7 +154,7 @@ export function analyzeDependencies(
   for (const use of uses) {
     // A production run treats the harness as absent, so its imports are not
     // usage — which also makes every use that gets this far a shipped one.
-    const shipped = !isHarnessFile(use.filePath, rootDirs);
+    const shipped = !isHarnessFile(use.filePath, rootDirs) && offShippingPath?.has(use.filePath) !== true;
     if (production && !shipped) continue;
     const specifier = stripQuerySuffix(use.text);
     if (matchesAlias(specifier, aliasPatterns)) continue;

@@ -10,6 +10,16 @@ export interface EntryPoint {
   filePath: string;
   /** Where it came from: `package.json scripts.dev`, `vite.config.ts`, … */
   source: string;
+  /**
+   * A tool's config named it, rather than the manifest.
+   *
+   * Nothing here evaluates a config, so a path in one is read at face value —
+   * and vitest's `coverage.exclude` lists paths that are the opposite of an
+   * entry point. That is strong enough to keep a file alive, which costs a
+   * finding when it is wrong, and too weak to say the file is what the
+   * package ships, which costs a claim about somebody's install.
+   */
+  harness: boolean;
 }
 
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'];
@@ -40,14 +50,14 @@ export function packageEntryPoints(
   const outDir = compilerOptions.outDir ? path.resolve(packageDir, compilerOptions.outDir) : undefined;
   const sourceRoot = compilerOptions.rootDir ? path.resolve(packageDir, compilerOptions.rootDir) : fallbackSourceRoot;
 
-  const found = new Map<string, string>();
-  const add = (candidate: string, fromDir: string, source: string, directoryIndex = false): void => {
+  const found = new Map<string, { source: string; harness: boolean }>();
+  const add = (candidate: string, fromDir: string, source: string, directoryIndex = false, harness = false): void => {
     const resolved = resolveToKnown(candidate, fromDir, packageDir, outDir, sourceRoot, known, directoryIndex);
-    if (resolved && !found.has(resolved)) found.set(resolved, source);
+    if (resolved && !found.has(resolved)) found.set(resolved, { source, harness });
   };
   const addPattern = (candidate: string, source: string): void => {
     for (const filePath of expandPattern(candidate, packageDir, outDir, sourceRoot, known, rootDirs)) {
-      if (!found.has(filePath)) found.set(filePath, source);
+      if (!found.has(filePath)) found.set(filePath, { source, harness: false });
     }
   };
 
@@ -63,10 +73,10 @@ export function packageEntryPoints(
       if (isRoot && config.imported.has(written)) continue;
       // A config writes a module path the way an import writes it, so the
       // directory whose `index` is the module counts here.
-      add(written, config.dir, source, true);
+      add(written, config.dir, source, true, true);
     }
   }
-  return [...found].map(([filePath, source]) => ({ filePath, source }));
+  return [...found].map(([filePath, { source, harness }]) => ({ filePath, source, harness }));
 }
 
 /** `main`, `bin`, `exports`, and any script that runs a source file by path. */

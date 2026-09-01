@@ -7,12 +7,14 @@ import { analyzeDependencies } from './dependencies';
 import type { EntryPoint } from './entry-points';
 import { packageEntryPoints } from './entry-points';
 import { diskFileSystem } from './file-system';
+import type { OutsideReach } from './outside';
 import { readOutside } from './outside';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
 import { projectFiles, SourceIndex } from './sources';
 import { configReader } from './tool-configs';
+import { workspaceSiblings } from './workspaces';
 
 /** The findings the syntax alone decides — no type checker is involved. */
 export const SYNTAX_KINDS: FindingKind[] = ['file', 'dependency', 'unlisted', 'misplaced'];
@@ -56,18 +58,16 @@ export function analyzeSyntax(
   // an entry the config names is looked for among those too.
   const known = new Set([...filePaths, ...declarations]);
   const reader = configReader(diskFileSystem);
-  const entries = [
+  const declared = rootDirs.flatMap(dir =>
+    packageEntryPoints(dir, fallbackRoot, optionsForDir(packages, dir) ?? fallbackOptions, known, reader, rootDirs)
+  );
+  const entries = [...(options.entries ?? []), ...declared.map(entry => entry.filePath)];
+  // The entries the product itself is reached through. A config's are left
+  // out: a path in one is read at face value, and a coverage exclude list is
+  // paths that are the opposite of an entry point.
+  const shippingEntries = [
     ...(options.entries ?? []),
-    ...rootDirs.flatMap(dir =>
-      packageEntryPoints(
-        dir,
-        fallbackRoot,
-        optionsForDir(packages, dir) ?? fallbackOptions,
-        known,
-        reader,
-        rootDirs
-      ).map(entry => entry.filePath)
-    ),
+    ...declared.filter(entry => !entry.harness).map(entry => entry.filePath),
   ];
 
   // What the tsconfig left out still imports the project. Nothing in those
@@ -76,18 +76,29 @@ export function analyzeSyntax(
     rootDirs,
     packages,
     fallbackOptions,
-    production: options.production,
+    siblingDirs: workspaceSiblings(rootDirs, diskFileSystem),
+    fileSystem: diskFileSystem,
   });
+  // A production run treats a harness as absent wherever it sits, so only the
+  // shipped half of the code beside the program answers for anything.
+  const reached = options.production ? outside.shipped : outside.all;
 
+  const importedFiles = (filePath: string): string[] =>
+    sources.importsOf(filePath).flatMap(entry => (entry.target ? [entry.target] : []));
   const reachable = reachableFiles(
     filePaths,
     filePath =>
       isEntryFile(filePath, rootDirs, entries) ||
       (!options.production && isHarnessFile(filePath, rootDirs)) ||
-      outside.targets.has(filePath) ||
+      reached.targets.has(filePath) ||
       sources.isFileSuppressed(filePath),
-    filePath => sources.importsOf(filePath).flatMap(entry => (entry.target ? [entry.target] : []))
+    importedFiles
   );
+  // The same walk without the harness roots: what the shipped product can
+  // reach. A file outside it imports nothing the product needs, whatever the
+  // directory is called. With no entry point there is no reachability to
+  // read, so the question goes unanswered rather than answered wrongly.
+  const shipping = shippingPath(filePaths, rootDirs, shippingEntries, outside.shipped, sources, importedFiles);
 
   const findings: Finding[] = [];
   const uses: DependencyUse[] = [];
@@ -133,6 +144,7 @@ export function analyzeSyntax(
         ignore: options.ignoreDependencies ?? [],
         aliasPatterns: pathAliasPatterns(packages, fallbackOptions),
         production: options.production,
+        offShippingPath: shipping,
       },
       {
         fileExists: filePath => fs.existsSync(filePath),
@@ -169,7 +181,7 @@ export function listEntryPoints(
   const known = new Set([...filePaths, ...declarations]);
   const reader = configReader(diskFileSystem);
 
-  const discovered = new Map<string, string>();
+  const discovered = new Map<string, EntryPoint>();
   for (const dir of rootDirs) {
     for (const entry of packageEntryPoints(
       dir,
@@ -179,18 +191,22 @@ export function listEntryPoints(
       reader,
       rootDirs
     )) {
-      if (!discovered.has(entry.filePath)) discovered.set(entry.filePath, entry.source);
+      if (!discovered.has(entry.filePath)) discovered.set(entry.filePath, entry);
     }
   }
 
   const asked = options.entries ?? [];
   const entries: EntryPoint[] = [];
   for (const filePath of [...filePaths, ...declarations]) {
-    const source = asked.some(entry => filePath === entry || filePath.startsWith(`${entry}/`))
-      ? 'asked for with --entry'
-      : (discovered.get(filePath) ??
-        (isEntryFile(filePath, rootDirs, []) ? 'index/main/cli beside a tsconfig' : undefined));
-    if (source) entries.push({ filePath, source });
+    if (asked.some(entry => filePath === entry || filePath.startsWith(`${entry}/`))) {
+      entries.push({ filePath, source: 'asked for with --entry', harness: false });
+      continue;
+    }
+    const discoveredEntry = discovered.get(filePath);
+    if (discoveredEntry) entries.push(discoveredEntry);
+    else if (isEntryFile(filePath, rootDirs, [])) {
+      entries.push({ filePath, source: 'index/main/cli beside a tsconfig', harness: false });
+    }
   }
   return entries;
 }
@@ -201,4 +217,30 @@ function readFile(filePath: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Files no chain of imports from an entry point reaches, or nothing when the
+ * run resolved no entry point at all.
+ *
+ * With no root there is no reachability to read, and answering "nothing
+ * ships" would turn every dependency into a misplaced one. So the question
+ * goes unanswered, which is what nothing means to every reader of it.
+ */
+function shippingPath(
+  filePaths: string[],
+  rootDirs: string[],
+  entries: string[],
+  outside: OutsideReach,
+  sources: SourceIndex,
+  importedFiles: (filePath: string) => string[]
+): ReadonlySet<string> | undefined {
+  if (!filePaths.some(filePath => isEntryFile(filePath, rootDirs, entries))) return undefined;
+  const reached = reachableFiles(
+    filePaths,
+    filePath =>
+      isEntryFile(filePath, rootDirs, entries) || outside.targets.has(filePath) || sources.isFileSuppressed(filePath),
+    importedFiles
+  );
+  return new Set(filePaths.filter(filePath => !reached.has(filePath)));
 }

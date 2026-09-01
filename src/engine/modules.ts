@@ -20,6 +20,7 @@ import { analyzeDependencies } from './dependencies';
 import { packageEntryPoints } from './entry-points';
 import { hostFileSystem } from './file-system';
 import { lineAndColumnAt } from './location';
+import type { OutsideReach } from './outside';
 import { readOutside, takenOutside } from './outside';
 import type { PackageConfig } from './project';
 import { optionsForDir, pathAliasPatterns } from './project';
@@ -27,6 +28,7 @@ import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './r
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 import { runtimeSibling } from './text';
 import { configReader } from './tool-configs';
+import { workspaceSiblings } from './workspaces';
 
 /** How a module is consumed through an `import * as ns` / `export * as ns` binding. */
 interface NamespaceUse {
@@ -153,19 +155,25 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   const rootDirs = options.rootDirs?.length ? options.rootDirs : [fallbackRoot];
   const byPath = new Map(sourceFiles.map(sf => [sf.getFilePath(), sf]));
   const known = new Set([...byPath.keys(), ...ownDeclarations.map(sf => sf.getFilePath())]);
-  const reader = configReader(hostFileSystem(project.getFileSystem()));
-  const entries = [
+  const fileSystem = hostFileSystem(project.getFileSystem());
+  const reader = configReader(fileSystem);
+  const declared = rootDirs.flatMap(dir =>
+    packageEntryPoints(
+      dir,
+      fallbackRoot,
+      optionsForDir(options.packages ?? [], dir) ?? project.getCompilerOptions(),
+      known,
+      reader,
+      rootDirs
+    )
+  );
+  const entries = [...(options.entries ?? []), ...declared.map(entry => entry.filePath)];
+  // The entries the product itself is reached through. A config's are left
+  // out: a path in one is read at face value, and a coverage exclude list is
+  // paths that are the opposite of an entry point.
+  const shippingEntries = [
     ...(options.entries ?? []),
-    ...rootDirs.flatMap(dir =>
-      packageEntryPoints(
-        dir,
-        fallbackRoot,
-        optionsForDir(options.packages ?? [], dir) ?? project.getCompilerOptions(),
-        known,
-        reader,
-        rootDirs
-      ).map(entry => entry.filePath)
-    ),
+    ...declared.filter(entry => !entry.harness).map(entry => entry.filePath),
   ];
   // What the tsconfig left out still imports the project. Nothing in those
   // files is analyzed, and what they import is used all the same.
@@ -173,8 +181,21 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
     rootDirs,
     packages: options.packages ?? [],
     fallbackOptions: project.getCompilerOptions(),
-    production: options.production,
+    siblingDirs: workspaceSiblings(rootDirs, fileSystem),
+    fileSystem,
   });
+  // A production run treats a harness as absent wherever it sits, so only the
+  // shipped half of the code beside the program answers for anything.
+  const reached = options.production ? outside.shipped : outside.all;
+  const imports = new Map<SourceFile, SourceFile[]>();
+  const importsOf = (sourceFile: SourceFile): SourceFile[] => {
+    let found = imports.get(sourceFile);
+    if (!found) {
+      found = importedFiles(sourceFile, project, byPath, options.packages ?? []);
+      imports.set(sourceFile, found);
+    }
+    return found;
+  };
   const reachable = reachableFiles(
     sourceFiles,
     sourceFile => {
@@ -182,12 +203,16 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       return (
         isEntryFile(filePath, rootDirs, entries) ||
         (!options.production && isHarnessFile(filePath, rootDirs)) ||
-        outside.targets.has(filePath) ||
+        reached.targets.has(filePath) ||
         isFileSuppressed(sourceFile)
       );
     },
-    sourceFile => importedFiles(sourceFile, project, byPath, options.packages ?? [])
+    importsOf
   );
+  // The same walk without the harness roots: what the shipped product can
+  // reach. A file outside it imports nothing the product needs, whatever the
+  // directory is called.
+  const shipping = shippingPath(sourceFiles, rootDirs, shippingEntries, outside.shipped, importsOf);
   const namespaceConsumers = findNamespaceConsumers(project);
 
   const findings: Finding[] = [];
@@ -242,7 +267,8 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       publicDecls,
       harnessFiles,
       options.production ?? false,
-      outside.names.get(filePath)
+      outside.shipped.names.get(filePath),
+      options.production ? undefined : outside.all.names.get(filePath)
     );
     for (const ns of sourceFile.getModules()) {
       if (publicDecls.has(ns)) continue;
@@ -271,11 +297,12 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
       publicDecls,
       harnessFiles,
       options.production ?? false,
-      outside.names.get(filePath)
+      outside.shipped.names.get(filePath),
+      options.production ? undefined : outside.all.names.get(filePath)
     );
   }
 
-  const fileSystem = project.getFileSystem();
+  const host = project.getFileSystem();
   findings.push(
     ...analyzeDependencies(
       [...dependencyUses(project), ...outside.uses],
@@ -285,10 +312,11 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
         ignore: options.ignoreDependencies ?? [],
         aliasPatterns: pathAliasPatterns(options.packages ?? [], project.getCompilerOptions()),
         production: options.production,
+        offShippingPath: shipping,
       },
       {
-        fileExists: filePath => fileSystem.fileExistsSync(filePath),
-        readFile: filePath => fileSystem.readFileSync(filePath),
+        fileExists: filePath => host.fileExistsSync(filePath),
+        readFile: filePath => host.readFileSync(filePath),
         isSuppressedAt: (filePath, offset) => {
           const sourceFile = project.getSourceFile(filePath);
           const node = sourceFile?.getDescendantAtPos(offset);
@@ -327,6 +355,32 @@ function publicApiDeclarations(sourceFiles: SourceFile[], rootDirs: string[], en
 }
 
 /**
+ * Files no chain of imports from an entry point reaches, or nothing when the
+ * run resolved no entry point at all.
+ *
+ * With no root there is no reachability to read, and answering "nothing
+ * ships" would turn every dependency into a misplaced one. So the question
+ * goes unanswered, which is what the empty set means to every reader of it.
+ */
+function shippingPath(
+  sourceFiles: SourceFile[],
+  rootDirs: string[],
+  entries: string[],
+  outside: OutsideReach,
+  importsOf: (sourceFile: SourceFile) => SourceFile[]
+): ReadonlySet<string> | undefined {
+  const isRoot = (sourceFile: SourceFile): boolean => {
+    const filePath = sourceFile.getFilePath();
+    return isEntryFile(filePath, rootDirs, entries) || outside.targets.has(filePath) || isFileSuppressed(sourceFile);
+  };
+  if (!sourceFiles.some(sourceFile => isEntryFile(sourceFile.getFilePath(), rootDirs, entries))) return undefined;
+  const reached = reachableFiles(sourceFiles, isRoot, importsOf);
+  return new Set(
+    sourceFiles.filter(sourceFile => !reached.has(sourceFile)).map(sourceFile => sourceFile.getFilePath())
+  );
+}
+
+/**
  * Exported declarations of this file that nothing outside the file uses.
  * References resolve through re-export chains, so a barrel between the
  * declaration and its consumers does not hide usage.
@@ -339,14 +393,24 @@ function collectExportFindings(
   publicDecls: Set<Node>,
   harnessFiles: Set<SourceFile>,
   production: boolean,
-  /** Names a file outside the program takes from this one. */
-  outsideNames: ReadonlySet<string> | undefined
+  /** Names a shipped file outside the program takes from this one. */
+  outsideNames: ReadonlySet<string> | undefined,
+  /**
+   * The same, counting the harness files outside as well. A name only those
+   * take is a name only tests use, which is a verdict rather than silence.
+   */
+  outsideOrHarnessNames: ReadonlySet<string> | undefined
 ): void {
   const seen = new Set<Node>();
   for (const [exportedAs, declarations] of sourceFile.getExportedDeclarations()) {
     // A name the program never sees imported may still be imported, by a file
     // the tsconfig left out. Nothing here can be called private, or dead.
     if (takenOutside(outsideNames, exportedAs)) continue;
+    // Taken by an excluded test and by nothing else: where the test sits is
+    // not what decides the verdict, so this answers the way an in-program test
+    // would. Whether the name is used locally as well is still the loop's own
+    // question, so the flag rides in rather than short-circuiting here.
+    const harnessTook = takenOutside(outsideOrHarnessNames, exportedAs);
     for (const decl of declarations) {
       if (decl.getSourceFile() !== sourceFile || seen.has(decl)) continue;
       seen.add(decl);
@@ -363,6 +427,7 @@ function collectExportFindings(
         production
       );
       if (externallyUsed) continue;
+      const onlyHarnessUses = testOnly || harnessTook;
 
       const typeKind = typeKeyword(decl);
       const kind: ExportFinding['kind'] = namespaceAlias
@@ -372,7 +437,7 @@ function collectExportFindings(
         : typeKind
           ? 'type'
           : 'export';
-      if (testOnly) {
+      if (onlyHarnessUses) {
         // Production code in its own file justifies the declaration; tests
         // importing it on top of that make it simply used.
         if (locallyUsed) continue;
@@ -399,7 +464,16 @@ function collectExportFindings(
   }
 
   if (takenOutside(outsideNames, 'default')) return;
-  collectDefaultExportFinding(sourceFile, namespaceAlias, findings, deadDecls, publicDecls, harnessFiles, production);
+  collectDefaultExportFinding(
+    sourceFile,
+    namespaceAlias,
+    findings,
+    deadDecls,
+    publicDecls,
+    harnessFiles,
+    production,
+    takenOutside(outsideOrHarnessNames, 'default')
+  );
 }
 
 /**
@@ -415,7 +489,9 @@ function collectDefaultExportFinding(
   deadDecls: Set<Node>,
   publicDecls: Set<Node>,
   harnessFiles: Set<SourceFile>,
-  production: boolean
+  production: boolean,
+  /** An excluded test imports the default, and nothing shipped does. */
+  harnessTook: boolean
 ): void {
   // A harness file is loaded by a tool rather than imported, and the default
   // export is how a tool takes its input: a vitest config, a storybook story,
@@ -427,7 +503,7 @@ function collectDefaultExportFinding(
   if (!declaration || publicDecls.has(declaration) || isAmbient(declaration)) return;
   if (isNodeSuppressed(declaration)) return;
 
-  let harnessUsed = false;
+  let harnessUsed = harnessTook;
   for (const ref of findDefaultExportReferences(declaration)) {
     if (isModuleBinding(ref)) continue;
     if (harnessFiles.has(ref.getSourceFile())) harnessUsed = true;

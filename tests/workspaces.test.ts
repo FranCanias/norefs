@@ -11,7 +11,7 @@ function repo(files: Record<string, string>): ReadOnlyFileSystem {
     readDir(dirPath) {
       const prefix = dirPath.endsWith('/') ? dirPath : `${dirPath}/`;
       const names = new Set<string>();
-      const out: Array<{ path: string; isDirectory: boolean }> = [];
+      const out: Array<{ path: string; isDirectory: boolean; isSymlink: boolean }> = [];
       for (const filePath of Object.keys(files)) {
         if (!filePath.startsWith(prefix)) continue;
         const rest = filePath.slice(prefix.length);
@@ -19,7 +19,7 @@ function repo(files: Record<string, string>): ReadOnlyFileSystem {
         const name = slash === -1 ? rest : rest.slice(0, slash);
         if (names.has(name)) continue;
         names.add(name);
-        out.push({ path: prefix + name, isDirectory: slash !== -1 });
+        out.push({ path: prefix + name, isDirectory: slash !== -1, isSymlink: false });
       }
       return out;
     },
