@@ -24,6 +24,14 @@ sources do. typeorm's build tools came back as things the install needs. A
 pattern still keeps a file from being called dead — it just never puts one on
 the shipping path, which is the claim about somebody's install.
 
+**A bundler-built entry now finds its source.** `outDir` and `rootDir`
+describe the build only where `tsc` is the build. swr writes `outDir: dist`
+with `rootDir: .` and builds with bunchee, so `dist/index/index.js` mapped
+onto a path no file has, no entry point resolved, and the whole source tree
+came back dead — 39 findings, every one a live file. When the tsconfig's
+mapping lands on nothing, the package's source roots are tried instead. Two
+roots answering at once is no answer, so nothing is named and the run says so.
+
 **Public API is closed over the types it names.** The exemption stopped at
 the declarations an entry file exports, and a consumer does not stop there.
 ts-pattern's entry exports `match()`, whose return type is a `Match`

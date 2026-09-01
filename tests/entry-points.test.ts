@@ -256,6 +256,37 @@ describe('entry points the build declares', () => {
     expect(names(findings)).toEqual(['orphan.ts']);
   });
 
+  it('finds the source of a built entry when rootDir describes no build', () => {
+    // swr's shape. A package built by a bundler keeps a tsconfig for the type
+    // check alone, and it is free to say anything: `outDir: dist` with
+    // `rootDir: .` maps `dist/index/index.js` onto a path no file has. Nothing
+    // resolved, and the whole source tree came back dead.
+    const findings = findingsOf(
+      { main: './dist/index/index.js' },
+      {
+        '/src/index/index.ts': "export { whisk } from '../whisk';\n",
+        '/src/whisk.ts': 'export const whisk = 1;\n',
+        '/src/orphan.ts': 'export const orphan = 1;\n',
+      },
+      { outDir: '/dist', rootDir: '/' }
+    );
+    expect(names(findings)).toEqual(['orphan.ts']);
+  });
+
+  it('makes no guess when two source roots answer at once', () => {
+    // Which one ships would be a coin toss, so neither is named and the run
+    // says what it always says when no entry point resolves.
+    const findings = findingsOf(
+      { main: './dist/whisk.js' },
+      {
+        '/src/whisk.ts': 'export const fromSrc = 1;\n',
+        '/lib/whisk.ts': 'export const fromLib = 1;\n',
+      },
+      { outDir: '/dist', rootDir: '/' }
+    );
+    expect(names(findings)).toEqual(['whisk.ts', 'whisk.ts']);
+  });
+
   it('build output is never walked for configs', () => {
     const findings = findingsWith(
       {},

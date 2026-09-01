@@ -53,9 +53,23 @@ export function packageEntryPoints(
   const outDir = compilerOptions.outDir ? path.resolve(packageDir, compilerOptions.outDir) : undefined;
   const sourceRoot = compilerOptions.rootDir ? path.resolve(packageDir, compilerOptions.rootDir) : fallbackSourceRoot;
 
+  // Only a mapping that finds nothing pays for this, so it is read once and
+  // only when it is asked for.
+  let rebuiltRoots: string[] | undefined;
+  const otherRoots = (): string[] => (rebuiltRoots ??= sourceRootsOf(packageDir, sourceRoot, known));
+
   const found = new Map<string, { source: string; shipping: boolean }>();
   const add = (candidate: string, fromDir: string, source: string, directoryIndex = false, shipping = true): void => {
-    const resolved = resolveToKnown(candidate, fromDir, packageDir, outDir, sourceRoot, known, directoryIndex);
+    const resolved = resolveToKnown(
+      candidate,
+      fromDir,
+      packageDir,
+      outDir,
+      sourceRoot,
+      known,
+      directoryIndex,
+      otherRoots
+    );
     if (resolved && !found.has(resolved)) found.set(resolved, { source, shipping });
   };
   const addPattern = (candidate: string, source: string): void => {
@@ -138,7 +152,8 @@ function resolveToKnown(
   outDir: string | undefined,
   sourceRoot: string,
   known: Set<string>,
-  directoryIndex: boolean
+  directoryIndex: boolean,
+  otherRoots: () => string[]
 ): string | undefined {
   if (candidate.length === 0 || candidate.includes('*') || /^[a-z][a-z0-9+.-]*:/i.test(candidate)) return undefined;
 
@@ -156,7 +171,71 @@ function resolveToKnown(
       if (known.has(sourcePath)) return sourcePath;
     }
   }
-  return undefined;
+  return outDir === undefined
+    ? undefined
+    : rebuiltFrom(bases, outDir, otherRoots(), known, shapedLikeAPath, directoryIndex);
+}
+
+/**
+ * The source of a built file, when the tsconfig's own mapping finds nothing.
+ *
+ * `outDir` and `rootDir` describe the build only where `tsc` is the build. A
+ * package built by a bundler keeps a tsconfig for the type check alone, and it
+ * is free to say anything: swr writes `outDir: "./dist"` with `rootDir: "./"`
+ * and builds `src/index/index.ts` into `dist/index/index.js`, so the mapping
+ * lands on a path no file has. Nothing resolves, and a whole source tree is
+ * called dead.
+ *
+ * So the second guess drops `rootDir` and tries the package's source roots
+ * instead. Two roots answering at once is no answer — the file that ships
+ * would be a coin toss — so that case is left alone, and the warning about a
+ * run with no entry point stands.
+ */
+function rebuiltFrom(
+  bases: string[],
+  outDir: string,
+  roots: string[],
+  known: Set<string>,
+  shapedLikeAPath: boolean,
+  directoryIndex: boolean
+): string | undefined {
+  const hits = new Set<string>();
+  for (const base of bases) {
+    if (base !== outDir && !base.startsWith(`${outDir}${path.sep}`)) continue;
+    const built = path.relative(outDir, base);
+    for (const root of roots) {
+      for (const sourcePath of sourceCandidates(
+        path.join(root, built),
+        undefined,
+        root,
+        shapedLikeAPath,
+        directoryIndex
+      )) {
+        if (known.has(sourcePath)) hits.add(sourcePath);
+      }
+    }
+  }
+  const [only] = hits;
+  return hits.size === 1 ? only : undefined;
+}
+
+/**
+ * Where a package could be keeping its source: each directory directly under
+ * it that holds a file this run reads. The configured `rootDir` is left out —
+ * it is the guess that already failed — and so is the package root, whose
+ * every built path is the built path itself.
+ */
+function sourceRootsOf(packageDir: string, sourceRoot: string, known: Set<string>): string[] {
+  const roots = new Set<string>();
+  const prefix = packageDir.endsWith(path.sep) ? packageDir : `${packageDir}${path.sep}`;
+  for (const filePath of known) {
+    if (!filePath.startsWith(prefix)) continue;
+    const [first, second] = filePath.slice(prefix.length).split(path.sep);
+    if (first === undefined || second === undefined) continue;
+    const root = path.join(packageDir, first);
+    if (root !== sourceRoot) roots.add(root);
+  }
+  return [...roots].sort();
 }
 
 /**
