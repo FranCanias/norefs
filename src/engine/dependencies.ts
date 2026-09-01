@@ -199,6 +199,11 @@ export function analyzeDependencies(
           !manifest.usedByConfig.has(name) &&
           !manifest.pluggedInto.has(name);
         if (invisible) {
+          // A devDependency the peer list names too is not this package's to
+          // install: the consumer brings it, and the dev listing is how the
+          // package builds and tests against the peer it declares. The pairing
+          // is why the line is there, so no import has to be.
+          if (section === 'devDependencies' && manifest.peer.has(name)) continue;
           if (!unusedIsProvable(manifest, name, section, context)) continue;
           place({
             kind: 'dependency',
@@ -380,7 +385,8 @@ function readManifest(context: DependencyContext, dir: string): Manifest | undef
     private: sections['private'] === true,
   };
   collectScriptUse(manifest, sections, context);
-  collectConfigUse(manifest, context);
+  collectConfigUse(manifest, sections, context);
+  collectEmittedHelpers(manifest, context);
   return manifest;
 }
 
@@ -393,34 +399,109 @@ function readManifest(context: DependencyContext, dir: string): Manifest | undef
  * plain string a bundler input is written in. A string that matches no listed
  * package is dropped, which is every other string in the file.
  */
-function collectConfigUse(manifest: Manifest, context: DependencyContext): void {
-  for (const written of [...context.configStrings(manifest.dir), ...tsconfigExtends(manifest.dir, context)]) {
-    const name = packageName(stripQuerySuffix(written));
-    if (name && manifest.listed.has(name)) manifest.usedByConfig.add(name);
+function collectConfigUse(manifest: Manifest, sections: Record<string, unknown>, context: DependencyContext): void {
+  const written = [
+    ...context.configStrings(manifest.dir),
+    ...tsconfigPackages(manifest.dir, context),
+    ...manifestConfigStrings(manifest, sections),
+  ];
+  for (const value of written) {
+    // A config value can be a command-line argument — ava runs
+    // `--import=tsx/esm` — so the same splitting a script gets applies, and a
+    // plain string comes back through it unchanged.
+    for (const token of [value, ...commandTokens(value)]) {
+      const name = packageName(stripQuerySuffix(token));
+      if (name && manifest.listed.has(name)) manifest.usedByConfig.add(name);
+    }
   }
 }
 
 /**
- * The configs this package's own tsconfig extends.
+ * The manifest's own configuration blocks.
  *
- * `extends: "@sindresorhus/tsconfig"` is a package the build needs, and no
- * import will ever name it. It is read here rather than through the
- * tool-config reader because a tsconfig is not a tool config: its `include`
- * globs are patterns, not paths to anything an entry-point walk should
- * publish.
+ * A tool's config file is often not a file: `"lint-staged": { … }` and
+ * `"ava": { … }` sit in package.json, and the key is the tool's name. So a
+ * top-level key that names a package this manifest lists is that package being
+ * configured — which is the same evidence a `.lint-stagedrc` would be — and
+ * the strings inside the block are read the way a config file's are.
+ *
+ * Only a block whose key names a listed package is read. Every other key is
+ * npm's own, and `"keywords": ["react"]` is a word about the package rather
+ * than a package in use.
  */
-function tsconfigExtends(dir: string, context: DependencyContext): string[] {
+function manifestConfigStrings(manifest: Manifest, sections: Record<string, unknown>): string[] {
+  const found: string[] = [];
+  for (const [key, value] of Object.entries(sections)) {
+    if (!manifest.listed.has(key)) continue;
+    found.push(key);
+    collectStrings(value, found);
+  }
+  return found;
+}
+
+function collectStrings(value: unknown, out: string[]): void {
+  if (typeof value === 'string') out.push(value);
+  else if (typeof value === 'object' && value !== null)
+    for (const nested of Object.values(value)) collectStrings(nested, out);
+}
+
+/** The package's own tsconfig, parsed, or nothing when there is none to read. */
+interface TsConfig {
+  extends?: unknown;
+  compilerOptions?: { types?: unknown; importHelpers?: unknown };
+}
+
+function readTsConfig(dir: string, context: DependencyContext): TsConfig | undefined {
   const filePath = path.join(dir, 'tsconfig.json');
-  if (!context.fileExists(filePath)) return [];
+  if (!context.fileExists(filePath)) return undefined;
   const text = context.readFile(filePath);
-  if (text === undefined) return [];
+  if (text === undefined) return undefined;
   // A tsconfig carries comments and trailing commas, so the compiler's own
   // reader does the parsing.
   const { config, error } = ts.parseConfigFileTextToJson(filePath, text);
-  if (error || typeof config !== 'object' || config === null) return [];
-  const written = (config as { extends?: unknown }).extends;
-  if (typeof written === 'string') return [written];
-  return Array.isArray(written) ? written.filter(entry => typeof entry === 'string') : [];
+  if (error || typeof config !== 'object' || config === null) return undefined;
+  return config as TsConfig;
+}
+
+/**
+ * The packages this package's own tsconfig names.
+ *
+ * `extends: "@sindresorhus/tsconfig"` is a package the build needs, and no
+ * import will ever name it. `types: ["node", "@withfig/autocomplete-types"]`
+ * is the compiler being told to load those, which is the same statement a
+ * `/// <reference types>` makes and already counts as.
+ *
+ * It is read here rather than through the tool-config reader because a
+ * tsconfig is not a tool config: its `include` globs are patterns, not paths
+ * to anything an entry-point walk should publish.
+ */
+function tsconfigPackages(dir: string, context: DependencyContext): string[] {
+  const config = readTsConfig(dir, context);
+  if (!config) return [];
+  const found: string[] = [];
+  if (typeof config.extends === 'string') found.push(config.extends);
+  else if (Array.isArray(config.extends)) found.push(...config.extends.filter(entry => typeof entry === 'string'));
+  const types = config.compilerOptions?.types;
+  if (Array.isArray(types)) found.push(...types.filter(entry => typeof entry === 'string'));
+  return found;
+}
+
+/**
+ * The helper library the compiler emits calls to.
+ *
+ * `importHelpers` turns every downlevelled spread, decorator and `await` into
+ * a `tslib` call in the output file. Nothing in the source says so, and the
+ * package ships with the code — so this is not a config naming a tool, it is
+ * the built output importing a package, and it answers the section question
+ * the same way an import would. Which package is not a guess: the option
+ * names `tslib` and nothing else.
+ */
+function collectEmittedHelpers(manifest: Manifest, context: DependencyContext): void {
+  if (!manifest.listed.has('tslib')) return;
+  if (readTsConfig(manifest.dir, context)?.compilerOptions?.importHelpers !== true) return;
+  manifest.used.add('tslib');
+  manifest.usedInProduction.add('tslib');
+  manifest.neededAtRuntime.add('tslib');
 }
 
 /**

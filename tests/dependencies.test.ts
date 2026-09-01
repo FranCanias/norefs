@@ -625,7 +625,7 @@ describe('a dependency in the wrong section', () => {
   });
 });
 
-describe('two ways a package is named without an import', () => {
+describe('the ways a package is named without an import', () => {
   /** Every manifest finding, `misplaced` included, with the files a build reads written as themselves. */
   function manifestFindings(manifest: object, plainFiles: Record<string, string>): Finding[] {
     const project = new Project({ useInMemoryFileSystem: true });
@@ -657,6 +657,82 @@ describe('two ways a package is named without an import', () => {
       {
         '/tsconfig.json': '{\n\t// the shared base\n\t"extends": "@sindresorhus/tsconfig",\n}\n',
         '/node_modules/@sindresorhus/tsconfig/package.json': JSON.stringify({ name: '@sindresorhus/tsconfig' }),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+  it('reads the helper library the compiler is told to emit', () => {
+    // `importHelpers` puts a `require('tslib')` in the output, and nothing in
+    // the source says so.
+    const findings = manifestFindings(
+      { dependencies: { tslib: '1.0.0' } },
+      { '/tsconfig.json': '{ "compilerOptions": { "importHelpers": true } }\n' }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('reads the type packages the tsconfig loads by name', () => {
+    // `types: [...]` is the compiler being handed a package to load, which is
+    // the same statement a `/// <reference types>` makes.
+    const findings = manifestFindings(
+      { devDependencies: { '@withfig/autocomplete-types': '1.0.0' } },
+      {
+        '/tsconfig.json': '{ "compilerOptions": { "types": ["@withfig/autocomplete-types", "node"] } }\n',
+        '/node_modules/@withfig/autocomplete-types/package.json': JSON.stringify({
+          name: '@withfig/autocomplete-types',
+        }),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('reads a tool configured by its own key in the manifest', () => {
+    // `"lint-staged": { … }` is lint-staged's config file, written in
+    // package.json instead of beside it.
+    const findings = manifestFindings(
+      {
+        devDependencies: { 'lint-staged': '1.0.0' },
+        'lint-staged': { '*.ts': 'biome check --write' },
+      },
+      { '/node_modules/lint-staged/package.json': JSON.stringify({ name: 'lint-staged' }) }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('reads a package named inside one of those blocks, argument and all', () => {
+    // ava loads the loader through a node flag: `--import=tsx/esm` is tsx
+    // being run, spelled the way a command line spells it.
+    const findings = manifestFindings(
+      {
+        devDependencies: { ava: '1.0.0', tsx: '1.0.0' },
+        ava: { nodeArguments: ['--import=tsx/esm'] },
+      },
+      {
+        '/node_modules/ava/package.json': JSON.stringify({ name: 'ava', bin: { ava: './cli.js' } }),
+        '/node_modules/tsx/package.json': JSON.stringify({ name: 'tsx', bin: { tsx: './cli.js' } }),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('leaves a devDependency the peer list names too', () => {
+    // A driver listed in both sections is the consumer's to install; the dev
+    // listing is how the package tests against the peer it declares.
+    const findings = manifestFindings(
+      { devDependencies: { pg: '1.0.0' }, peerDependencies: { pg: '*' } },
+      { '/node_modules/pg/package.json': JSON.stringify({ name: 'pg' }) }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('reads a shareable ESLint config by its short name', () => {
+    // `extends: "prettier"` is `eslint-config-prettier`, the same shorthand a
+    // plugin name gets.
+    const findings = manifestFindings(
+      { devDependencies: { 'eslint-config-prettier': '1.0.0' } },
+      {
+        '/.eslintrc.cjs': "module.exports = { extends: ['prettier'] };\n",
+        '/node_modules/eslint-config-prettier/package.json': JSON.stringify({ name: 'eslint-config-prettier' }),
       }
     );
     expect(findings).toEqual([]);
