@@ -113,17 +113,27 @@ function someExists(paths: ReadonlySet<string>): boolean {
   return false;
 }
 
+/**
+ * Paths are compared against the ones the program holds, and those are always
+ * written with forward slashes — the compiler's own spelling, whatever the
+ * platform separator is. A path built here has to be spelled the same way, or
+ * on Windows every file the program holds would read as a file beside it.
+ */
+function slashed(filePath: string): string {
+  return filePath.replace(/\\/g, '/');
+}
+
 function outsideFiles(seen: ReadonlySet<string>, options: OutsideOptions): string[] {
   const output = new Set<string>();
   for (const { dir, options: compiler } of options.packages) {
     for (const written of [compiler.outDir, compiler.declarationDir]) {
-      if (written !== undefined) output.add(path.resolve(dir, written));
+      if (written !== undefined) output.add(slashed(path.resolve(dir, written)));
     }
   }
 
   const found = new Set<string>();
   const walked = new Set<string>();
-  for (const root of options.rootDirs) walk(root, seen, output, walked, found);
+  for (const root of options.rootDirs) walk(slashed(root), seen, output, walked, found);
   return [...found].sort((a, b) => a.localeCompare(b));
 }
 
@@ -144,7 +154,7 @@ function walk(
   }
   for (const entry of entries) {
     if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-    const filePath = path.join(dir, entry.name);
+    const filePath = `${dir}/${entry.name}`;
     // A symbolic link is neither a file nor a directory here: following one
     // reads the same tree twice, or forever.
     if (entry.isDirectory()) walk(filePath, seen, output, walked, found);
