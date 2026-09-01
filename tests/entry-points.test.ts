@@ -273,6 +273,49 @@ describe('entry points the build declares', () => {
     expect(names(findings)).toEqual(['orphan.ts']);
   });
 
+  it('finds the source of a built entry when no outDir names the build', () => {
+    // h3's shape: `noEmit: true`, no `outDir`, and a manifest that names
+    // `./dist/_entries/node.mjs` all the same. There was no mapping to try, so
+    // nothing was tried, and every published entry came back dead.
+    const findings = findingsOf(
+      { exports: { '.': { node: './dist/entries/node.mjs', default: './dist/entries/generic.mjs' } } },
+      {
+        '/src/entries/node.ts': "export { serve } from './generic';\n",
+        '/src/entries/generic.ts': 'export const serve = 1;\n',
+        '/src/orphan.ts': 'export const orphan = 1;\n',
+      }
+    );
+    expect(names(findings)).toEqual(['orphan.ts']);
+  });
+
+  it('takes no guess at a directory the run holds a file in', () => {
+    // `lib/tool.js` beside `lib/other.ts` is a file that is missing, not one
+    // that is built: the directory is source by demonstration.
+    const findings = findingsOf(
+      { main: './lib/tool.js' },
+      { '/lib/other.ts': 'export const other = 1;\n', '/src/tool.ts': 'export const tool = 1;\n' }
+    );
+    expect(names(findings)).toEqual(['other.ts', 'tool.ts']);
+  });
+
+  it('finds a built entry whose name lost its index. prefix', () => {
+    // bunchee writes `src/index/index.react-server.ts` to
+    // `dist/index/react-server.mjs`, and swr's `exports["."].react-server`
+    // names the built one. `config.ts` dies with the entry: it is its only
+    // importer.
+    const findings = findingsOf(
+      { exports: { '.': { 'react-server': './dist/index/react-server.mjs', default: './dist/index/index.mjs' } } },
+      {
+        '/src/index/index.ts': 'export const whisk = 1;\n',
+        '/src/index/index.react-server.ts': "export { serverOnly } from './config';\n",
+        '/src/index/config.ts': 'export const serverOnly = 1;\n',
+        '/src/orphan.ts': 'export const orphan = 1;\n',
+      },
+      { outDir: '/dist', rootDir: '/' }
+    );
+    expect(names(findings)).toEqual(['orphan.ts']);
+  });
+
   it('makes no guess when two source roots answer at once', () => {
     // Which one ships would be a coin toss, so neither is named and the run
     // says what it always says when no entry point resolves.

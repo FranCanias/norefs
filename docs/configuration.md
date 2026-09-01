@@ -110,7 +110,7 @@ So norefs does not ask you to keep the list. Your build already has it, written 
 
 | Declared in | What is read |
 | --- | --- |
-| `package.json` | `main`, `types`, `bin`, and `exports`; paths into the compiled output map back to source through the tsconfig `outDir` and `rootDir`. When that mapping lands on no file the run holds, the package's source roots are tried instead — a bundler builds what it likes, and a tsconfig kept for the type check alone is free to describe a build nobody runs. Two roots answering at once is no answer, so nothing is named. A subpath pattern — `"./*": "./dist/*.js"` — publishes every module it matches and names none of them, so it is matched against the files the run holds, harness files excepted. Naming none of them, it keeps a file alive without putting it on the shipping path |
+| `package.json` | `main`, `types`, `bin`, and `exports`; paths into the compiled output map back to source through the tsconfig `outDir` and `rootDir`. When that mapping lands on no file the run holds, the package's source roots are tried instead — a bundler builds what it likes, and a tsconfig kept for the type check alone is free to describe a build nobody runs. Two roots answering at once is no answer, so nothing is named. When the tsconfig names no `outDir` at all — `noEmit: true` is what a bundler-built package writes — the first directory of the written path stands in for it, provided the run holds no file there, so `./dist/_entries/node.mjs` still finds `src/_entries/node.ts`. A build can drop an `index.` prefix on its way out, so `dist/index/react-server.mjs` finds `src/index/index.react-server.ts` too. A subpath pattern — `"./*": "./dist/*.js"` — publishes every module it matches and names none of them, so it is matched against the files the run holds, harness files excepted. Naming none of them, it keeps a file alive without putting it on the shipping path |
 | `package.json` scripts | any argument that names a project file — `tsx src/server.ts`, `--config=playwright.config.ts`. A directory is a place to look, not a module: `eslint src` names no entry point |
 | `*.html` | the `src` of every `<script>`; a leading `/` is the package root, as bundlers read it |
 | `*.config.*` | every quoted path that lands on a project file — Vite's `input`, Vitest's `setupFiles`, Playwright's `globalSetup`, an alias target, and the same in tools nobody has written a plugin for. A build with two targets writes the second one down the same way, so `vite.config.server.ts` beside the manifest is read too |
@@ -151,7 +151,7 @@ $ norefs
 2 workspace package(s) from pnpm-workspace.yaml; skipped tools/jsonly — no tsconfig.json
 ```
 
-Negated globs (`'!packages/legacy'`) are honoured, and a declared package with no `tsconfig.json` is named on stderr rather than dropped quietly — nothing analyzes it, and a run that silently covers less than the workspace is a run whose findings mean less than they look like they mean.
+Negated globs (`'!packages/legacy'`) are honoured, a declaration that names the root itself (`.` beside `website`) includes the root, and a declared package with no `tsconfig.json` is named on stderr rather than dropped quietly — nothing analyzes it, and a run that silently covers less than the workspace is a run whose findings mean less than they look like they mean.
 
 Nothing is executed and no glob can invent a project: every one resolves to a `tsconfig.json` that exists on disk, so the failure mode is a package nobody analyzed, never a package nobody has.
 
@@ -161,7 +161,7 @@ Pass `-p` when you want a different set. An explicit list is the list you meant,
 norefs -p packages/app/tsconfig.json -p packages/lib/tsconfig.json
 ```
 
-Every file resolves its imports with the compiler options of the tsconfig that owns it, so per-package `paths` aliases work as they do in each package's own build, and `package.json` entries map back to source through each package's own `outDir` and `rootDir`. The scan still builds one program — that is what lets a reference in one package count as usage of another. When the packages import each other by package name, map that name in the importing package's `paths` to the target's source entry point, not its built `.d.ts`.
+Every file resolves its imports with the compiler options of the tsconfig that owns it, so per-package `paths` aliases work as they do in each package's own build, and `package.json` entries map back to source through each package's own `outDir` and `rootDir`. A workspace with one tsconfig at the root and none in its packages is run with `-p tsconfig.json`, and each declared package whose files that run holds still answers for its own `package.json` — its entries and its dependencies both. The scan still builds one program — that is what lets a reference in one package count as usage of another. When the packages import each other by package name, map that name in the importing package's `paths` to the target's source entry point, not its built `.d.ts`.
 
 To find unused properties in a library whose only consumer lives in another repo, the umbrella approach still applies:
 

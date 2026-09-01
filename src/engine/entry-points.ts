@@ -56,24 +56,15 @@ export function packageEntryPoints(
   // Only a mapping that finds nothing pays for this, so it is read once and
   // only when it is asked for.
   let rebuiltRoots: string[] | undefined;
-  const otherRoots = (): string[] => (rebuiltRoots ??= sourceRootsOf(packageDir, sourceRoot, known));
+  const roots = (): string[] => (rebuiltRoots ??= sourceRootsOf(packageDir, known));
 
   const found = new Map<string, { source: string; shipping: boolean }>();
   const add = (candidate: string, fromDir: string, source: string, directoryIndex = false, shipping = true): void => {
-    const resolved = resolveToKnown(
-      candidate,
-      fromDir,
-      packageDir,
-      outDir,
-      sourceRoot,
-      known,
-      directoryIndex,
-      otherRoots
-    );
+    const resolved = resolveToKnown(candidate, fromDir, packageDir, outDir, sourceRoot, known, directoryIndex, roots);
     if (resolved && !found.has(resolved)) found.set(resolved, { source, shipping });
   };
   const addPattern = (candidate: string, source: string): void => {
-    for (const filePath of expandPattern(candidate, packageDir, outDir, sourceRoot, known, rootDirs)) {
+    for (const filePath of expandPattern(candidate, packageDir, outDir, sourceRoot, known, rootDirs, roots)) {
       if (!found.has(filePath)) found.set(filePath, { source, shipping: false });
     }
   };
@@ -156,7 +147,7 @@ function resolveToKnown(
   sourceRoot: string,
   known: Set<string>,
   directoryIndex: boolean,
-  otherRoots: () => string[]
+  roots: () => string[]
 ): string | undefined {
   if (candidate.length === 0 || candidate.includes('*') || /^[a-z][a-z0-9+.-]*:/i.test(candidate)) return undefined;
 
@@ -174,20 +165,48 @@ function resolveToKnown(
       if (known.has(sourcePath)) return sourcePath;
     }
   }
-  return outDir === undefined
-    ? undefined
-    : rebuiltFrom(bases, outDir, otherRoots(), known, shapedLikeAPath, directoryIndex);
+  for (const base of bases) {
+    // A tsconfig's `outDir` describes this path only when the path is under
+    // it. A workspace package under a root tsconfig builds into its own
+    // `dist/`, and the root's `outDir` says nothing about that one.
+    const under = outDir !== undefined && (base === outDir || base.startsWith(`${outDir}${path.sep}`));
+    const builtIn = under ? outDir : builtDirOf(base, packageDir, roots());
+    if (builtIn === undefined) continue;
+    const rebuilt = rebuiltFrom(base, builtIn, roots(), known, shapedLikeAPath, directoryIndex);
+    if (rebuilt) return rebuilt;
+  }
+  return undefined;
 }
 
 /**
- * The source of a built file, when the tsconfig's own mapping finds nothing.
+ * The directory a written path says the build lands in, when no tsconfig says.
+ *
+ * `noEmit: true` and no `outDir` is what a bundler-built package writes, and
+ * its manifest still names `./dist/index.mjs`. The manifest wrote `dist/` down
+ * either way, so the first directory of the path is the build's — provided the
+ * run holds nothing in it. A directory holding a file the program holds is
+ * source by demonstration, and a path into it that resolved to nothing is a
+ * missing file rather than a built one.
+ */
+function builtDirOf(base: string, packageDir: string, roots: string[]): string | undefined {
+  const relative = path.relative(packageDir, base);
+  const [first, second] = relative.split(path.sep);
+  if (!first || first === '..' || second === undefined) return undefined;
+  const dir = path.join(packageDir, first);
+  return roots.includes(dir) ? undefined : dir;
+}
+
+/**
+ * The source of a built file, when the tsconfig's own mapping finds nothing —
+ * or when there is no mapping to try.
  *
  * `outDir` and `rootDir` describe the build only where `tsc` is the build. A
  * package built by a bundler keeps a tsconfig for the type check alone, and it
  * is free to say anything: swr writes `outDir: "./dist"` with `rootDir: "./"`
  * and builds `src/index/index.ts` into `dist/index/index.js`, so the mapping
- * lands on a path no file has. Nothing resolves, and a whole source tree is
- * called dead.
+ * lands on a path no file has. h3 writes no `outDir` at all, and its manifest
+ * names `./dist/_entries/node.mjs` all the same. Either way nothing resolves,
+ * and a whole source tree is called dead.
  *
  * So the second guess drops `rootDir` and tries the package's source roots
  * instead. Two roots answering at once is no answer — the file that ships
@@ -195,27 +214,25 @@ function resolveToKnown(
  * run with no entry point stands.
  */
 function rebuiltFrom(
-  bases: string[],
+  base: string,
   outDir: string,
   roots: string[],
   known: Set<string>,
   shapedLikeAPath: boolean,
   directoryIndex: boolean
 ): string | undefined {
+  if (base !== outDir && !base.startsWith(`${outDir}${path.sep}`)) return undefined;
+  const built = path.relative(outDir, base);
   const hits = new Set<string>();
-  for (const base of bases) {
-    if (base !== outDir && !base.startsWith(`${outDir}${path.sep}`)) continue;
-    const built = path.relative(outDir, base);
-    for (const root of roots) {
-      for (const sourcePath of sourceCandidates(
-        path.join(root, built),
-        undefined,
-        root,
-        shapedLikeAPath,
-        directoryIndex
-      )) {
-        if (known.has(sourcePath)) hits.add(sourcePath);
-      }
+  for (const root of roots) {
+    for (const sourcePath of sourceCandidates(
+      path.join(root, built),
+      undefined,
+      root,
+      shapedLikeAPath,
+      directoryIndex
+    )) {
+      if (known.has(sourcePath)) hits.add(sourcePath);
     }
   }
   const [only] = hits;
@@ -224,19 +241,19 @@ function rebuiltFrom(
 
 /**
  * Where a package could be keeping its source: each directory directly under
- * it that holds a file this run reads. The configured `rootDir` is left out —
- * it is the guess that already failed — and so is the package root, whose
- * every built path is the built path itself.
+ * it that holds a file this run reads. The package root itself is left out,
+ * because every built path under it is the built path itself. The configured
+ * `rootDir` stays in — it is the guess that already failed, so it can answer
+ * nothing new, and leaving it in costs one lookup that misses.
  */
-function sourceRootsOf(packageDir: string, sourceRoot: string, known: Set<string>): string[] {
+function sourceRootsOf(packageDir: string, known: Set<string>): string[] {
   const roots = new Set<string>();
   const prefix = packageDir.endsWith(path.sep) ? packageDir : `${packageDir}${path.sep}`;
   for (const filePath of known) {
     if (!filePath.startsWith(prefix)) continue;
     const [first, second] = filePath.slice(prefix.length).split(path.sep);
     if (first === undefined || second === undefined) continue;
-    const root = path.join(packageDir, first);
-    if (root !== sourceRoot) roots.add(root);
+    roots.add(path.join(packageDir, first));
   }
   return [...roots].sort();
 }
@@ -260,17 +277,30 @@ function expandPattern(
   outDir: string | undefined,
   sourceRoot: string,
   known: Set<string>,
-  rootDirs: string[]
+  rootDirs: string[],
+  roots: () => string[]
 ): string[] {
   if (/^[a-z][a-z0-9+.-]*:/i.test(candidate)) return [];
   const base = candidate.startsWith('/') ? path.join(packageDir, candidate) : path.resolve(packageDir, candidate);
 
+  // A pattern into a build directory no tsconfig names takes the same guess a
+  // path does, and every source root is a place the guess can land.
+  const mappings: Array<[string | undefined, string]> = [[outDir, sourceRoot]];
+  if (outDir === undefined) {
+    const builtIn = builtDirOf(base, packageDir, roots());
+    if (builtIn !== undefined) for (const root of roots()) mappings.push([builtIn, root]);
+  }
+
   const found: string[] = [];
-  for (const pattern of sourceCandidates(base, outDir, sourceRoot, true, false)) {
-    if (!pattern.includes('*')) continue;
-    const matcher = new RegExp(`^${pattern.split('*').map(escapeRegExp).join('.*')}$`);
-    for (const filePath of known) {
-      if (matcher.test(filePath) && !isHarnessFile(filePath, rootDirs)) found.push(filePath);
+  for (const [from, to] of mappings) {
+    for (const pattern of sourceCandidates(base, from, to, true, false)) {
+      if (!pattern.includes('*')) continue;
+      const matcher = new RegExp(`^${pattern.split('*').map(escapeRegExp).join('.*')}$`);
+      for (const filePath of known) {
+        if (matcher.test(filePath) && !isHarnessFile(filePath, rootDirs) && !found.includes(filePath)) {
+          found.push(filePath);
+        }
+      }
     }
   }
   return found;
@@ -292,7 +322,13 @@ function sourceCandidates(
   for (const base of bases) {
     if (OUTPUT_EXTENSION.test(base)) {
       const stem = base.replace(OUTPUT_EXTENSION, '');
-      for (const extension of SOURCE_EXTENSIONS) candidates.add(stem + extension);
+      // A build can drop the `index.` prefix on its way out: bunchee writes
+      // `src/index/index.react-server.ts` to `dist/index/react-server.mjs`.
+      const prefixed = path.join(path.dirname(stem), `index.${path.basename(stem)}`);
+      for (const extension of SOURCE_EXTENSIONS) {
+        candidates.add(stem + extension);
+        candidates.add(prefixed + extension);
+      }
       continue;
     }
     if (!shapedLikeAPath) continue;

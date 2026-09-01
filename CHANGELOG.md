@@ -9,6 +9,77 @@ renames the section and dates it — the writing is already done.
 
 ## Unreleased
 
+**A package a TypeScript file loads with `require()` is a package in use.** The
+compiler collects a `require` call as an import only in a JavaScript file; in a
+TypeScript file it is a call, so `const rack = require('spice-rack')` had no
+import to show for it and the manifest entry was called dead — while the
+syntax-only run, reading the same file, called it used, and the two paths
+disagreed. tsup's `require('rollup-plugin-dts')` beside a type query is the
+shape: erased where the type is, loaded where the value is. Present since the
+check existed.
+
+**A workspace under one tsconfig is read package by package.** changesets is
+`include: ["./"]` at the root over twenty-two packages with no tsconfig of their
+own, and a run pointed at that tsconfig read one manifest — the root's, which is
+private and lists nothing. Every package's own dependency read as unlisted and
+every package's own entry read as dead: 45 of the 152 findings, and
+`--fix-unsafe` would have written the missing names into the wrong manifest.
+The declaration the package manager reads says where the other manifests are,
+and each declared package whose files the run holds now answers for its own
+`package.json`. The workspace root counts as a package too, when its own
+declaration names it: valtio lists `.` beside `website`, the walk only ever
+offered the directories under the root, and the library the reader came for
+was never analyzed while its website filled the report.
+
+**A built entry needs no `outDir` to find its source.** h3 writes `noEmit:
+true` and no `outDir`, and its manifest names `./dist/_entries/node.mjs` all the
+same. With no mapping to try nothing was tried, and the four published entries
+came back dead with no warning — eight other entries resolved, so the "no entry
+point resolves" warning never fired. The manifest wrote `dist/` down either way:
+when the tsconfig names no build directory, the written path's first directory
+stands in for it, provided the run holds no file there. A build can also drop
+an `index.` prefix on its way out — bunchee writes
+`src/index/index.react-server.ts` to `dist/index/react-server.mjs` — and that
+spelling is tried now, which clears the three findings the entry-point fix left
+standing in swr.
+
+**A host imported only from beside the program answers for its peers.** swr's
+tests import `@testing-library/react`, its peer list names
+`@testing-library/dom`, and the tests sit outside the tsconfig. The host was
+used enough not to be reported and not used enough to answer for its plugin,
+which was called dead — on the most ordinary shape there is, a test-only
+library that loads another one.
+
+**A `paths` alias can share a package's name.** valtio aliases `valtio` to
+its own `src/`, and its website lists `valtio` as a dependency and imports it.
+The alias made the import vanish before it could count, and the dependency was
+called dead. The manifest decides, the way it does for a specifier that
+resolves into the repo: an aliased import says a listed name is used, and never
+asks for one to be listed.
+
+**Two more directories a tool owns.** `.vitepress/config.ts` imports a site's
+markdown plugins and `.storybook/main.ts` lists its addons, and the compiler
+never holds a dot-directory whatever `include` says. Both are read now, and
+unplugin-icons' `~icons/logos/…` expands to `@iconify-json/logos` on the way
+through. Four wrong findings in changesets' site.
+
+**tsup and tsdown inline devDependencies by default.** Only `dependencies`
+and `peerDependencies` are external to those bundlers, and everything else the
+shipped code imports is compiled into the output. changesets lists
+`@changesets/color` in devDependencies, imports it from shipped code and builds
+with tsdown, and the report said an install without dev dependencies would be
+missing it — it would not. A `tsup.config.*` or `tsdown.config.*` at the
+package root now declares that default, and an explicit `external` adds to it.
+
+**A code config's bare words are the code.** Every ESLint flat config is an ES
+module, and every bare word in it was offered as a short name — so `import`
+expanded to `eslint-plugin-import` in every project that has one, and the
+plugin could never be called unused; a binding called `typescript` did the same
+for the resolver. A short name written without quotes is an object key —
+`plugins: { import: importPlugin }`, `'import/resolver': { typescript: true }`
+— so in a config written as code, only the keys are read. A data config's bare
+scalars are read as before.
+
 **A type query is erased, so it does not decide a manifest section.**
 `import('undici').Dispatcher`, written where a type goes, is a dynamic
 import's words and `import type`'s meaning: nothing is emitted, and an

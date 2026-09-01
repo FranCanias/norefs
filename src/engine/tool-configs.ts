@@ -50,8 +50,10 @@ const SECOND_TARGET_NAME = /\.config\.(?:[\w-]+\.)+[cm]?[jt]sx?$/;
  * shape: the tool takes a directory, and what is written inside says what the
  * project runs. `.husky/pre-commit` runs `lint-staged`,
  * `.github/workflows/*.yml` runs `pkg-pr-new`, `.changeset/config.json` names
- * its changelog generator — and each of those packages had nothing else in the
- * repository to show for it.
+ * its changelog generator, `.vitepress/config.ts` imports the site's markdown
+ * plugins and `.storybook/main.ts` lists its addons — and each of those
+ * packages had nothing else in the repository to show for it. The compiler
+ * never holds a dot-directory either, whatever `include` says.
  *
  * Named rather than shaped, twice over. A leading dot marks two different
  * things, and `.turbo` and `.next` are state a build wrote — reading those is
@@ -60,7 +62,7 @@ const SECOND_TARGET_NAME = /\.config\.(?:[\w-]+\.)+[cm]?[jt]sx?$/;
  * file and dependabot's own ignore list are repository paperwork. Dependabot
  * names a package to say *not* to touch it, which is the opposite of using it.
  */
-const TOOL_DIRS = new Set(['.changeset', '.husky', '.github/workflows', '.github/actions']);
+const TOOL_DIRS = new Set(['.changeset', '.husky', '.github/workflows', '.github/actions', '.storybook', '.vitepress']);
 
 /** Directories no tool reads its inputs from. Walking them is wasted work. */
 const SKIP_DIRS = new Set([
@@ -96,6 +98,15 @@ const JEST_CONFIG_NAME = /^jest\.config\.[cm]?[jt]sx?$/;
  * so it never joins the configs whose every string counts as a package in use.
  */
 const BUILD_NAME = /^build\.[cm]?[jt]sx?$/;
+
+/**
+ * The bundlers whose default is to inline. tsup and tsdown leave
+ * `dependencies` and `peerDependencies` for the run time and compile every
+ * other import into the output — so a devDependency the shipped code imports
+ * ships inside the file, and an install without dev dependencies is missing
+ * nothing. changesets even writes the fact down as `inlinedDependencies`.
+ */
+const INLINING_BUNDLER_CONFIG = /^ts(?:up|down)\.config\.[cm]?[jt]s$/;
 
 /** Extensions the JavaScript token scanner can read; the rest are data files. */
 const CODE_EXTENSION = /\.[cm]?[jt]sx?$/;
@@ -144,6 +155,25 @@ function eslintPluginPackages(strings: string[]): string[] {
 }
 
 /**
+ * The packages behind the icon collections unplugin-icons loads.
+ *
+ * `import Logo from '~icons/logos/github-icon'` loads `@iconify-json/logos`,
+ * and the plugin spells the package nowhere the file does. The same
+ * collection is written as `virtual:icons/logos/…` in the plugin's other
+ * prefix. Nothing else in a site names the collection package.
+ */
+const ICON_IMPORT = /^(?:~icons|virtual:icons)\/([\w-]+)\//;
+
+function iconCollectionPackages(strings: string[]): string[] {
+  const found: string[] = [];
+  for (const written of strings) {
+    const collection = ICON_IMPORT.exec(written)?.[1];
+    if (collection) found.push(`@iconify-json/${collection}`);
+  }
+  return found;
+}
+
+/**
  * The package behind the environment name a Jest config writes.
  *
  * `testEnvironment: 'jsdom'` loads `jest-environment-jsdom`, and jest spells
@@ -157,26 +187,16 @@ function jestEnvironmentPackages(strings: string[]): string[] {
 }
 
 /**
- * Every bare word an ESLint config writes, beside its quoted strings.
- *
- * ESLint's short names are not always strings. `'import/resolver': {
- * typescript: true }` writes the resolver as an object key, and the token
- * scanner only ever collected quoted text — so the package behind it was
- * missed twice over. Only expansions leave this function, never the words
- * themselves, and only the manifest's own names survive the expansion.
- */
-function shortNames(text: string, strings: string[]): string[] {
-  return [...strings, ...dataConfigStrings(text)];
-}
-
-/**
  * Every name a data config writes: quoted strings, and the bare scalars YAML
  * lets a list write without quotes (`plugins:\n  - unicorn`). Comments are cut
  * first, so a plugin somebody turned off stays off.
  *
- * Over-reading is safe here and under-reading is not. The dependency check
- * drops every string it cannot match to a package name, so a stray word costs
- * nothing; a plugin name this misses becomes a package the report calls unused.
+ * Over-reading is safe in a data file and under-reading is not. The dependency
+ * check drops every string it cannot match to a package name, so a stray word
+ * costs nothing; a plugin name this misses becomes a package the report calls
+ * unused. A config written as code is another matter — its bare words are the
+ * code, and `import js from '@eslint/js'` must not expand to the import plugin
+ * — so a code file's short names come off its token stream as object keys.
  */
 function dataConfigStrings(text: string): string[] {
   const found: string[] = [];
@@ -314,12 +334,13 @@ function toolConfigs(packageDir: string, fileSystem: ReadOnlyFileSystem): Walk {
     // HTML has no token stream to read; its strings are the `<script src>`
     // values and nothing else, and it imports nothing of its own. A YAML or
     // JSON config has none either, and imports nothing.
-    const { strings, specifiers } = html
+    const none: string[] = [];
+    const { strings, specifiers, keys } = html
       ? // SCRIPT_SRC's one group is not optional: every match captures it.
-        { strings: [...text.matchAll(SCRIPT_SRC)].map(match => match[1]!), specifiers: [] as string[] }
+        { strings: [...text.matchAll(SCRIPT_SRC)].map(match => match[1]!), specifiers: none, keys: none }
       : CODE_EXTENSION.test(filePath)
         ? configLiterals(text)
-        : { strings: dataConfigStrings(text), specifiers: [] as string[] };
+        : { strings: dataConfigStrings(text), specifiers: none, keys: none };
     const name = path.basename(filePath);
     configs.push({
       filePath,
@@ -327,22 +348,47 @@ function toolConfigs(packageDir: string, fileSystem: ReadOnlyFileSystem): Walk {
       label: path.relative(packageDir, filePath) || path.basename(filePath),
       html,
       namesOnly: inToolDir.has(filePath) || (!html && !CODE_EXTENSION.test(filePath)),
-      strings: [...strings, ...expansionsFor(name, text, strings)],
+      strings: [...strings, ...expansionsFor(name, strings, keys)],
       imported: new Set(specifiers),
     });
   }
   return { configs, externals: externalPackages([...builds, ...configs.map(c => c.filePath)], packageDir, fileSystem) };
 }
 
+/** The names a manifest's `dependencies` and `peerDependencies` sections hold. */
+function runtimeDependencies(packageDir: string, fileSystem: ReadOnlyFileSystem): string[] {
+  const text = fileSystem.readFile(path.join(packageDir, 'package.json'));
+  if (text === undefined) return [];
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (typeof manifest !== 'object' || manifest === null) return [];
+  const sections = manifest as Record<string, unknown>;
+  return ['dependencies', 'peerDependencies'].flatMap(key => {
+    const section = sections[key];
+    return typeof section === 'object' && section !== null ? Object.keys(section) : [];
+  });
+}
+
 /**
  * The packages a config's short names stand for, when the tool reading it
  * expands them. Nothing else is added: a config norefs knows no expansion for
  * says exactly what it writes.
+ *
+ * ESLint's short names are not always strings. `'import/resolver': {
+ * typescript: true }` writes the resolver as an object key, so the keys a code
+ * config writes are offered too. A data config's bare scalars are already among
+ * its strings. Only expansions leave here, never the words themselves, and only
+ * the manifest's own names survive the expansion.
  */
-function expansionsFor(name: string, text: string, strings: string[]): string[] {
-  if (ESLINT_CONFIG_NAME.test(name)) return eslintPluginPackages(shortNames(text, strings));
-  if (JEST_CONFIG_NAME.test(name)) return jestEnvironmentPackages(strings);
-  return [];
+function expansionsFor(name: string, strings: string[], keys: string[]): string[] {
+  const icons = iconCollectionPackages(strings);
+  if (ESLINT_CONFIG_NAME.test(name)) return [...icons, ...eslintPluginPackages([...strings, ...keys])];
+  if (JEST_CONFIG_NAME.test(name)) return [...icons, ...jestEnvironmentPackages(strings)];
+  return icons;
 }
 
 /**
@@ -356,6 +402,10 @@ function expansionsFor(name: string, text: string, strings: string[]): string[] 
  * Only the files at the package root are read. A build deeper in the tree
  * belongs to something else — a fixture, an example — and what it inlines says
  * nothing about what this package ships.
+ *
+ * A tsup or tsdown config declares a list without writing one: the manifest's
+ * own `dependencies` and `peerDependencies` are external by default, and an
+ * explicit `external` adds to that rather than replacing it.
  */
 function externalPackages(
   filePaths: string[],
@@ -368,6 +418,10 @@ function externalPackages(
     if (path.dirname(filePath) !== packageDir || !CODE_EXTENSION.test(filePath)) continue;
     const text = fileSystem.readFile(filePath);
     if (text === undefined) continue;
+    if (INLINING_BUNDLER_CONFIG.test(path.basename(filePath))) {
+      declared = true;
+      for (const name of runtimeDependencies(packageDir, fileSystem)) names.add(name);
+    }
     const found = bundlerExternals(text);
     if (!found) continue;
     if (!found.known) return undefined;

@@ -41,7 +41,9 @@ export function findWorkspace(rootDir: string, fileSystem: ReadOnlyFileSystem = 
   const withoutTsConfig: string[] = [];
   const packageDirs: string[] = [];
   for (const dir of packageDirectories(rootDir, fileSystem)) {
-    const relative = path.relative(rootDir, dir).split(path.sep).join('/');
+    // The root spells itself `.` in its own declaration, and `path.relative`
+    // spells it as nothing.
+    const relative = path.relative(rootDir, dir).split(path.sep).join('/') || '.';
     if (!include.some(pattern => minimatch(relative, pattern))) continue;
     if (exclude.some(pattern => minimatch(relative, pattern))) continue;
     packageDirs.push(dir);
@@ -118,15 +120,60 @@ export function workspaceSiblings(rootDirs: string[], fileSystem: ReadOnlyFileSy
     .sort((a, b) => a.localeCompare(b));
 }
 
+/**
+ * The workspace packages a run holds files of, beside the roots it was pointed
+ * at.
+ *
+ * A monorepo can be one tsconfig over every package — changesets writes
+ * `include: ["./"]` at the root and no tsconfig anywhere else — and a run
+ * pointed at that tsconfig used to read one manifest, the root's. The root is
+ * private and lists nothing, so every package's own dependency read as unlisted
+ * and every package's own entry read as dead. The declaration the package
+ * manager reads says where the other manifests are.
+ *
+ * Only a package the program holds a file of is added. A declared package the
+ * tsconfig leaves out was never analyzed, and judging its manifest on nothing
+ * would call every one of its dependencies dead.
+ */
+export function heldPackageDirs(
+  rootDirs: string[],
+  known: ReadonlySet<string>,
+  fileSystem: ReadOnlyFileSystem = diskFileSystem
+): string[] {
+  const dirs = new Set(rootDirs);
+  for (const rootDir of rootDirs) {
+    const workspace = findWorkspace(rootDir, fileSystem);
+    if (!workspace) continue;
+    for (const dir of workspace.packageDirs) {
+      if (holdsAFile(dir, known)) dirs.add(dir);
+    }
+  }
+  return [...dirs].sort((a, b) => a.localeCompare(b));
+}
+
+function holdsAFile(dir: string, known: ReadonlySet<string>): boolean {
+  const prefix = dir.endsWith('/') ? dir : `${dir}/`;
+  for (const filePath of known) {
+    if (filePath.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 const MAX_PACKAGE_DEPTH = 5;
 
 /**
- * Every directory under the root that holds a package.json.
+ * Every directory at or under the root that holds a package.json.
  *
- * The walk stops at each one it finds: a workspace package does not live inside
- * another workspace package, so descending further only costs time. That is
- * what keeps this cheap on a large repository — the walk only ever covers the
- * directories *above* the packages.
+ * The root itself counts, because a declaration can name it: valtio's
+ * `pnpm-workspace.yaml` lists `.` beside `website`, and a walk that only ever
+ * offered the directories under the root matched that entry to nothing. The
+ * library the reader came for was never analyzed, and the report was all
+ * website.
+ *
+ * Below the root the walk stops at each package it finds: a workspace package
+ * does not live inside another workspace package, so descending further only
+ * costs time. That is what keeps this cheap on a large repository — the walk
+ * only ever covers the directories *above* the packages.
  *
  * Only `node_modules` and dot-directories are refused, and they are refused
  * because neither can hold a workspace member: one holds dependencies, the
@@ -148,6 +195,7 @@ function packageDirectories(rootDir: string, fileSystem: ReadOnlyFileSystem): st
       else walk(entry.path, depth + 1);
     }
   };
+  if (fileSystem.readFile(path.join(rootDir, 'package.json')) !== undefined) found.push(rootDir);
   walk(rootDir, 0);
   return found;
 }

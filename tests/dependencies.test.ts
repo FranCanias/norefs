@@ -76,6 +76,21 @@ describe('dependency checks', () => {
     expect(findings).toEqual([]);
   });
 
+  it('counts a plain require() as loading the package', () => {
+    // The compiler collects a `require` call as an import only in a JavaScript
+    // file. In a TypeScript file it is a call, so a package a source file
+    // loads this way had no import to show for it and was called dead — while
+    // the syntax-only run, reading the same file, called it used.
+    const findings = depFindings(
+      { dependencies: { 'spice-rack': '1.0.0' } },
+      {
+        '/main.ts':
+          "const rack = require('spice-rack');\nexport function plate(): string {\n  return rack.grind();\n}\n",
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
   it('counts require.resolve as needing the package', () => {
     // A tool pointed at a parser by path is often the project's one mention of
     // it: nothing imports it, and it still has to be installed.
@@ -156,6 +171,22 @@ describe('dependency checks', () => {
       { '/main.ts': "import logo from 'assets/logo.svg?url';\nexport const y = logo;\n" },
       [],
       { paths: { 'assets/*': ['./src/assets/*'] } }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('lets an aliased import say a listed package is used', () => {
+    // valtio's shape: the root tsconfig aliases `valtio` to `src/`, the website
+    // lists `valtio` as a dependency and imports it. The alias made the import
+    // vanish before it could count, and the dependency was called dead.
+    const findings = depFindings(
+      { dependencies: { pantry: '1.0.0' } },
+      {
+        '/main.ts': "import { jar } from 'pantry';\nexport const y = jar;\n",
+        '/src/pantry.ts': 'export const jar = 1;\n',
+      },
+      [],
+      { paths: { pantry: ['./src/pantry.ts'] } }
     );
     expect(findings).toEqual([]);
   });
@@ -351,6 +382,22 @@ describe('what a config says a package is for', () => {
     expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', 'gone-plugin']]);
   });
 
+  it('a devDependency a require() loads at run time is misplaced', () => {
+    // tsup's shape: a type query beside the call that loads the module. The
+    // query is erased and the call is not, so the package ships or the install
+    // is missing it.
+    const findings = withConfigs(
+      { devDependencies: { 'spice-rack': '1.0.0' } },
+      {},
+      {
+        '/main.ts':
+          "const rack: typeof import('spice-rack') = require('spice-rack');\nexport const plate = rack.grind();\n",
+      },
+      { 'spice-rack': { name: 'spice-rack' } }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['misplaced', 'spice-rack']]);
+  });
+
   it('a plugin its host declares as a peer is loaded through that host', () => {
     // `--coverage` names no package, and the coverage plugin is in use. The host
     // lists it as a peer dependency, which is how a plugin says who loads it.
@@ -463,6 +510,23 @@ describe('a dependency in the wrong section', () => {
       { inlined: { name: 'inlined' }, kept: { name: 'kept' } }
     );
     expect(findings.map(f => [f.kind, f.name])).toEqual([['misplaced', 'kept']]);
+  });
+
+  it('knows that tsup and tsdown inline every devDependency by default', () => {
+    // changesets' shape: `@changesets/color` sits in devDependencies, the
+    // shipped code imports it, and tsdown compiles it into the output because
+    // only `dependencies` and `peerDependencies` are external by default. An
+    // install without dev dependencies is missing nothing.
+    const findings = withConfigs(
+      { dependencies: { shipped: '1.0.0' }, devDependencies: { inlined: '1.0.0' } },
+      {
+        '/tsdown.config.ts':
+          "import { defineConfig } from 'tsdown';\nexport default defineConfig({ entry: ['main.ts'] });\n",
+      },
+      { '/main.ts': "import 'inlined';\nimport 'shipped';\nexport const x = 1;\n" },
+      { inlined: { name: 'inlined' }, shipped: { name: 'shipped' } }
+    );
+    expect(findings).toEqual([]);
   });
 
   it('reads the array a bundler config spreads into its external list', () => {
@@ -764,6 +828,66 @@ describe('the ways a package is named without an import', () => {
       }
     );
     expect(findings).toEqual([]);
+  });
+
+  it('reads a short name off a code config only where it is written as a key', () => {
+    // Every flat config is an ES module, so reading its bare words made
+    // `import` expand to `eslint-plugin-import` in every one of them, and the
+    // plugin could never be called unused. A binding called `typescript` did
+    // the same for the resolver. The words of a code file are the code.
+    const findings = manifestFindings(
+      { devDependencies: { 'eslint-plugin-import': '1.0.0', 'eslint-import-resolver-typescript': '1.0.0' } },
+      {
+        '/eslint.config.js':
+          "import js from '@eslint/js';\nconst typescript = true;\nexport default [js.configs.recommended, { settings: { typescript } }];\n",
+        '/node_modules/eslint-plugin-import/package.json': JSON.stringify({ name: 'eslint-plugin-import' }),
+        '/node_modules/eslint-import-resolver-typescript/package.json': JSON.stringify({
+          name: 'eslint-import-resolver-typescript',
+        }),
+      }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([
+      ['dependency', 'eslint-plugin-import'],
+      ['dependency', 'eslint-import-resolver-typescript'],
+    ]);
+  });
+
+  it('reads a plugin a flat config registers under a bare key', () => {
+    // `plugins: { import: importPlugin }` is how a flat config names the
+    // plugin, and the key is the short name ESLint expands.
+    const findings = manifestFindings(
+      { devDependencies: { 'eslint-plugin-import': '1.0.0' } },
+      {
+        '/eslint.config.js':
+          "import importPlugin from './vendor/import-plugin.js';\nexport default [{ plugins: { import: importPlugin } }];\n",
+        '/node_modules/eslint-plugin-import/package.json': JSON.stringify({ name: 'eslint-plugin-import' }),
+      }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("reads a site's dot-directory as the tool's own, icon collections included", () => {
+    // changesets' site: `.vitepress/config.ts` imports the markdown plugins,
+    // and a `.vue` component loads `~icons/logos/github-icon`, which is
+    // `@iconify-json/logos`. Neither file is anywhere the compiler looks.
+    const findings = manifestFindings(
+      {
+        devDependencies: {
+          'vitepress-plugin-graphviz': '1.0.0',
+          '@iconify-json/logos': '1.0.0',
+          'pantry-plugin': '1.0.0',
+        },
+      },
+      {
+        '/.vitepress/config.ts':
+          "import { graphviz } from 'vitepress-plugin-graphviz';\nexport default { graphviz };\n",
+        '/.vitepress/theme/Socials.vue': '<script setup>\nimport Logo from "~icons/logos/github-icon";\n</script>\n',
+        '/node_modules/vitepress-plugin-graphviz/package.json': JSON.stringify({ name: 'vitepress-plugin-graphviz' }),
+        '/node_modules/@iconify-json/logos/package.json': JSON.stringify({ name: '@iconify-json/logos' }),
+        '/node_modules/pantry-plugin/package.json': JSON.stringify({ name: 'pantry-plugin' }),
+      }
+    );
+    expect(findings.map(f => [f.kind, f.name])).toEqual([['dependency', 'pantry-plugin']]);
   });
 
   it("reads Jest's environment, in the config and in a docblock", () => {

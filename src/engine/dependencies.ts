@@ -95,10 +95,13 @@ interface Manifest {
  *
  * The uses arrive in file order, so an unlisted package is reported at the
  * first import that names it.
+ *
+ * `packageDirs` holds every manifest the run answers for: the directories it
+ * was pointed at, and the workspace packages under them whose files it holds.
  */
 export function analyzeDependencies(
   uses: DependencyUse[],
-  rootDirs: string[],
+  packageDirs: string[],
   options: {
     scopeDir?: string | undefined;
     /** Dependency names or globs never reported. */
@@ -130,7 +133,7 @@ export function analyzeDependencies(
 ): Finding[] {
   const { scopeDir, ignore, aliasPatterns, production, offShippingPath } = options;
   const manifests: Manifest[] = [];
-  for (const dir of rootDirs) {
+  for (const dir of packageDirs) {
     const manifest = readManifest(context, dir);
     if (manifest) manifests.push(manifest);
   }
@@ -142,7 +145,7 @@ export function analyzeDependencies(
   // consumed by packages this scan cannot see, so they are never reported —
   // which is why the names are all that gets read here. Working out what uses
   // them would mean reading a tree this run was never pointed at.
-  for (const dir of rootDirs) {
+  for (const dir of packageDirs) {
     for (let parent = path.dirname(dir); parent !== path.dirname(parent); parent = path.dirname(parent)) {
       const found = readSections(context, parent);
       if (found) for (const name of listedNames(found.sections)) listedAnywhere.add(name);
@@ -154,10 +157,15 @@ export function analyzeDependencies(
   for (const use of uses) {
     // A production run treats the harness as absent, so its imports are not
     // usage — which also makes every use that gets this far a shipped one.
-    const shipped = !isHarnessFile(use.filePath, rootDirs) && offShippingPath?.has(use.filePath) !== true;
+    const shipped = !isHarnessFile(use.filePath, packageDirs) && offShippingPath?.has(use.filePath) !== true;
     if (production && !shipped) continue;
     const specifier = stripQuerySuffix(use.text);
-    if (matchesAlias(specifier, aliasPatterns)) continue;
+    // A `paths` alias is project code, and a package can share its name: valtio
+    // aliases `valtio` to its own `src/` while its website lists `valtio` as a
+    // dependency and imports it. The manifest decides which it is, the way it
+    // does for a specifier that resolved into the repo — so an aliased import
+    // can say a listed name is used, and can never ask for one to be listed.
+    const aliased = matchesAlias(specifier, aliasPatterns);
     const name = packageName(specifier);
     if (!name) continue;
     for (const owner of owningManifests(use.filePath, manifests)) {
@@ -171,7 +179,7 @@ export function analyzeDependencies(
       if (!use.typeOnly) owner.neededAtRuntime.add(name);
     }
 
-    if (use.internal || use.outside) continue;
+    if (use.internal || use.outside || aliased) continue;
     if (listedAnywhere.has(name) || listedAnywhere.has(typesPackage(name))) continue;
     if (reportedUnlisted.has(name) || isIgnored(name, ignore)) continue;
     if (scopeDir && !use.filePath.startsWith(scopeDir)) continue;
@@ -576,7 +584,14 @@ function collectEmittedHelpers(manifest: Manifest, context: DependencyContext): 
  */
 function collectPluginPeers(manifest: Manifest, context: DependencyContext): void {
   for (const host of manifest.listed) {
-    const used = manifest.used.has(host) || manifest.usedByScript.has(host) || manifest.usedByConfig.has(host);
+    // A host imported only by a file beside the program is a host in use all
+    // the same: a test the tsconfig excludes loads `@testing-library/react`,
+    // and that is what loads `@testing-library/dom`.
+    const used =
+      manifest.used.has(host) ||
+      manifest.usedOutside.has(host) ||
+      manifest.usedByScript.has(host) ||
+      manifest.usedByConfig.has(host);
     if (!used) continue;
     for (const name of manifest.listed) {
       if (!name.startsWith(`@${host}/`)) continue;

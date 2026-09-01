@@ -111,6 +111,21 @@ describe('the packages a workspace declares', () => {
     expect(result.skipped).toEqual(['packages/jsonly']);
   });
 
+  it('offers the root itself when the declaration names it', () => {
+    // valtio's shape: `.` beside `website`. The root is the library the reader
+    // came for, and a walk that only offered the directories under the root
+    // analyzed the website alone.
+    const result = found({
+      '/repo/pnpm-workspace.yaml': 'packages:\n  - .\n  - website\n',
+      '/repo/package.json': '{"name":"pantry"}',
+      '/repo/tsconfig.json': TSCONFIG,
+      '/repo/website/package.json': '{}',
+      '/repo/website/tsconfig.json': TSCONFIG,
+    });
+    expect(result.packages).toEqual(['tsconfig.json', 'website/tsconfig.json']);
+    expect(result.skipped).toEqual([]);
+  });
+
   it('finds nothing when no workspace is declared', () => {
     expect(findWorkspace('/repo', repo({ '/repo/package.json': '{"name":"solo"}' }))).toBeUndefined();
     expect(findWorkspace('/repo', repo({}))).toBeUndefined();

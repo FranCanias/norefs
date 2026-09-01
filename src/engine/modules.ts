@@ -30,7 +30,7 @@ import { shapesNamedBy } from './shapes';
 import { isFileSuppressed, isNodeSuppressed } from './suppress';
 import { runtimeSibling } from './text';
 import { configReader } from './tool-configs';
-import { workspaceSiblings } from './workspaces';
+import { heldPackageDirs, workspaceSiblings } from './workspaces';
 
 /** How a module is consumed through an `import * as ns` / `export * as ns` binding. */
 interface NamespaceUse {
@@ -180,7 +180,10 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   const known = new Set([...byPath.keys(), ...ownDeclarations.map(sf => sf.getFilePath())]);
   const fileSystem = hostFileSystem(project.getFileSystem());
   const reader = configReader(fileSystem);
-  const declared = rootDirs.flatMap(dir =>
+  // The manifests this run answers for: the roots, and the workspace packages
+  // under them whose files the program holds.
+  const packageDirs = heldPackageDirs(rootDirs, known, fileSystem);
+  const declared = packageDirs.flatMap(dir =>
     packageEntryPoints(
       dir,
       fallbackRoot,
@@ -202,6 +205,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   // files is analyzed, and what they import is used all the same.
   const outside = readOutside(new Set(project.getSourceFiles().map(sf => sf.getFilePath())), {
     rootDirs,
+    packageDirs,
     packages: options.packages ?? [],
     fallbackOptions: project.getCompilerOptions(),
     siblingDirs: workspaceSiblings(rootDirs, fileSystem),
@@ -331,7 +335,7 @@ export function analyzeModules(project: Project, options: ModuleOptions = {}): M
   findings.push(
     ...analyzeDependencies(
       [...dependencyUses(project), ...outside.uses],
-      rootDirs,
+      packageDirs,
       {
         scopeDir: options.scopeDir,
         ignore: options.ignoreDependencies ?? [],
@@ -821,7 +825,7 @@ function dependencyUses(project: Project): DependencyUse[] {
     for (const named of namedInComments(sourceFile.getFullText().slice(0, sourceFile.getStart()))) {
       found.push({ filePath, text: named.text, start: named.start, typeOnly: true, internal: false });
     }
-    for (const literal of resolveCallLiterals(sourceFile)) {
+    for (const literal of requireCallLiterals(sourceFile)) {
       found.push({
         filePath,
         text: literal.getLiteralText(),
@@ -839,19 +843,28 @@ function dependencyUses(project: Project): DependencyUse[] {
 }
 
 /**
- * The packages `require.resolve('pkg')` names. It loads nothing, so it is no
- * import — and it is still the project saying that package must be installed,
- * which is the only question the dependency checks ask. A tool pointed at a
- * parser by path is usually the project's one mention of it.
+ * The packages `require('pkg')` and `require.resolve('pkg')` name.
+ *
+ * The compiler collects a `require` call as an import only in a JavaScript
+ * file. In a TypeScript file the same call is a call, so a package a source
+ * file loads this way — `const dts = require('rollup-plugin-dts')` beside a
+ * type query, a CommonJS module that never took to `import` — had no import
+ * to show for it and was called dead. `require.resolve` loads nothing, and it
+ * is still the project saying that package must be installed: a tool pointed
+ * at a parser by path is usually the project's one mention of it.
  */
-function resolveCallLiterals(sourceFile: SourceFile): StringLiteral[] {
+function requireCallLiterals(sourceFile: SourceFile): StringLiteral[] {
   // The walk is worth its cost only for a file that writes the call at all.
-  if (!sourceFile.getFullText().includes('require.resolve')) return [];
+  if (!sourceFile.getFullText().includes('require')) return [];
   const found: StringLiteral[] = [];
   for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
     const callee = call.getExpression();
-    if (!callee.isKind(SyntaxKind.PropertyAccessExpression)) continue;
-    if (callee.getName() !== 'resolve' || callee.getExpression().getText() !== 'require') continue;
+    const isRequire =
+      (callee.isKind(SyntaxKind.Identifier) && callee.getText() === 'require') ||
+      (callee.isKind(SyntaxKind.PropertyAccessExpression) &&
+        callee.getName() === 'resolve' &&
+        callee.getExpression().getText() === 'require');
+    if (!isRequire) continue;
     const [argument] = call.getArguments();
     if (argument?.isKind(SyntaxKind.StringLiteral)) found.push(argument);
   }

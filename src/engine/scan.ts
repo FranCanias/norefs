@@ -602,20 +602,43 @@ export function namedInComments(prologue: string): Specifier[] {
 }
 
 /**
- * Every string a file writes, and the module specifiers among them.
+ * Every string a file writes, the module specifiers among them, and the bare
+ * words it writes as object keys.
  *
  * A tool config is read for the strings in it, and reading them off the token
  * stream is what keeps a comment out of the answer. A path or a package name
  * inside a commented-out line is a line somebody turned off: counting it
  * cancels a real entry point, or keeps a dead dependency looking alive.
+ *
+ * The keys are for a short name written without quotes. ESLint's
+ * `'import/resolver': { typescript: true }` names a resolver as a key, and
+ * `plugins: { import: importPlugin }` names a plugin the same way. Only a key
+ * is read — the word before a colon, after a brace or a comma — because every
+ * other bare word in a file of code is the code. `import js from '@eslint/js'`
+ * is not the import plugin, and a config with a `typescript` binding in it is
+ * not using a resolver.
  */
-export function configLiterals(text: string): { strings: string[]; specifiers: string[] } {
+export function configLiterals(text: string): { strings: string[]; specifiers: string[]; keys: string[] } {
   const { tokens } = tokenize(text);
   const strings: string[] = [];
-  for (const token of tokens) {
+  const keys: string[] = [];
+  for (const [index, token] of tokens.entries()) {
     if (token.kind === 'str') strings.push(text.slice(token.innerStart, token.innerEnd));
+    else if (token.kind === 'ident' && isObjectKey(tokens, index)) keys.push(word(text, token));
   }
-  return { strings, specifiers: specifiersOf(text, tokens).map(specifier => specifier.text) };
+  return { strings, specifiers: specifiersOf(text, tokens).map(specifier => specifier.text), keys };
+}
+
+/** True when the identifier at `index` is written as an object literal's key. */
+function isObjectKey(tokens: Token[], index: number): boolean {
+  const before = tokens[index - 1];
+  const after = tokens[index + 1];
+  return (
+    after?.kind === 'punct' &&
+    after.punct === ':' &&
+    before?.kind === 'punct' &&
+    (before.punct === '{' || before.punct === ',')
+  );
 }
 
 /** The key a bundler writes its "leave this to the run time" list under. */

@@ -82,6 +82,12 @@ interface OutsideOptions {
    * package nobody asked about, would be two guesses deep.
    */
   siblingDirs?: string[] | undefined;
+  /**
+   * Every package whose manifest the run answers for, the roots included. A
+   * workspace package under a root tsconfig names its build in its own
+   * manifest, and that directory is left out of the reading the same way.
+   */
+  packageDirs?: string[] | undefined;
   packages: PackageConfig[];
   fallbackOptions: ts.CompilerOptions;
   /**
@@ -189,6 +195,9 @@ function outsideFiles(
     for (const written of [compiler.outDir, compiler.declarationDir]) {
       if (written !== undefined) output.add(slashed(path.resolve(dir, written)));
     }
+    for (const built of builtDirectories(slashed(dir), seen, roots, options.fileSystem)) output.add(built);
+  }
+  for (const dir of options.packageDirs ?? []) {
     for (const built of builtDirectories(slashed(dir), seen, roots, options.fileSystem)) output.add(built);
   }
 

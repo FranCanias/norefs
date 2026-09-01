@@ -14,7 +14,7 @@ import { optionsForDir, pathAliasPatterns } from './project';
 import { commonDirectory, isEntryFile, isHarnessFile, reachableFiles } from './reachability';
 import { projectFiles, SourceIndex } from './sources';
 import { configReader } from './tool-configs';
-import { workspaceSiblings } from './workspaces';
+import { heldPackageDirs, workspaceSiblings } from './workspaces';
 
 /** The findings the syntax alone decides — no type checker is involved. */
 export const SYNTAX_KINDS: FindingKind[] = ['file', 'dependency', 'unlisted', 'misplaced'];
@@ -58,7 +58,10 @@ export function analyzeSyntax(
   // an entry the config names is looked for among those too.
   const known = new Set([...filePaths, ...declarations]);
   const reader = configReader(diskFileSystem);
-  const declared = rootDirs.flatMap(dir =>
+  // The manifests this run answers for: the roots, and the workspace packages
+  // under them whose files the program holds.
+  const packageDirs = heldPackageDirs(rootDirs, known, diskFileSystem);
+  const declared = packageDirs.flatMap(dir =>
     packageEntryPoints(dir, fallbackRoot, optionsForDir(packages, dir) ?? fallbackOptions, known, reader, rootDirs)
   );
   const entries = [...(options.entries ?? []), ...declared.map(entry => entry.filePath)];
@@ -74,6 +77,7 @@ export function analyzeSyntax(
   // files is analyzed, and what they import is used all the same.
   const outside = readOutside(known, {
     rootDirs,
+    packageDirs,
     packages,
     fallbackOptions,
     siblingDirs: workspaceSiblings(rootDirs, diskFileSystem),
@@ -138,7 +142,7 @@ export function analyzeSyntax(
   findings.push(
     ...analyzeDependencies(
       uses,
-      rootDirs,
+      packageDirs,
       {
         scopeDir: options.scopeDir,
         ignore: options.ignoreDependencies ?? [],
@@ -182,7 +186,7 @@ export function listEntryPoints(
   const reader = configReader(diskFileSystem);
 
   const discovered = new Map<string, EntryPoint>();
-  for (const dir of rootDirs) {
+  for (const dir of heldPackageDirs(rootDirs, known, diskFileSystem)) {
     for (const entry of packageEntryPoints(
       dir,
       fallbackRoot,

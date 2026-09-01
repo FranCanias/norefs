@@ -208,6 +208,86 @@ describe('code beside the program', () => {
   });
 });
 
+function manifestClaims(findings: Finding[]): Array<[string, string]> {
+  return findings
+    .filter(f => f.kind === 'dependency' || f.kind === 'unlisted' || f.kind === 'misplaced')
+    .map(f => [f.kind, f.name]);
+}
+
+describe('a host used only beside the program', () => {
+  it('still answers for the peers it loads', () => {
+    // swr's shape: `@testing-library/react` is imported by tests the tsconfig
+    // leaves out, and its peer list names `@testing-library/dom`. The host was
+    // used enough not to be reported and not used enough to answer for its
+    // plugin, which was called dead.
+    const { findings, syntax } = project({
+      'tsconfig.json': CONFIG,
+      'package.json': JSON.stringify({
+        name: 'pantry',
+        main: 'src/index.ts',
+        devDependencies: { 'pantry-host': '1.0.0', 'pantry-plugin': '1.0.0' },
+      }),
+      'node_modules/pantry-host/package.json': JSON.stringify({
+        name: 'pantry-host',
+        peerDependencies: { 'pantry-plugin': '1.0.0' },
+      }),
+      'node_modules/pantry-plugin/package.json': JSON.stringify({ name: 'pantry-plugin' }),
+      'src/index.ts': 'export const box = 1;\n',
+      'src/index.test.ts': "import 'pantry-host';\n",
+    });
+    expect(manifestClaims(findings)).toEqual([]);
+    expect(manifestClaims(syntax)).toEqual([]);
+  });
+});
+
+describe('a workspace under one tsconfig', () => {
+  /**
+   * changesets' shape: `include` at the root covers every package, and no
+   * package has a tsconfig of its own. The root is private and lists nothing.
+   */
+  function monorepo(): { findings: Finding[]; syntax: Finding[] } {
+    return project({
+      'package.json': JSON.stringify({ name: 'shelf', private: true, workspaces: ['packages/*'] }),
+      // The root's `outDir` says nothing about where a package builds.
+      'tsconfig.json': JSON.stringify({ include: ['packages'], compilerOptions: { outDir: 'build' } }),
+      'packages/pantry/package.json': JSON.stringify({
+        name: 'pantry',
+        main: 'dist/index.js',
+        dependencies: { 'spice-rack': '1.0.0', 'stale-jar': '1.0.0' },
+      }),
+      'packages/pantry/src/index.ts': "import { grind } from 'spice-rack';\nexport const plate = grind();\n",
+      'packages/pantry/src/orphan.ts': 'export const orphan = 1;\n',
+    });
+  }
+
+  it("reads each package's own manifest, for its entries and for its dependencies", () => {
+    // Only the root manifest was read, so every package dependency read as
+    // unlisted and every package entry read as dead. The declaration the
+    // package manager reads says where the other manifests are — and the
+    // package's own dead dependency is a finding the run can now make.
+    const { findings, syntax } = monorepo();
+    for (const found of [findings, syntax]) {
+      expect(found.filter(f => f.kind === 'file').map(f => f.name)).toEqual(['orphan.ts']);
+      expect(manifestClaims(found)).toEqual([['dependency', 'stale-jar']]);
+      expect(found.find(f => f.kind === 'dependency')?.filePath.endsWith('packages/pantry/package.json')).toBe(true);
+    }
+  });
+});
+
+describe('the two runs read a require() alike', () => {
+  it('counts the package a TypeScript file loads with require()', () => {
+    // The full run used to see no import here at all, and the syntax-only run
+    // saw the call — so the same project answered two ways.
+    const { findings, syntax } = project({
+      'tsconfig.json': JSON.stringify({ include: ['src'] }),
+      'package.json': JSON.stringify({ name: 'pantry', main: 'src/index.ts', dependencies: { 'spice-rack': '1.0.0' } }),
+      'src/index.ts': "const rack = require('spice-rack');\nexport const plate = (): string => rack.grind();\n",
+    });
+    expect(manifestClaims(findings)).toEqual([]);
+    expect(manifestClaims(syntax)).toEqual([]);
+  });
+});
+
 describe('the packages beside the one a run was pointed at', () => {
   /** A workspace whose test package imports the package under analysis. */
   function workspace(): { findings: Finding[]; syntax: Finding[] } {
