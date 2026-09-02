@@ -7,7 +7,7 @@ versions (0.x.y) fix bugs without changing what a script or a baseline sees.
 A user-visible change lands with its entry here, under **Unreleased**. A release
 renames the section and dates it — the writing is already done.
 
-## Unreleased
+## [0.12.0](https://github.com/FranCanias/norefs/releases/tag/v0.12.0) — 2026-09-02
 
 **A package a TypeScript file loads with `require()` is a package in use.** The
 compiler collects a `require` call as an import only in a JavaScript file; in a
