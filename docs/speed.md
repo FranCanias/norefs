@@ -94,7 +94,7 @@ Four shapes: `single-return` and `multi-return` declare the same keys and the
 same reads either side of one `return` or three, so the pair prices reading the
 shape rather than the work it makes; `computed-key` is nothing but `rows[i]`
 indexing; `relay` sends every type to `Object.keys` through a helper. The
-[changelog](../CHANGELOG.md) cites them by name, and each one is a command.
+[changelog](https://github.com/FranCanias/norefs/blob/main/CHANGELOG.md) cites them by name, and each one is a command.
 
 They are a stopwatch, not a corpus. What a shape costs when a project is made
 of nothing else is the ceiling, and [corpus validation](corpus.md) is where

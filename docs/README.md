@@ -12,4 +12,4 @@ Eight pages, one topic each:
 - [Speed](speed.md) — fast runs with `--only`, the synthetic shapes, and watch mode
 
 The [README](https://github.com/FranCanias/norefs#readme) is the front door,
-and the [changelog](../CHANGELOG.md) records what each release changed and why.
+and the [changelog](https://github.com/FranCanias/norefs/blob/main/CHANGELOG.md) records what each release changed and why.

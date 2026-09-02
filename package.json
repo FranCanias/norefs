@@ -9,6 +9,8 @@
   "files": [
     "dist",
     "docs",
+    "!docs/_config.yml",
+    "!docs/CNAME",
     "CHANGELOG.md"
   ],
   "exports": {

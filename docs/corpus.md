@@ -173,7 +173,7 @@ it starts.
 | shadowed | 7 | 33 |
 | module-level (no verdict) | 93 | 16 |
 
-Every jump has an entry in the [changelog](../CHANGELOG.md) behind it. The
+Every jump has an entry in the [changelog](https://github.com/FranCanias/norefs/blob/main/CHANGELOG.md) behind it. The
 `test-only` column is the largest and the plainest: 232 of those findings were
 fixtures under `tests/` reported for helping tests, which is what a fixture
 under `tests/` is for. The `ns-export` kind fell from 250 to 4 — a namespace

@@ -1,0 +1,4 @@
+title: norefs
+description: Find unused files, exports, and type/object members in a TypeScript project.
+url: https://norefs.dev
+theme: jekyll-theme-primer
